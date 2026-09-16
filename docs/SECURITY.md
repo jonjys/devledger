@@ -33,6 +33,13 @@ analysis staged in Rust, not a copy sent back over IPC. A frontend that flips
 `blocks_save` to `false` changes nothing; the backend still refuses to save
 until `acknowledge_critical` is set, and a test asserts that.
 
+**A frontend inventing structure.** The same rule covers the entity graph. An
+organization is created only from a name the user supplied or confirmed through
+an answer; a submission carrying no answers falls back to using rows that
+already exist. A weakly-inferred name is never written on the user's behalf, so
+a frontend bug cannot quietly file a production resource under the wrong
+account.
+
 **The audit log being rewritten.** `UPDATE` and `DELETE` on `audit_log` are
 refused by database triggers, not by application code, so even direct SQL
 cannot rewrite history.
@@ -84,6 +91,17 @@ Subkeys are independent: compromising the blind-index key reveals nothing about
 the database or AEAD keys. `vault.json` holds only the KDF parameters and salt,
 which must be readable before a passphrase can be turned into a key; it contains
 no secret material.
+
+## What the graph stores
+
+The entity graph (identities, accounts, organizations, resources, projects and
+the relations between them) lives inside the same encrypted database as the
+secrets and is subject to the same protections. It is worth being explicit that
+this metadata is itself sensitive: knowing that a given email holds a Supabase
+account containing a named production project is useful to an attacker even
+without the credentials. Nothing in the graph is stored outside the SQLCipher
+file, and email addresses are additionally blind-indexed so duplicate detection
+never needs a plaintext comparison.
 
 ## Reporting
 
