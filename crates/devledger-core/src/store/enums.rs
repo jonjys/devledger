@@ -76,6 +76,7 @@ str_enum!(
     EntityKind::Identity => "identity",
     EntityKind::Account => "account",
     EntityKind::Organization => "organization",
+    EntityKind::ServiceProject => "service_project",
     EntityKind::Project => "project",
     EntityKind::Secret => "secret",
     EntityKind::Subscription => "subscription",
@@ -84,6 +85,9 @@ str_enum!(
 str_enum!(
     RelationKind, relation_kind_to_str, relation_kind_from_str,
     RelationKind::Owns => "owns",
+    RelationKind::MemberOf => "member_of",
+    RelationKind::Contains => "contains",
+    RelationKind::UsedBy => "used_by",
     RelationKind::AuthenticatesTo => "authenticates_to",
     RelationKind::Bills => "bills",
     RelationKind::SameAs => "same_as",

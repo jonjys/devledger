@@ -18,8 +18,10 @@ pub enum MatchType {
     ExactValue,
     /// Same variable name in the same project, different value: a rotation.
     SameNameDifferentValue,
-    /// An existing project carries this project ref.
+    /// An existing resource carries this provider reference.
     SameProjectRef,
+    /// An existing row already carries this exact name.
+    SameName,
     /// An existing identity carries this email.
     SameEmail,
 }
@@ -30,7 +32,8 @@ impl MatchType {
         match self {
             MatchType::ExactValue => "Already stored",
             MatchType::SameNameDifferentValue => "Rotated value",
-            MatchType::SameProjectRef => "Known project",
+            MatchType::SameProjectRef => "Known resource",
+            MatchType::SameName => "Known name",
             MatchType::SameEmail => "Known identity",
         }
     }
@@ -49,6 +52,141 @@ pub struct ExistingMatch {
     pub label: String,
     /// Extra context, e.g. which project the existing secret sits in.
     pub detail: String,
+}
+
+/// Where a node sits in the Identity -> Account -> Organization -> Service
+/// project -> Project chain.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainRole {
+    /// The person, keyed by email.
+    Identity,
+    /// Their account with the provider.
+    Account,
+    /// The organization or team inside that account.
+    Organization,
+    /// The provider-side resource, e.g. a Supabase project.
+    ServiceProject,
+    /// The DevLedger project that uses it.
+    Project,
+}
+
+impl ChainRole {
+    /// Human-readable label for the review sheet.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ChainRole::Identity => "Identity",
+            ChainRole::Account => "Account",
+            ChainRole::Organization => "Organization",
+            ChainRole::ServiceProject => "Service project",
+            ChainRole::Project => "Project",
+        }
+    }
+}
+
+/// One rung of the proposed chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChainNode {
+    /// Which rung.
+    pub role: ChainRole,
+    /// Proposed display name.
+    pub label: String,
+    /// The existing row this matched, when it matched one.
+    pub existing_id: Option<Uuid>,
+    /// Why DevLedger believes this.
+    pub evidence: Evidence,
+    /// The detected entity this came from, when it came from one.
+    pub entity_index: Option<usize>,
+}
+
+/// The full chain a paste implies.
+///
+/// Any rung may be `None`, which means the paste did not say. DevLedger does
+/// not fill a gap with a placeholder: it raises an [`OpenQuestion`] instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProposedChain {
+    /// The person.
+    pub identity: Option<ChainNode>,
+    /// Their provider account.
+    pub account: Option<ChainNode>,
+    /// The organization, when named.
+    pub organization: Option<ChainNode>,
+    /// The provider resource.
+    pub service_project: Option<ChainNode>,
+    /// The DevLedger project.
+    pub project: Option<ChainNode>,
+}
+
+/// What DevLedger needs the user to decide.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionKind {
+    /// Which DevLedger project this belongs to.
+    WhichProject,
+    /// Which organization owns the resource.
+    WhichOrganization,
+    /// Which identity holds the account.
+    WhichIdentity,
+    /// Whether a detected label is a project or an organization.
+    LabelRole,
+}
+
+/// One option offered in answer to a question.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuestionCandidate {
+    /// An existing row, when this option points at one.
+    pub existing: Option<EntityRef>,
+    /// The name shown on the option.
+    pub label: String,
+    /// Why this option is offered.
+    pub reason: String,
+    /// Whether the sheet pre-selects it.
+    pub recommended: bool,
+}
+
+/// A decision DevLedger will not make on the user's behalf.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenQuestion {
+    /// Stable key, used to match the answer back. e.g. `"organization"`.
+    pub id: String,
+    /// What sort of decision this is.
+    pub kind: QuestionKind,
+    /// The question, in plain language.
+    pub prompt: String,
+    /// Options to choose from.
+    pub candidates: Vec<QuestionCandidate>,
+    /// Whether a name typed by hand is accepted.
+    pub allow_free_text: bool,
+    /// Whether leaving it unanswered blocks the save.
+    pub required: bool,
+}
+
+/// How the user answered an [`OpenQuestion`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "sort", rename_all = "snake_case")]
+pub enum AnswerChoice {
+    /// Use this existing row.
+    Existing {
+        /// The chosen row.
+        entity: EntityRef,
+    },
+    /// Create something new with this name.
+    NewNamed {
+        /// The name to create.
+        name: String,
+    },
+    /// Explicitly leave it unknown. The result is surfaced under Needs
+    /// attention rather than filled in with a guess.
+    Unknown,
+}
+
+/// One answer in a submission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuestionAnswer {
+    /// Which question this answers.
+    pub question_id: String,
+    /// The user's choice.
+    pub choice: AnswerChoice,
 }
 
 /// One end of a proposed relation.
@@ -70,6 +208,13 @@ pub enum ProposedEndpoint {
         label: String,
         /// The detected entity that would become it, when there is one.
         entity_index: Option<usize>,
+    },
+    /// Points at a rung of the chain, resolved once the chain is committed.
+    Chain {
+        /// Which rung.
+        role: ChainRole,
+        /// Its display name at analysis time.
+        label: String,
     },
 }
 
@@ -154,6 +299,9 @@ pub struct ReviewSubmission {
     pub acknowledge_critical: bool,
     /// Project to file everything under when the analysis could not infer one.
     pub target_project_id: Option<Uuid>,
+    /// Answers to the analysis's open questions.
+    #[serde(default)]
+    pub answers: Vec<QuestionAnswer>,
 }
 
 /// What actually happened after a [`ReviewSubmission`] was applied.
@@ -169,6 +317,16 @@ pub struct CommitOutcome {
     pub projects_created: usize,
     /// Identities created as a side effect.
     pub identities_created: usize,
+    /// Provider accounts created.
+    pub accounts_created: usize,
+    /// Organizations created, only ever from a name the user supplied or the
+    /// paste stated.
+    pub organizations_created: usize,
+    /// Provider resources recorded.
+    pub service_projects_created: usize,
+    /// Resources left without an organization, and so surfaced under Needs
+    /// attention.
+    pub left_unassigned: usize,
     /// Relations recorded.
     pub relations_created: usize,
     /// Ids of the projects touched, so the UI can navigate there.

@@ -23,6 +23,8 @@ pub struct ParsedSubscription {
     pub currency: Option<String>,
     /// Billing interval, when stated.
     pub interval: Option<BillingInterval>,
+    /// When a trial ends, if the excerpt gave an ISO date.
+    pub trial_ends_at: Option<String>,
 }
 
 static PLAN: Lazy<Regex> = Lazy::new(|| {
@@ -39,6 +41,15 @@ static PRICE: Lazy<Regex> = Lazy::new(|| {
 static INTERVAL: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:per|/|a)\s*(month|mo\b|year|yr\b|annually|monthly|yearly)")
         .expect("interval pattern must compile")
+});
+
+/// `trial ends 2026-10-01`, `trial expires on 2026-10-01`, `free until 2026-10-01`.
+///
+/// Only ISO dates are accepted: parsing prose dates would make the result
+/// locale-dependent, and Smart Paste has to stay deterministic.
+static TRIAL_END: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:trial\s+(?:ends?|expires?)|free)\s*(?:on|until|:)?\s*(\d{4}-\d{2}-\d{2})")
+        .expect("trial end pattern must compile")
 });
 
 static STATUS: Lazy<Regex> = Lazy::new(|| {
@@ -92,12 +103,22 @@ pub fn parse(text: &str) -> Option<ParsedSubscription> {
         None => SubscriptionStatus::Unknown,
     };
 
+    let trial_ends_at = TRIAL_END.captures(text).map(|c| c[1].to_string());
+
+    // A stated trial end date is itself evidence of a trial, even when no
+    // status word appeared.
+    let status = match (status, trial_ends_at.is_some()) {
+        (SubscriptionStatus::Unknown, true) => SubscriptionStatus::Trialing,
+        (other, _) => other,
+    };
+
     Some(ParsedSubscription {
         plan,
         status,
         amount_cents,
         currency,
         interval,
+        trial_ends_at,
     })
 }
 

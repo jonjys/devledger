@@ -18,24 +18,26 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::crypto::blind_index::{
-    self, DOMAIN_IDENTITY_EMAIL, DOMAIN_PROJECT_REF, DOMAIN_SECRET_VALUE,
-};
+use crate::crypto::blind_index::{self, DOMAIN_IDENTITY_EMAIL, DOMAIN_SECRET_VALUE};
 use crate::crypto::kdf::{self, KdfParams};
 use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
 use crate::model::{
-    EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Project, Provider, RelationKind,
-    SecretKind, SecretRecord,
+    Account, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity, Organization,
+    Project, Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject,
 };
-use crate::paste::detect::DetectedKind;
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
 use crate::paste::review::{
-    CommitOutcome, EntityDecision, ProposedEndpoint, RecommendedAction, ReviewSubmission,
+    AnswerChoice, ChainRole, CommitOutcome, EntityDecision, ProposedChain, ProposedEndpoint,
+    RecommendedAction, ReviewSubmission,
 };
+use crate::paste::{Q_IDENTITY, Q_ORGANIZATION, Q_PROJECT};
 use crate::redact::{Provenance, SourceKind};
 use crate::secret::{mask_preview, SecretBytes, SecretString};
-use crate::store::{AuditEntry, ProjectSummary, Store, VaultEntry};
+use crate::store::{
+    AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary, Store,
+    SubscriptionSummary, VaultEntry,
+};
 
 /// Name of the cleartext sidecar holding KDF parameters.
 pub const META_FILE: &str = "vault.json";
@@ -87,6 +89,16 @@ pub struct VaultStatus {
     pub unlocked: bool,
 }
 
+/// The ids the chain resolved to during a commit.
+#[derive(Default)]
+struct ResolvedChain {
+    identity: Option<Uuid>,
+    account: Option<Uuid>,
+    organization: Option<Uuid>,
+    service_project: Option<Uuid>,
+    project: Option<Uuid>,
+}
+
 impl Vault {
     /// Create a handle for the vault directory. Does not touch the disk.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
@@ -131,7 +143,6 @@ impl Vault {
         }
         validate_passphrase(passphrase)?;
         fs::create_dir_all(&self.dir)?;
-
         let params = KdfParams::generate()?;
         self.initialize_with_params(passphrase, params)
     }
@@ -271,39 +282,13 @@ impl Vault {
                 .remove(&submission.analysis_id)
                 .ok_or_else(|| CoreError::StaleAnalysis(submission.analysis_id.to_string()))?
         };
-        let analysis = &analysis;
-        let staged = &secrets;
 
         let mut outcome = CommitOutcome::default();
-        // Entity index -> the secret row it produced, so the accepted relations
-        // can be anchored to real ids rather than to the project as a whole.
-        let mut secret_ids: HashMap<usize, Uuid> = HashMap::new();
+        let resolved = self.resolve_chain(&analysis, submission, &mut outcome)?;
 
-        // Resolve the project everything will be filed under, creating the
-        // Identity -> Account -> Organization -> Project chain if needed.
-        let project_id = match submission.target_project_id {
-            Some(id) => {
-                if self.unlocked()?.store.project(id)?.is_none() {
-                    return Err(CoreError::NotFound(format!("project {id}")));
-                }
-                Some(id)
-            }
-            None => match analysis.inferred_project_ref.as_deref() {
-                Some(project_ref) => {
-                    let email = analysis
-                        .entities
-                        .iter()
-                        .find(|e| e.kind == DetectedKind::Email)
-                        .map(|e| e.value_preview.clone());
-                    Some(self.ensure_project_for_ref(
-                        project_ref,
-                        email.as_deref(),
-                        &mut outcome,
-                    )?)
-                }
-                None => None,
-            },
-        };
+        // Entity index -> the secret row it produced, so accepted relations can
+        // be anchored to real ids.
+        let mut secret_ids: HashMap<usize, Uuid> = HashMap::new();
 
         for decision in &submission.decisions {
             let index = decision.entity_index;
@@ -311,8 +296,7 @@ impl Vault {
                 .entities
                 .get(index)
                 .ok_or_else(|| CoreError::Invalid(format!("no entity at index {index}")))?;
-            let Some(value) = staged.values.get(index).and_then(|v| v.as_ref()) else {
-                // Non-secret entities carry no value to store.
+            let Some(value) = secrets.values.get(index).and_then(|v| v.as_ref()) else {
                 continue;
             };
             let recommended = analysis
@@ -339,32 +323,37 @@ impl Vault {
             let kind = entity.secret_kind.unwrap_or(SecretKind::GenericApiKey);
 
             match effective {
-                RecommendedAction::Skip { .. } => {
-                    outcome.entities_skipped += 1;
-                }
+                RecommendedAction::Skip { .. } => outcome.entities_skipped += 1,
                 RecommendedAction::Update { secret_id } => {
                     self.write_secret_value(secret_id, value)?;
-                    outcome.secrets_updated += 1;
                     secret_ids.insert(index, secret_id);
-                    if let Some(record) = self.unlocked()?.store.secret(secret_id)? {
-                        if !outcome.touched_project_ids.contains(&record.project_id) {
-                            outcome.touched_project_ids.push(record.project_id);
-                        }
-                    }
+                    outcome.secrets_updated += 1;
                 }
                 RecommendedAction::Create => {
-                    let target = project_id.ok_or_else(|| {
-                        CoreError::Invalid(
-                            "no project could be inferred; choose one before saving".into(),
-                        )
-                    })?;
-                    let record =
-                        self.insert_secret(target, kind, &name, entity.environment, value)?;
+                    // A secret goes against the provider resource when there is
+                    // one, because that is what it authenticates to. Otherwise
+                    // it is filed directly against the project.
+                    if resolved.service_project.is_none() && resolved.project.is_none() {
+                        return Err(CoreError::Invalid(
+                            "choose a project before saving: these credentials have nothing to \
+                             attach to"
+                                .into(),
+                        ));
+                    }
+                    let record = self.insert_secret(
+                        if resolved.service_project.is_some() {
+                            None
+                        } else {
+                            resolved.project
+                        },
+                        resolved.service_project,
+                        kind,
+                        &name,
+                        entity.environment,
+                        value,
+                    )?;
                     secret_ids.insert(index, record.id);
                     outcome.secrets_created += 1;
-                    if !outcome.touched_project_ids.contains(&target) {
-                        outcome.touched_project_ids.push(target);
-                    }
                     self.attach_provenance(
                         EntityRef::new(EntityKind::Secret, record.id),
                         &analysis.provenance,
@@ -373,35 +362,35 @@ impl Vault {
             }
         }
 
-        // Record the relations the user kept ticked, now that ids exist.
-        if let Some(target) = project_id {
-            for index in &submission.accepted_relations {
-                let Some(relation) = analysis.proposed_relations.get(*index) else {
-                    continue;
-                };
-                let (Some(from), Some(to)) = (
-                    resolve_endpoint(&relation.from, target, &secret_ids),
-                    resolve_endpoint(&relation.to, target, &secret_ids),
-                ) else {
-                    // An endpoint that refers to an entity the user skipped has
-                    // no row to point at, so the relation is dropped with it.
-                    continue;
-                };
-                let inner = self.unlocked()?;
-                inner
-                    .store
-                    .create_relation(from, to, relation.kind, &relation.evidence)?;
-                outcome.relations_created += 1;
+        if let Some(project_id) = resolved.project {
+            if !outcome.touched_project_ids.contains(&project_id) {
+                outcome.touched_project_ids.push(project_id);
             }
         }
 
-        if let (Some(parsed), Some(_)) = (&analysis.subscription, project_id) {
-            // Subscriptions hang off the account, which we reach via the project.
-            if let Some(account_id) = self.account_for_project(project_id.expect("checked"))? {
-                self.unlocked()?
-                    .store
-                    .create_subscription(account_id, parsed)?;
-            }
+        // Record the relations the user kept ticked, now that ids exist.
+        for index in &submission.accepted_relations {
+            let Some(relation) = analysis.proposed_relations.get(*index) else {
+                continue;
+            };
+            let (Some(from), Some(to)) = (
+                resolve_endpoint(&relation.from, &resolved, &secret_ids),
+                resolve_endpoint(&relation.to, &resolved, &secret_ids),
+            ) else {
+                // An endpoint referring to something the user skipped has no row
+                // to point at, so the relation is dropped with it.
+                continue;
+            };
+            self.unlocked()?
+                .store
+                .create_relation(from, to, relation.kind, &relation.evidence)?;
+            outcome.relations_created += 1;
+        }
+
+        if let (Some(parsed), Some(account_id)) = (&analysis.subscription, resolved.account) {
+            self.unlocked()?
+                .store
+                .create_subscription(account_id, parsed)?;
         }
 
         let inner = self.unlocked()?;
@@ -417,149 +406,257 @@ impl Vault {
         Ok(outcome)
     }
 
+    /// Turn the proposed chain plus the user's answers into concrete rows.
+    ///
+    /// The rule this method exists to enforce: an organization is created only
+    /// when the user named one or confirmed one. A rung DevLedger is unsure
+    /// about is left empty and surfaces under Needs attention afterwards.
+    fn resolve_chain(
+        &mut self,
+        analysis: &PasteAnalysis,
+        submission: &ReviewSubmission,
+        outcome: &mut CommitOutcome,
+    ) -> Result<ResolvedChain> {
+        let chain: &ProposedChain = &analysis.chain;
+        let provider = analysis.provider;
+        let mut resolved = ResolvedChain::default();
+
+        let needs_account = chain.service_project.is_some() || chain.account.is_some();
+
+        // --- identity
+        resolved.identity = match pipeline::answer_for(&submission.answers, Q_IDENTITY) {
+            Some(AnswerChoice::Existing { entity }) => Some(entity.id),
+            Some(AnswerChoice::NewNamed { name }) => Some(self.identity_for_email(name, outcome)?),
+            Some(AnswerChoice::Unknown) | None => match &chain.identity {
+                Some(node) => Some(self.identity_for_email(&node.label, outcome)?),
+                None if needs_account => Some(self.unidentified_identity(outcome)?),
+                None => None,
+            },
+        };
+
+        // --- account
+        if needs_account && provider != Provider::Unknown {
+            if let Some(identity_id) = resolved.identity {
+                let existing = self.unlocked()?.store.account_for(identity_id, provider)?;
+                resolved.account = Some(match existing {
+                    Some(account) => account.id,
+                    None => {
+                        outcome.accounts_created += 1;
+                        self.unlocked()?
+                            .store
+                            .create_account(identity_id, provider, None, provider.label())?
+                            .id
+                    }
+                });
+            }
+        }
+
+        // --- organization
+        resolved.organization = match pipeline::answer_for(&submission.answers, Q_ORGANIZATION) {
+            Some(AnswerChoice::Existing { entity }) => Some(entity.id),
+            Some(AnswerChoice::NewNamed { name }) => match resolved.account {
+                Some(account_id) => Some(self.organization_named(account_id, name, outcome)?),
+                None => None,
+            },
+            // No answer, or an explicit "I don't know": only an organization
+            // that already exists is used. A weakly-guessed name is never
+            // created on the user's behalf.
+            Some(AnswerChoice::Unknown) | None => {
+                chain.organization.as_ref().and_then(|n| n.existing_id)
+            }
+        };
+
+        // --- service project
+        if let Some(node) = &chain.service_project {
+            resolved.service_project = Some(match node.existing_id {
+                Some(id) => {
+                    // A resource whose organization was unknown and is now known
+                    // gets filled in, but a known one is never overwritten.
+                    if let Some(org_id) = resolved.organization {
+                        let sp = self.unlocked()?.store.service_project(id)?;
+                        if sp.is_some_and(|s| s.organization_id.is_none()) {
+                            self.unlocked()?
+                                .store
+                                .set_service_project_organization(id, Some(org_id))?;
+                        }
+                    }
+                    id
+                }
+                None => match resolved.account {
+                    Some(account_id) => {
+                        outcome.service_projects_created += 1;
+                        if resolved.organization.is_none() {
+                            outcome.left_unassigned += 1;
+                        }
+                        self.unlocked()?
+                            .store
+                            .create_service_project(
+                                account_id,
+                                resolved.organization,
+                                provider,
+                                Some(&node.label),
+                                &node.label,
+                                None,
+                                Environment::Unknown,
+                            )?
+                            .id
+                    }
+                    None => return Ok(resolved),
+                },
+            });
+        }
+
+        // --- DevLedger project
+        resolved.project = match pipeline::answer_for(&submission.answers, Q_PROJECT) {
+            Some(AnswerChoice::Existing { entity }) => Some(entity.id),
+            Some(AnswerChoice::NewNamed { name }) => Some(self.project_named(name, outcome)?),
+            Some(AnswerChoice::Unknown) => None,
+            None => match submission.target_project_id {
+                Some(id) => Some(id),
+                None => match &chain.project {
+                    Some(node) => match node.existing_id {
+                        Some(id) => Some(id),
+                        // Same rule as organizations: a weak guess is not acted
+                        // on without confirmation.
+                        // A guess the user never confirmed is not acted on.
+                        None if node.evidence.level.is_at_least(EvidenceLevel::Heuristic) => {
+                            Some(self.project_named(&node.label, outcome)?)
+                        }
+                        None => None,
+                    },
+                    None => None,
+                },
+            },
+        };
+
+        // --- record the chain itself
+        //
+        // These four relations are consequences of what the user confirmed, not
+        // optional suggestions, so they are written whatever the relation
+        // checkboxes said. `create_relation` ignores duplicates, so a proposal
+        // the user also ticked is a no-op rather than a second row.
+        let confirmed = Evidence::new(
+            EvidenceLevel::Strong,
+            "chain.confirmed",
+            "Confirmed in the review sheet",
+        );
+        let store_links: [(Option<EntityRef>, Option<EntityRef>, RelationKind); 4] = [
+            (
+                resolved
+                    .identity
+                    .map(|id| EntityRef::new(EntityKind::Identity, id)),
+                resolved
+                    .account
+                    .map(|id| EntityRef::new(EntityKind::Account, id)),
+                RelationKind::Owns,
+            ),
+            (
+                resolved
+                    .account
+                    .map(|id| EntityRef::new(EntityKind::Account, id)),
+                resolved
+                    .organization
+                    .map(|id| EntityRef::new(EntityKind::Organization, id)),
+                RelationKind::MemberOf,
+            ),
+            (
+                resolved
+                    .organization
+                    .map(|id| EntityRef::new(EntityKind::Organization, id)),
+                resolved
+                    .service_project
+                    .map(|id| EntityRef::new(EntityKind::ServiceProject, id)),
+                RelationKind::Contains,
+            ),
+            (
+                resolved
+                    .service_project
+                    .map(|id| EntityRef::new(EntityKind::ServiceProject, id)),
+                resolved
+                    .project
+                    .map(|id| EntityRef::new(EntityKind::Project, id)),
+                RelationKind::UsedBy,
+            ),
+        ];
+        for (from, to, kind) in store_links {
+            let (Some(from), Some(to)) = (from, to) else {
+                continue;
+            };
+            self.unlocked()?
+                .store
+                .create_relation(from, to, kind, &confirmed)?;
+        }
+
+        Ok(resolved)
+    }
+
+    fn identity_for_email(&self, email: &str, outcome: &mut CommitOutcome) -> Result<Uuid> {
+        let inner = self.unlocked()?;
+        let lowered = email.trim().to_ascii_lowercase();
+        let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, &lowered)?;
+        if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
+            return Ok(id);
+        }
+        outcome.identities_created += 1;
+        Ok(inner
+            .store
+            .create_identity(&lowered, Some(&lowered), Some(&bi))?
+            .id)
+    }
+
+    /// An identity for an account whose owner is not known.
+    ///
+    /// Deliberately has no email, which puts it on the Needs attention list
+    /// rather than pretending DevLedger knows who this is.
+    fn unidentified_identity(&self, outcome: &mut CommitOutcome) -> Result<Uuid> {
+        const LABEL: &str = "Unidentified";
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner
+            .store
+            .list_identities()?
+            .into_iter()
+            .find(|i| i.email.is_none() && i.label == LABEL)
+        {
+            return Ok(existing.id);
+        }
+        outcome.identities_created += 1;
+        Ok(inner.store.create_identity(LABEL, None, None)?.id)
+    }
+
+    fn organization_named(
+        &self,
+        account_id: Uuid,
+        name: &str,
+        outcome: &mut CommitOutcome,
+    ) -> Result<Uuid> {
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner.store.organization_by_name(account_id, name)? {
+            return Ok(existing.id);
+        }
+        outcome.organizations_created += 1;
+        Ok(inner.store.create_organization(account_id, None, name)?.id)
+    }
+
+    fn project_named(&self, name: &str, outcome: &mut CommitOutcome) -> Result<Uuid> {
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner.store.project_by_name(name)? {
+            return Ok(existing.id);
+        }
+        outcome.projects_created += 1;
+        Ok(inner.store.create_project(name, None)?.id)
+    }
+
     fn attach_provenance(&self, entity: EntityRef, provenance: &Provenance) -> Result<()> {
         self.unlocked()?.store.record_provenance(entity, provenance)
     }
 
-    fn account_for_project(&self, project_id: Uuid) -> Result<Option<Uuid>> {
-        let inner = self.unlocked()?;
-        let Some(project) = inner.store.project(project_id)? else {
-            return Ok(None);
-        };
-        let account: Option<String> = inner
-            .store
-            .conn()
-            .query_row(
-                "SELECT account_id FROM organizations WHERE id = ?1",
-                rusqlite::params![project.organization_id.to_string()],
-                |r| r.get(0),
-            )
-            .ok();
-        match account {
-            Some(raw) => Ok(Uuid::parse_str(&raw).ok()),
-            None => Ok(None),
-        }
-    }
-
-    /// Find or build the full chain down to a project for `project_ref`.
-    fn ensure_project_for_ref(
-        &mut self,
-        project_ref: &str,
-        email: Option<&str>,
-        outcome: &mut CommitOutcome,
-    ) -> Result<Uuid> {
-        if let Some(existing) = self.unlocked()?.store.project_by_ref(project_ref)? {
-            return Ok(existing.id);
-        }
-
-        let identity_id = self.ensure_identity(email, outcome)?;
-        let inner = self.unlocked()?;
-
-        let account_id: Option<String> = inner
-            .store
-            .conn()
-            .query_row(
-                "SELECT id FROM accounts WHERE identity_id = ?1 AND provider = ?2",
-                rusqlite::params![identity_id.to_string(), "supabase"],
-                |r| r.get(0),
-            )
-            .ok();
-        let account_id = match account_id {
-            Some(raw) => Uuid::parse_str(&raw)
-                .map_err(|e| CoreError::Storage(format!("corrupt account id: {e}")))?,
-            None => {
-                inner
-                    .store
-                    .create_account(identity_id, Provider::Supabase, None, "Supabase")?
-                    .id
-            }
-        };
-
-        let org_id: Option<String> = inner
-            .store
-            .conn()
-            .query_row(
-                "SELECT id FROM organizations WHERE account_id = ?1 ORDER BY created_at LIMIT 1",
-                rusqlite::params![account_id.to_string()],
-                |r| r.get(0),
-            )
-            .ok();
-        let org_id = match org_id {
-            Some(raw) => Uuid::parse_str(&raw)
-                .map_err(|e| CoreError::Storage(format!("corrupt organization id: {e}")))?,
-            None => {
-                inner
-                    .store
-                    .create_organization(account_id, None, "Personal")?
-                    .id
-            }
-        };
-
-        let project = inner.store.create_project(
-            org_id,
-            Some(project_ref),
-            project_ref,
-            None,
-            Environment::Unknown,
-        )?;
-        outcome.projects_created += 1;
-        outcome.relations_created += 1;
-        inner.store.create_relation(
-            EntityRef::new(EntityKind::Organization, org_id),
-            EntityRef::new(EntityKind::Project, project.id),
-            RelationKind::Owns,
-            &Evidence::new(
-                EvidenceLevel::Explicit,
-                "structure",
-                "Project created under its organization",
-            ),
-        )?;
-        Ok(project.id)
-    }
-
-    fn ensure_identity(
-        &mut self,
-        email: Option<&str>,
-        outcome: &mut CommitOutcome,
-    ) -> Result<Uuid> {
-        let inner = self.unlocked()?;
-        if let Some(email) = email {
-            let lowered = email.to_ascii_lowercase();
-            let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, &lowered)?;
-            if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
-                return Ok(id);
-            }
-            outcome.identities_created += 1;
-            return Ok(inner
-                .store
-                .create_identity(&lowered, Some(&lowered), Some(&bi))?
-                .id);
-        }
-
-        let existing: Option<String> = inner
-            .store
-            .conn()
-            .query_row(
-                "SELECT id FROM identities ORDER BY created_at LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .ok();
-        match existing {
-            Some(raw) => Uuid::parse_str(&raw)
-                .map_err(|e| CoreError::Storage(format!("corrupt identity id: {e}"))),
-            None => {
-                outcome.identities_created += 1;
-                Ok(inner.store.create_identity("This device", None, None)?.id)
-            }
-        }
-    }
-
     // ---------------------------------------------------------------- secrets
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_secret(
         &mut self,
-        project_id: Uuid,
+        project_id: Option<Uuid>,
+        service_project_id: Option<Uuid>,
         kind: SecretKind,
         name: &str,
         environment: Environment,
@@ -569,6 +666,7 @@ impl Vault {
         let inner = self.unlocked_mut()?;
         inner.store.create_secret(
             project_id,
+            service_project_id,
             kind,
             name,
             &preview,
@@ -633,10 +731,11 @@ impl Vault {
     /// Render a project's secrets as a `.env` file.
     ///
     /// Produced entirely in Rust so the UI can put it on the clipboard without
-    /// ever holding the values in JavaScript.
+    /// ever holding the values in JavaScript. Includes every secret the project
+    /// can reach, across all the provider resources it uses.
     pub fn export_env(&self, project_id: Uuid) -> Result<SecretString> {
         let inner = self.unlocked()?;
-        let entries = inner.store.list_secrets(project_id)?;
+        let entries = inner.store.list_secrets_for_project(project_id)?;
         let mut out = String::new();
         for entry in &entries {
             let value = self.reveal_secret(entry.secret.id)?;
@@ -662,14 +761,14 @@ impl Vault {
 
     // ----------------------------------------------------------------- vault
 
-    /// Every project in the vault.
+    /// Every DevLedger project.
     pub fn list_projects(&self) -> Result<Vec<ProjectSummary>> {
         self.unlocked()?.store.list_projects()
     }
 
-    /// A project's secrets, metadata only.
+    /// Every secret a project can reach, metadata only.
     pub fn list_secrets(&self, project_id: Uuid) -> Result<Vec<VaultEntry>> {
-        self.unlocked()?.store.list_secrets(project_id)
+        self.unlocked()?.store.list_secrets_for_project(project_id)
     }
 
     /// Fetch a project.
@@ -677,35 +776,139 @@ impl Vault {
         self.unlocked()?.store.project(project_id)
     }
 
+    /// Create a DevLedger project by hand.
+    pub fn create_project(&self, name: &str, description: Option<&str>) -> Result<Project> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("a project needs a name".into()));
+        }
+        self.unlocked()?.store.create_project(trimmed, description)
+    }
+
+    /// Rename a project or change its description.
+    pub fn update_project(
+        &self,
+        project_id: Uuid,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("a project needs a name".into()));
+        }
+        self.unlocked()?
+            .store
+            .update_project(project_id, trimmed, description)
+    }
+
+    /// Delete a project. Provider resources survive; only the link is lost.
+    pub fn delete_project(&self, project_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_project(project_id)
+    }
+
     /// Delete a secret and its ciphertext.
     pub fn delete_secret(&self, secret_id: Uuid) -> Result<()> {
         self.unlocked()?.store.delete_secret(secret_id)
     }
 
-    /// Create a project by hand, building the owning chain if needed.
-    pub fn create_project(
-        &mut self,
-        name: &str,
-        project_ref: Option<&str>,
-        environment: Environment,
-    ) -> Result<Project> {
-        let mut outcome = CommitOutcome::default();
-        let identity_id = self.ensure_identity(None, &mut outcome)?;
-        let inner = self.unlocked()?;
-
-        let account = inner
-            .store
-            .create_account(identity_id, Provider::Unknown, None, name)?;
-        let org = inner
-            .store
-            .create_organization(account.id, None, "Personal")?;
-        inner
-            .store
-            .create_project(org.id, project_ref, name, None, environment)
+    /// The whole Identity -> Account -> Organization -> resource graph.
+    pub fn identity_graph(&self) -> Result<Vec<IdentityNode>> {
+        self.unlocked()?.store.identity_graph()
     }
 
-    /// Every relation touching an entity, in either direction.
-    pub fn relations_for(&self, entity: EntityRef) -> Result<Vec<crate::model::Relation>> {
+    /// Everything DevLedger could not work out on its own.
+    pub fn needs_attention(&self) -> Result<Vec<AttentionItem>> {
+        self.unlocked()?.store.needs_attention()
+    }
+
+    /// Every subscription, with the account behind it.
+    pub fn list_subscriptions(&self) -> Result<Vec<SubscriptionSummary>> {
+        self.unlocked()?.store.list_subscriptions()
+    }
+
+    /// Provider resources linked to a project.
+    pub fn service_projects_for_project(&self, project_id: Uuid) -> Result<Vec<ServiceProject>> {
+        self.unlocked()?
+            .store
+            .service_projects_for_project(project_id)
+    }
+
+    /// Display summaries for every provider resource.
+    pub fn list_service_projects(&self) -> Result<Vec<ServiceProjectSummary>> {
+        let inner = self.unlocked()?;
+        inner
+            .store
+            .list_service_projects()?
+            .into_iter()
+            .map(|sp| inner.store.service_project_summary(sp))
+            .collect()
+    }
+
+    /// Move a resource into an organization, or clear the assignment.
+    pub fn assign_service_project_organization(
+        &self,
+        service_project_id: Uuid,
+        organization_id: Option<Uuid>,
+    ) -> Result<()> {
+        self.unlocked()?
+            .store
+            .set_service_project_organization(service_project_id, organization_id)
+    }
+
+    /// Record that a project uses a provider resource.
+    pub fn link_service_project(&self, service_project_id: Uuid, project_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.create_relation(
+            EntityRef::new(EntityKind::ServiceProject, service_project_id),
+            EntityRef::new(EntityKind::Project, project_id),
+            RelationKind::UsedBy,
+            &Evidence::new(
+                EvidenceLevel::Explicit,
+                "user.linked",
+                "Linked by hand in DevLedger",
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Undo [`Vault::link_service_project`].
+    pub fn unlink_service_project(&self, service_project_id: Uuid, project_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_relation(
+            EntityRef::new(EntityKind::ServiceProject, service_project_id),
+            EntityRef::new(EntityKind::Project, project_id),
+            RelationKind::UsedBy,
+        )
+    }
+
+    /// Create an organization under an account.
+    pub fn create_organization(&self, account_id: Uuid, name: &str) -> Result<Organization> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an organization needs a name".into()));
+        }
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner.store.organization_by_name(account_id, trimmed)? {
+            return Ok(existing);
+        }
+        inner.store.create_organization(account_id, None, trimmed)
+    }
+
+    /// Organizations under an account.
+    pub fn organizations_for_account(&self, account_id: Uuid) -> Result<Vec<Organization>> {
+        self.unlocked()?.store.organizations_for_account(account_id)
+    }
+
+    /// Every identity.
+    pub fn list_identities(&self) -> Result<Vec<Identity>> {
+        self.unlocked()?.store.list_identities()
+    }
+
+    /// Accounts belonging to an identity.
+    pub fn accounts_for_identity(&self, identity_id: Uuid) -> Result<Vec<Account>> {
+        self.unlocked()?.store.accounts_for_identity(identity_id)
+    }
+
+    /// Every relation touching an entity.
+    pub fn relations_for(&self, entity: EntityRef) -> Result<Vec<Relation>> {
         self.unlocked()?.store.relations_for(entity)
     }
 
@@ -729,29 +932,36 @@ impl Vault {
         conn.execute("DELETE FROM audit_log", [])?;
         Ok(())
     }
-
-    /// Blind index of a project ref, exposed for tests and tooling.
-    #[doc(hidden)]
-    pub fn project_ref_index(&self, project_ref: &str) -> Result<String> {
-        blind_index::blind_index(&self.unlocked()?.index_key, DOMAIN_PROJECT_REF, project_ref)
-    }
 }
 
 /// Turn a proposed endpoint into a concrete [`EntityRef`].
 ///
-/// Returns `None` when the endpoint names an entity that was never written,
-/// which happens whenever the user skipped that row in the review sheet.
+/// Returns `None` when the endpoint names something that was never written,
+/// which happens whenever the user skipped that row or left a rung unknown.
 fn resolve_endpoint(
     endpoint: &ProposedEndpoint,
-    project_id: Uuid,
+    chain: &ResolvedChain,
     secret_ids: &HashMap<usize, Uuid>,
 ) -> Option<EntityRef> {
     match endpoint {
         ProposedEndpoint::Existing { entity, .. } => Some(entity.clone()),
-        ProposedEndpoint::New {
-            kind: EntityKind::Project,
-            ..
-        } => Some(EntityRef::new(EntityKind::Project, project_id)),
+        ProposedEndpoint::Chain { role, .. } => match role {
+            ChainRole::Identity => chain
+                .identity
+                .map(|id| EntityRef::new(EntityKind::Identity, id)),
+            ChainRole::Account => chain
+                .account
+                .map(|id| EntityRef::new(EntityKind::Account, id)),
+            ChainRole::Organization => chain
+                .organization
+                .map(|id| EntityRef::new(EntityKind::Organization, id)),
+            ChainRole::ServiceProject => chain
+                .service_project
+                .map(|id| EntityRef::new(EntityKind::ServiceProject, id)),
+            ChainRole::Project => chain
+                .project
+                .map(|id| EntityRef::new(EntityKind::Project, id)),
+        },
         ProposedEndpoint::New {
             kind: EntityKind::Secret,
             entity_index: Some(index),
@@ -786,14 +996,51 @@ impl MatchLookup for StoreLookup<'_> {
     fn secret_by_name(&self, name: &str) -> Result<Option<SecretRecord>> {
         self.store.secret_by_name(name)
     }
-    fn project_by_ref(&self, project_ref: &str) -> Result<Option<Project>> {
-        self.store.project_by_ref(project_ref)
+    fn service_project_by_ref(
+        &self,
+        provider: Provider,
+        provider_ref: &str,
+    ) -> Result<Option<ServiceProject>> {
+        self.store.service_project_by_ref(provider, provider_ref)
+    }
+    fn project_by_name(&self, name: &str) -> Result<Option<Project>> {
+        self.store.project_by_name(name)
+    }
+    fn organization_by_name(&self, name: &str) -> Result<Option<Organization>> {
+        self.store.organization_by_name_anywhere(name)
     }
     fn identity_by_email_index(&self, index: &str) -> Result<Option<Uuid>> {
         self.store.identity_id_by_email_index(index)
     }
-    fn project_name(&self, id: Uuid) -> Result<Option<String>> {
-        Ok(self.store.project(id)?.map(|p| p.name))
+    fn all_projects(&self) -> Result<Vec<(Uuid, String)>> {
+        Ok(self
+            .store
+            .list_projects()?
+            .into_iter()
+            .map(|s| (s.project.id, s.project.name))
+            .collect())
+    }
+    fn all_organizations(&self) -> Result<Vec<(Uuid, String)>> {
+        let mut out = Vec::new();
+        for identity in self.store.list_identities()? {
+            for account in self.store.accounts_for_identity(identity.id)? {
+                for org in self.store.organizations_for_account(account.id)? {
+                    out.push((org.id, org.name));
+                }
+            }
+        }
+        Ok(out)
+    }
+    fn all_identities(&self) -> Result<Vec<(Uuid, String)>> {
+        Ok(self
+            .store
+            .list_identities()?
+            .into_iter()
+            .filter_map(|i| i.email.map(|e| (i.id, e)))
+            .collect())
+    }
+    fn service_project_name(&self, id: Uuid) -> Result<Option<String>> {
+        Ok(self.store.service_project(id)?.map(|sp| sp.name))
     }
 }
 

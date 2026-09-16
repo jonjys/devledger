@@ -21,7 +21,10 @@ use crate::crypto::{self, LABEL_DATABASE};
 use crate::error::{CoreError, Result};
 use crate::secret::SecretBytes;
 
-pub use repo::{AuditEntry, ProjectSummary, VaultEntry};
+pub use repo::{
+    AccountNode, AttentionItem, AttentionKind, AuditEntry, IdentityNode, OrganizationNode,
+    ProjectRefLabel, ProjectSummary, ServiceProjectSummary, SubscriptionSummary, VaultEntry,
+};
 
 /// A handle to the opened, decrypted database.
 pub struct Store {

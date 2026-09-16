@@ -32,3 +32,89 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3BxcnN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoyMDE1NTc2MDAwfQ.c2lnbmF0dXJlLXBsYWNlaG9sZGVy
 DATABASE_URL=postgresql://postgres.abcdefghijklmnopqrst:s3cr3t-pw@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
 "#;
+
+/// A paste shaped like the ones DevLedger is actually for: a project name, an
+/// organization name, the email that holds the account, the provider, and then
+/// the credentials.
+///
+/// The names are deliberately generic test data. Nothing about them is special
+/// to DevLedger; any developer's project and organization names would work the
+/// same way.
+pub const SUPABASE_FULL: &str = concat!(
+    "Acme Storefront\n",
+    "AcmeOrg\n",
+    "dev-a@example.com\n",
+    "Supabase\n",
+    "https://abcdefghijklmnopqrst.supabase.co\n",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3BxcnN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MjAxNTU3NjAwMH0.c2lnbmF0dXJlLXBsYWNlaG9sZGVy\n",
+    "SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3BxcnN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoyMDE1NTc2MDAwfQ.c2lnbmF0dXJlLXBsYWNlaG9sZGVy\n",
+    "DATABASE_URL=postgresql://postgres.abcdefghijklmnopqrst:s3cr3t-pw@aws-0-eu-west-1.pooler.supabase.com:6543/postgres\n",
+);
+
+/// A second developer identity, organization and Supabase project, so tests can
+/// prove the two are kept apart rather than merged.
+pub const SUPABASE_SECOND_ACCOUNT: &str = concat!(
+    "Beta Dashboard\n",
+    "BetaOrg\n",
+    "dev-b@example.com\n",
+    "Supabase\n",
+    "https://zyxwvutsrqponmlkjihg.supabase.co\n",
+    "BETA_SUPABASE_ANON_KEY=sb_publishable_betabetabetabeta\n",
+);
+
+/// Build a submission that accepts every recommendation and answers every open
+/// question with its recommended candidate.
+///
+/// This mirrors what the review sheet sends when the user presses Save without
+/// changing anything.
+pub fn accept_all(
+    analysis: &devledger_core::paste::PasteAnalysis,
+) -> devledger_core::paste::ReviewSubmission {
+    use devledger_core::paste::{
+        AnswerChoice, EntityDecision, QuestionAnswer, ReviewDecision, ReviewSubmission,
+    };
+
+    let answers = analysis
+        .questions
+        .iter()
+        .filter_map(|q| {
+            let candidate = q
+                .candidates
+                .iter()
+                .find(|c| c.recommended)
+                .or_else(|| q.candidates.first())?;
+            let choice = match &candidate.existing {
+                Some(entity) => AnswerChoice::Existing {
+                    entity: entity.clone(),
+                },
+                None => AnswerChoice::NewNamed {
+                    name: candidate.label.clone(),
+                },
+            };
+            Some(QuestionAnswer {
+                question_id: q.id.clone(),
+                choice,
+            })
+        })
+        .collect();
+
+    ReviewSubmission {
+        analysis_id: analysis.analysis_id,
+        decisions: (0..analysis.entities.len())
+            .map(|entity_index| ReviewDecision {
+                entity_index,
+                decision: EntityDecision::Accept,
+                name_override: None,
+            })
+            .collect(),
+        accepted_relations: analysis
+            .proposed_relations
+            .iter()
+            .filter(|r| r.selected_by_default)
+            .map(|r| r.index)
+            .collect(),
+        acknowledge_critical: false,
+        target_project_id: None,
+        answers,
+    }
+}

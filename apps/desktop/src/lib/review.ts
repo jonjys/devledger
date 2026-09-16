@@ -5,10 +5,13 @@
 // can be tested without rendering anything.
 
 import type {
+  AnswerChoice,
   DetectedEntity,
   EntityDecision,
   ExistingMatch,
+  OpenQuestion,
   PasteAnalysis,
+  QuestionAnswer,
   RecommendedAction,
   ReviewSubmission,
 } from "./types";
@@ -100,6 +103,76 @@ function toDecision(entry: EntityChoice): EntityDecision {
   }
 }
 
+/**
+ * How the user answered one question in the sheet.
+ *
+ * `selection` is the index into the question's candidates, or `"free"` for a
+ * typed name, or `"unknown"` to say so explicitly.
+ */
+export interface AnswerState {
+  selection: number | "free" | "unknown";
+  freeText: string;
+}
+
+/** The answer each question starts on: its recommended candidate, if any. */
+export function initialAnswers(analysis: PasteAnalysis): Record<string, AnswerState> {
+  const state: Record<string, AnswerState> = {};
+  for (const question of analysis.questions) {
+    const recommended = question.candidates.findIndex((c) => c.recommended);
+    state[question.id] = {
+      // With no candidate to recommend, an optional question starts at
+      // "unknown" and a required one starts on free text, so the user is never
+      // silently committed to a guess.
+      selection:
+        recommended >= 0 ? recommended : question.required ? "free" : "unknown",
+      freeText: "",
+    };
+  }
+  return state;
+}
+
+function toAnswerChoice(
+  question: OpenQuestion,
+  state: AnswerState | undefined,
+): AnswerChoice | null {
+  if (!state) return null;
+  if (state.selection === "unknown") return { sort: "unknown" };
+  if (state.selection === "free") {
+    const name = state.freeText.trim();
+    return name ? { sort: "new_named", name } : null;
+  }
+  const candidate = question.candidates[state.selection];
+  if (!candidate) return null;
+  return candidate.existing
+    ? { sort: "existing", entity: candidate.existing }
+    : { sort: "new_named", name: candidate.label };
+}
+
+/** Turn the sheet's answer state into the payload's answer list. */
+export function buildAnswers(
+  analysis: PasteAnalysis,
+  answers: Record<string, AnswerState>,
+): QuestionAnswer[] {
+  const out: QuestionAnswer[] = [];
+  for (const question of analysis.questions) {
+    const choice = toAnswerChoice(question, answers[question.id]);
+    if (choice) out.push({ question_id: question.id, choice });
+  }
+  return out;
+}
+
+/** Required questions the user has not answered yet. */
+export function unansweredRequired(
+  analysis: PasteAnalysis,
+  answers: Record<string, AnswerState>,
+): OpenQuestion[] {
+  return analysis.questions.filter((q) => {
+    if (!q.required) return false;
+    const choice = toAnswerChoice(q, answers[q.id]);
+    return choice === null || choice.sort === "unknown";
+  });
+}
+
 /** Assemble the payload sent to `smart_paste_commit`. */
 export function buildSubmission(
   analysis: PasteAnalysis,
@@ -107,6 +180,7 @@ export function buildSubmission(
   acceptedRelations: Set<number>,
   acknowledgeCritical: boolean,
   targetProjectId: string | null,
+  answers: Record<string, AnswerState> = {},
 ): ReviewSubmission {
   return {
     analysis_id: analysis.analysis_id,
@@ -118,6 +192,7 @@ export function buildSubmission(
     accepted_relations: [...acceptedRelations].sort((a, b) => a - b),
     acknowledge_critical: acknowledgeCritical,
     target_project_id: targetProjectId,
+    answers: buildAnswers(analysis, answers),
   };
 }
 

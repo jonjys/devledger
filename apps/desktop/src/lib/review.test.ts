@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { analysisFixture } from "../test/fixtures";
 import {
+  buildAnswers,
   buildSubmission,
   countToSave,
   defaultChoice,
   describeChoice,
+  initialAnswers,
   initialChoices,
   initialRelations,
   isActionable,
   matchesFor,
+  unansweredRequired,
   type EntityChoice,
 } from "./review";
 
@@ -125,5 +128,119 @@ describe("describeChoice", () => {
     );
     expect(describeChoice("create_new", { sort: "update", secret_id: "x" })).toMatch(/new secret/i);
     expect(describeChoice("change", { sort: "create" })).toMatch(/overwrite/i);
+  });
+});
+
+describe("open questions", () => {
+  it("starts each question on its recommended candidate", () => {
+    const analysis = analysisFixture();
+    const answers = initialAnswers(analysis);
+    expect(answers["project"]!.selection).toBe(0);
+    expect(answers["organization"]!.selection).toBe(0);
+  });
+
+  it("starts an optional question with no candidates at unknown", () => {
+    const analysis = analysisFixture({
+      questions: [
+        {
+          id: "organization",
+          kind: "which_organization",
+          prompt: "Which organization?",
+          candidates: [],
+          allow_free_text: true,
+          required: false,
+        },
+      ],
+    });
+    expect(initialAnswers(analysis)["organization"]!.selection).toBe("unknown");
+  });
+
+  it("turns the recommended candidate into a new_named answer", () => {
+    const analysis = analysisFixture();
+    const answers = buildAnswers(analysis, initialAnswers(analysis));
+    expect(answers).toEqual([
+      { question_id: "project", choice: { sort: "new_named", name: "Acme Storefront" } },
+      { question_id: "organization", choice: { sort: "new_named", name: "AcmeOrg" } },
+    ]);
+  });
+
+  it("uses an existing entity when the candidate points at one", () => {
+    const analysis = analysisFixture({
+      questions: [
+        {
+          id: "project",
+          kind: "which_project",
+          prompt: "Which project?",
+          candidates: [
+            {
+              existing: { kind: "project", id: "33333333-3333-4333-8333-333333333333" },
+              label: "Existing Project",
+              reason: "An existing project",
+              recommended: true,
+            },
+          ],
+          allow_free_text: true,
+          required: true,
+        },
+      ],
+    });
+    const answers = buildAnswers(analysis, initialAnswers(analysis));
+    expect(answers[0]!.choice).toEqual({
+      sort: "existing",
+      entity: { kind: "project", id: "33333333-3333-4333-8333-333333333333" },
+    });
+  });
+
+  it("carries a typed name through as new_named", () => {
+    const analysis = analysisFixture();
+    const answers = buildAnswers(analysis, {
+      project: { selection: "free", freeText: "  Typed Name  " },
+      organization: { selection: "unknown", freeText: "" },
+    });
+    expect(answers).toEqual([
+      { question_id: "project", choice: { sort: "new_named", name: "Typed Name" } },
+      { question_id: "organization", choice: { sort: "unknown" } },
+    ]);
+  });
+
+  it("drops a free-text answer that is still empty", () => {
+    const analysis = analysisFixture();
+    const answers = buildAnswers(analysis, {
+      project: { selection: "free", freeText: "   " },
+      organization: { selection: 0, freeText: "" },
+    });
+    expect(answers.map((a) => a.question_id)).toEqual(["organization"]);
+  });
+
+  it("reports a required question that is unanswered or explicitly unknown", () => {
+    const analysis = analysisFixture();
+    expect(unansweredRequired(analysis, initialAnswers(analysis))).toHaveLength(0);
+
+    const blank = unansweredRequired(analysis, {
+      project: { selection: "free", freeText: "" },
+      organization: { selection: 0, freeText: "" },
+    });
+    expect(blank.map((q) => q.id)).toEqual(["project"]);
+
+    // An optional question left unknown is fine; a required one is not.
+    const unknown = unansweredRequired(analysis, {
+      project: { selection: "unknown", freeText: "" },
+      organization: { selection: "unknown", freeText: "" },
+    });
+    expect(unknown.map((q) => q.id)).toEqual(["project"]);
+  });
+
+  it("includes the answers in the submission", () => {
+    const analysis = analysisFixture();
+    const submission = buildSubmission(
+      analysis,
+      {},
+      new Set(),
+      false,
+      null,
+      initialAnswers(analysis),
+    );
+    expect(submission.answers).toHaveLength(2);
+    expect(submission.answers[0]!.question_id).toBe("project");
   });
 });

@@ -59,21 +59,53 @@ pub struct Organization {
     pub created_at: OffsetDateTime,
 }
 
-/// A project: the unit a developer actually works in, and the vault scope.
+/// A resource inside a provider: a Supabase project, a Vercel project, a GitHub
+/// repo, a Stripe account's dashboard.
+///
+/// This is **not** the thing a developer calls "my project". It is the
+/// provider-side object that a [`Project`] uses. Keeping the two apart is what
+/// lets one DevLedger project draw on a Supabase project, a Vercel project and
+/// a Stripe account at once, and lets one Supabase project be shared by two
+/// DevLedger projects.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Project {
+pub struct ServiceProject {
     /// Stable local id.
     pub id: Uuid,
-    /// Owning organization.
-    pub organization_id: Uuid,
-    /// Provider project reference, e.g. a Supabase project ref.
-    pub provider_project_ref: Option<String>,
+    /// The provider account this lives under.
+    pub account_id: Uuid,
+    /// The organization it belongs to, when that is known.
+    ///
+    /// `None` means unassigned. DevLedger never invents an organization to fill
+    /// this in; an unassigned resource is surfaced under Needs attention
+    /// instead.
+    pub organization_id: Option<Uuid>,
+    /// Which provider.
+    pub provider: Provider,
+    /// Provider-side reference, e.g. a Supabase project ref or a repo slug.
+    pub provider_ref: Option<String>,
     /// Display name.
     pub name: String,
     /// Deployment region, when known.
     pub region: Option<String>,
-    /// Which environment this project represents.
+    /// Which environment this resource represents.
     pub environment: Environment,
+    /// Creation timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// A DevLedger project: the thing a developer actually works on.
+///
+/// It has no provider of its own. It is given meaning by the
+/// [`ServiceProject`]s linked to it and the secrets filed against it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Project {
+    /// Stable local id.
+    pub id: Uuid,
+    /// What the developer calls it, e.g. "Curl-to-Buy".
+    pub name: String,
+    /// Optional free-text note.
+    pub description: Option<String>,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -207,8 +239,12 @@ impl SecretKind {
 pub struct SecretRecord {
     /// Stable local id.
     pub id: Uuid,
-    /// Project this secret belongs to.
-    pub project_id: Uuid,
+    /// The DevLedger project this secret is filed under, when one is known.
+    pub project_id: Option<Uuid>,
+    /// The provider resource this secret authenticates to, when one is known.
+    ///
+    /// At least one of `project_id` and `service_project_id` is always set.
+    pub service_project_id: Option<Uuid>,
     /// What kind of credential it is.
     pub kind: SecretKind,
     /// The environment-variable style name, e.g. `SUPABASE_SERVICE_ROLE_KEY`.
@@ -244,6 +280,8 @@ pub struct Subscription {
     pub currency: Option<String>,
     /// Billing interval, when parsed.
     pub interval: Option<BillingInterval>,
+    /// When a trial ends, if the excerpt stated an ISO date.
+    pub trial_ends_at: Option<String>,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -287,6 +325,8 @@ pub enum EntityKind {
     Account,
     /// An [`Organization`].
     Organization,
+    /// A [`ServiceProject`].
+    ServiceProject,
     /// A [`Project`].
     Project,
     /// A [`SecretRecord`].
@@ -315,9 +355,15 @@ impl EntityRef {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
-    /// Parent owns child (identity owns account, account owns org, ...).
+    /// An identity owns a provider account.
     Owns,
-    /// A secret authenticates against a project.
+    /// An account is a member of an organization.
+    MemberOf,
+    /// An organization contains a service project.
+    Contains,
+    /// A service project is used by a DevLedger project.
+    UsedBy,
+    /// A secret authenticates against a service project.
     AuthenticatesTo,
     /// A subscription bills an account.
     Bills,
@@ -325,11 +371,34 @@ pub enum RelationKind {
     SameAs,
 }
 
+impl RelationKind {
+    /// Human-readable verb for the review sheet and the map.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RelationKind::Owns => "owns",
+            RelationKind::MemberOf => "is a member of",
+            RelationKind::Contains => "contains",
+            RelationKind::UsedBy => "is used by",
+            RelationKind::AuthenticatesTo => "authenticates to",
+            RelationKind::Bills => "bills",
+            RelationKind::SameAs => "is the same as",
+        }
+    }
+}
+
 /// How confident DevLedger is about an inference, and why.
 ///
 /// The level is set by the deterministic rule that fired; the reason is the
 /// human-readable justification shown in the review sheet so a user can
 /// disagree with it.
+///
+/// # Ordering
+///
+/// Variants are declared **most confident first**, so the derived [`Ord`] runs
+/// backwards from intuition: `Explicit < Strong < Heuristic < Weak`. Comparing
+/// with `>=` to mean "at least this confident" is therefore wrong. Use
+/// [`EvidenceLevel::is_at_least`] and [`EvidenceLevel::weaker_of`] instead of
+/// comparing directly.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceLevel {
@@ -344,6 +413,21 @@ pub enum EvidenceLevel {
 }
 
 impl EvidenceLevel {
+    /// Whether this level is at least as confident as `floor`.
+    ///
+    /// Reads the way the name suggests, unlike the raw comparison operators.
+    pub fn is_at_least(&self, floor: EvidenceLevel) -> bool {
+        *self <= floor
+    }
+
+    /// The less confident of two levels.
+    ///
+    /// A chain of inferences is only as good as its weakest link, so this is
+    /// what combines them.
+    pub fn weaker_of(a: EvidenceLevel, b: EvidenceLevel) -> EvidenceLevel {
+        a.max(b)
+    }
+
     /// Whether a proposal at this level is pre-selected in the review sheet.
     ///
     /// Weak evidence is always left for the user to opt into.

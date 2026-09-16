@@ -8,15 +8,24 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  Account,
+  AttentionItem,
   AuditEntry,
   CommitOutcome,
-  Environment,
+  EntityKind,
+  Identity,
+  IdentityNode,
   IpcError,
+  Organization,
   PasteAnalysis,
   Project,
   ProjectSummary,
   Provenance,
+  Relation,
   ReviewSubmission,
+  ServiceProject,
+  ServiceProjectSummary,
+  SubscriptionSummary,
   VaultEntry,
   VaultStatus,
 } from "./types";
@@ -82,11 +91,57 @@ export const listProjects = () => call<ProjectSummary[]>("list_projects");
 export const listSecrets = (projectId: string) =>
   call<VaultEntry[]>("list_secrets", { projectId });
 
-export const createProject = (
+export const createProject = (name: string, description: string | null) =>
+  call<Project>("create_project", { name, description });
+
+export const updateProject = (
+  projectId: string,
   name: string,
-  projectRef: string | null,
-  environment: Environment,
-) => call<Project>("create_project", { name, projectRef, environment });
+  description: string | null,
+) => call<void>("update_project", { projectId, name, description });
+
+export const deleteProject = (projectId: string) =>
+  call<void>("delete_project", { projectId });
+
+// --- the map: identities, accounts, organizations, resources ---------------
+
+export const identityGraph = () => call<IdentityNode[]>("identity_graph");
+
+export const needsAttention = () => call<AttentionItem[]>("needs_attention");
+
+export const listSubscriptions = () =>
+  call<SubscriptionSummary[]>("list_subscriptions");
+
+export const listServiceProjects = () =>
+  call<ServiceProjectSummary[]>("list_service_projects");
+
+export const serviceProjectsForProject = (projectId: string) =>
+  call<ServiceProject[]>("service_projects_for_project", { projectId });
+
+export const assignOrganization = (
+  serviceProjectId: string,
+  organizationId: string | null,
+) => call<void>("assign_organization", { serviceProjectId, organizationId });
+
+export const linkServiceProject = (serviceProjectId: string, projectId: string) =>
+  call<void>("link_service_project", { serviceProjectId, projectId });
+
+export const unlinkServiceProject = (serviceProjectId: string, projectId: string) =>
+  call<void>("unlink_service_project", { serviceProjectId, projectId });
+
+export const createOrganization = (accountId: string, name: string) =>
+  call<Organization>("create_organization", { accountId, name });
+
+export const organizationsForAccount = (accountId: string) =>
+  call<Organization[]>("organizations_for_account", { accountId });
+
+export const listIdentities = () => call<Identity[]>("list_identities");
+
+export const accountsForIdentity = (identityId: string) =>
+  call<Account[]>("accounts_for_identity", { identityId });
+
+export const relationsFor = (kind: EntityKind, id: string) =>
+  call<Relation[]>("relations_for", { kind, id });
 
 export const deleteSecret = (secretId: string) =>
   call<void>("delete_secret", { secretId });

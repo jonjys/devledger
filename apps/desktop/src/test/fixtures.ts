@@ -73,7 +73,7 @@ export function analysisFixture(overrides: Partial<PasteAnalysis> = {}): PasteAn
       {
         index: 0,
         from: { sort: "new", kind: "secret", label: "NEXT_PUBLIC_SUPABASE_ANON_KEY", entity_index: 1 },
-        to: { sort: "new", kind: "project", label: "abcdefghijklmnopqrst", entity_index: null },
+        to: { sort: "chain", role: "service_project", label: "abcdefghijklmnopqrst" },
         kind: "authenticates_to",
         evidence: {
           level: "strong",
@@ -85,7 +85,7 @@ export function analysisFixture(overrides: Partial<PasteAnalysis> = {}): PasteAn
       {
         index: 1,
         from: { sort: "new", kind: "secret", label: "SUPABASE_SERVICE_ROLE_KEY", entity_index: 2 },
-        to: { sort: "new", kind: "project", label: "abcdefghijklmnopqrst", entity_index: null },
+        to: { sort: "chain", role: "service_project", label: "abcdefghijklmnopqrst" },
         kind: "authenticates_to",
         evidence: {
           level: "weak",
@@ -104,7 +104,96 @@ export function analysisFixture(overrides: Partial<PasteAnalysis> = {}): PasteAn
       captured_at: "2026-09-16T07:00:00Z",
     },
     blocks_save: false,
-    inferred_project_ref: "abcdefghijklmnopqrst",
+    provider: "supabase",
+    chain: {
+      identity: {
+        role: "identity",
+        label: "dev-a@example.com",
+        existing_id: null,
+        evidence: {
+          level: "explicit",
+          reason: "The paste names this email address",
+          rule: "identity.email",
+        },
+        entity_index: null,
+      },
+      account: {
+        role: "account",
+        label: "Supabase",
+        existing_id: null,
+        evidence: {
+          level: "strong",
+          reason: "A Supabase account is implied by the credentials in this paste",
+          rule: "account.provider",
+        },
+        entity_index: null,
+      },
+      organization: {
+        role: "organization",
+        label: "AcmeOrg",
+        existing_id: null,
+        evidence: {
+          level: "weak",
+          reason: "The next unrecognised name in the paste. Confirm this is the organization.",
+          rule: "organization.second_label",
+        },
+        entity_index: null,
+      },
+      service_project: {
+        role: "service_project",
+        label: "abcdefghijklmnopqrst",
+        existing_id: null,
+        evidence: {
+          level: "strong",
+          reason: "3 values in this paste name reference abcdefghijklmnopqrst",
+          rule: "service_project.ref",
+        },
+        entity_index: null,
+      },
+      project: {
+        role: "project",
+        label: "Acme Storefront",
+        existing_id: null,
+        evidence: {
+          level: "weak",
+          reason: "The first unrecognised name in the paste. Confirm this is the project.",
+          rule: "project.first_label",
+        },
+        entity_index: null,
+      },
+    },
+    questions: [
+      {
+        id: "project",
+        kind: "which_project",
+        prompt: "Which project is this for?",
+        candidates: [
+          {
+            existing: null,
+            label: "Acme Storefront",
+            reason: "The first unrecognised name in the paste.",
+            recommended: true,
+          },
+        ],
+        allow_free_text: true,
+        required: true,
+      },
+      {
+        id: "organization",
+        kind: "which_organization",
+        prompt: "Which Supabase organization owns this?",
+        candidates: [
+          {
+            existing: null,
+            label: "AcmeOrg",
+            reason: "The next unrecognised name in the paste.",
+            recommended: true,
+          },
+        ],
+        allow_free_text: true,
+        required: false,
+      },
+    ],
   };
   return { ...base, ...overrides };
 }

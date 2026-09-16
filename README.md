@@ -15,7 +15,7 @@ No cloud. No account. No telemetry. No network calls at all.
 | **M2** | Deterministic Smart Paste: detectors, JWT claim inspection, subscription parsing, account/project inference, evidence levels | Done — 18 tests |
 | **M3** | Current stable Rust, Tauri v2 shell, SQLCipher persistence, unlock/onboarding, desktop shell, review sheet, Project Vault | Done — 22 Rust tests + 26 frontend tests |
 
-85 tests in total: 59 Rust, 26 TypeScript.
+116 tests in total: 74 Rust, 42 TypeScript.
 
 ## Running it
 
@@ -46,11 +46,25 @@ docs/                      Architecture and threat model.
 
 ## How it behaves
 
+**It maps what you have actually got.** A developer accumulates several provider
+accounts under different emails, each with its own organizations and projects.
+DevLedger models that properly: an identity holds accounts, accounts contain
+organizations, organizations contain provider resources, and your *own* projects
+sit alongside, linked to the resources they use. One project can draw on a
+Supabase project, a Vercel project and a Stripe account at once; one Supabase
+project can serve two of your projects.
+
 **Smart Paste is deterministic.** The same text always produces the same
 analysis. Classification comes from the value itself wherever it can: a JWT's
 own `role` claim decides whether something is an anon key or a service_role
 key, so a credential filed under a misleading variable name is still identified
 correctly. There is no model and no guessing.
+
+**It asks rather than assuming.** Paste a few lines naming your project, your
+organization, your email and a provider URL, and DevLedger proposes the whole
+chain with its reasoning attached — then asks you to confirm the parts it had to
+guess. "I don't know" is a real answer: the gap is stored as a gap and listed
+under **Needs attention**, never filled in with a plausible-looking placeholder.
 
 **Nothing is written until you say so.** A paste produces a review sheet listing
 what was detected, what it matches in your vault, what relations are proposed

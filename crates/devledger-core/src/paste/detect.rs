@@ -32,6 +32,13 @@ pub enum DetectedKind {
     Email,
     /// A non-secret environment variable.
     EnvVar,
+    /// A bare word or phrase that could name a project or an organization.
+    ///
+    /// Which of the two it is cannot be decided from the text alone, so the
+    /// review sheet asks rather than guessing silently.
+    Label,
+    /// A bare mention of a provider by name, e.g. the line "Supabase".
+    ServiceMention,
     /// A subscription plan line.
     SubscriptionPlan,
     /// A deployment region.
@@ -89,12 +96,12 @@ static ENV_LINE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static SUPABASE_API_URL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"https://([a-z]{20})\.supabase\.(?:co|in)")
+    Regex::new(r"https://([a-z]{16,24})\.supabase\.(?:co|in)")
         .expect("supabase url pattern must compile")
 });
 
 static SUPABASE_DASHBOARD_URL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"https://supabase\.com/dashboard/project/([a-z]{20})")
+    Regex::new(r"https://supabase\.com/dashboard/project/([a-z]{16,24})")
         .expect("dashboard url pattern must compile")
 });
 
@@ -120,15 +127,55 @@ static BARE_TOKEN: Lazy<Regex> = Lazy::new(|| {
 
 /// Supabase pooler host, which carries the project ref in the username.
 static POOLER_USER: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"postgres(?:ql)?://postgres\.([a-z]{20}):")
+    Regex::new(r"postgres(?:ql)?://postgres\.([a-z]{16,24}):")
         .expect("pooler user pattern must compile")
 });
 
 /// Direct database host `db.<ref>.supabase.co`.
 static DIRECT_DB_HOST: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"@db\.([a-z]{20})\.supabase\.(?:co|in)")
+    Regex::new(r"@db\.([a-z]{16,24})\.supabase\.(?:co|in)")
         .expect("direct db host pattern must compile")
 });
+
+/// Provider names DevLedger recognises when they appear as a bare line.
+///
+/// Matching is exact and case-insensitive against the whole line, so a line
+/// reading "Supabase" is a service mention while "my supabase notes" is not.
+pub fn provider_from_bare_line(line: &str) -> Option<Provider> {
+    match line.trim().to_ascii_lowercase().as_str() {
+        "supabase" => Some(Provider::Supabase),
+        "vercel" => Some(Provider::Vercel),
+        "stripe" => Some(Provider::Stripe),
+        "github" | "git hub" => Some(Provider::GitHub),
+        "openai" | "open ai" => Some(Provider::OpenAi),
+        "aws" | "amazon web services" => Some(Provider::Aws),
+        "postgres" | "postgresql" => Some(Provider::Postgres),
+        _ => None,
+    }
+}
+
+/// Whether a line looks like a name someone would give a project or an org.
+///
+/// Deliberately conservative: a single short line of word characters, spaces,
+/// dots, dashes and underscores. Prose, punctuation and anything long is
+/// rejected, because a false label would put a junk name in the review sheet.
+pub fn looks_like_label(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.len() < 2 || trimmed.len() > 60 {
+        return false;
+    }
+    if trimmed.contains('=') || trimmed.contains('/') || trimmed.contains('@') {
+        return false;
+    }
+    if !LABEL.is_match(trimmed) {
+        return false;
+    }
+    // More than four words reads as a sentence, not a name.
+    trimmed.split_whitespace().count() <= 4
+}
+
+static LABEL: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$").expect("label pattern must compile"));
 
 /// Strip surrounding quotes and a trailing `# comment` from an env value.
 fn clean_env_value(raw: &str) -> &str {
@@ -388,6 +435,8 @@ pub fn detect_all(text: &str) -> Vec<Detection> {
     detect_bare_tokens(text, &mut found, &mut claimed);
     detect_urls(text, &mut found, &mut claimed);
     detect_emails(text, &mut found, &mut claimed);
+    // Runs last: anything still unclaimed on its own line may be a name.
+    detect_bare_lines(text, &mut found, &mut claimed);
 
     found.sort_by_key(|d| (d.span.0, d.span.1));
     for (i, d) in found.iter_mut().enumerate() {
@@ -571,5 +620,76 @@ fn detect_emails(text: &str, found: &mut Vec<Detection>, claimed: &mut Vec<(usiz
             secret_value: None,
             span,
         });
+    }
+}
+
+/// Pick up whole lines that no other detector claimed.
+///
+/// These become either a [`DetectedKind::ServiceMention`] (an exact provider
+/// name) or a [`DetectedKind::Label`] (a candidate project or organization
+/// name). A label is never assigned a role here -- the text does not say which
+/// it is, so the decision belongs to the user.
+fn detect_bare_lines(text: &str, found: &mut Vec<Detection>, claimed: &mut Vec<(usize, usize)>) {
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let start = offset;
+        offset += line.len();
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lead = line.len() - line.trim_start().len();
+        let span = (start + lead, start + lead + trimmed.len());
+        if overlaps(claimed, span) {
+            continue;
+        }
+
+        if let Some(provider) = provider_from_bare_line(trimmed) {
+            claimed.push(span);
+            found.push(Detection {
+                entity: DetectedEntity {
+                    index: 0,
+                    kind: DetectedKind::ServiceMention,
+                    label: provider.label().to_string(),
+                    value_preview: trimmed.to_string(),
+                    secret_kind: None,
+                    provider,
+                    environment: Environment::Unknown,
+                    project_ref: None,
+                    evidence: Evidence::new(
+                        EvidenceLevel::Explicit,
+                        "service.named",
+                        format!("The paste names {} directly", provider.label()),
+                    ),
+                },
+                secret_value: None,
+                span,
+            });
+            continue;
+        }
+
+        if looks_like_label(trimmed) {
+            claimed.push(span);
+            found.push(Detection {
+                entity: DetectedEntity {
+                    index: 0,
+                    kind: DetectedKind::Label,
+                    label: trimmed.to_string(),
+                    value_preview: trimmed.to_string(),
+                    secret_kind: None,
+                    provider: Provider::Unknown,
+                    environment: Environment::Unknown,
+                    project_ref: None,
+                    evidence: Evidence::new(
+                        EvidenceLevel::Weak,
+                        "label.bare_line",
+                        "A bare line that could name a project or an organization",
+                    ),
+                },
+                secret_value: None,
+                span,
+            });
+        }
     }
 }

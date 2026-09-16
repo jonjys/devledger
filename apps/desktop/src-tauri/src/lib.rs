@@ -17,12 +17,17 @@
 
 use std::sync::Mutex;
 
-use devledger_core::model::{EntityKind, EntityRef, Environment, Project};
+use devledger_core::model::{
+    Account, EntityKind, EntityRef, Identity, Organization, Project, Relation, ServiceProject,
+};
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
 use devledger_core::redact::{Provenance, SourceKind};
 use devledger_core::secret::SecretString;
-use devledger_core::store::{AuditEntry, ProjectSummary, VaultEntry};
+use devledger_core::store::{
+    AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary,
+    SubscriptionSummary, VaultEntry,
+};
 use devledger_core::vault::{default_vault_dir, VaultStatus};
 use devledger_core::{CoreError, Vault};
 use serde::Serialize;
@@ -155,15 +160,137 @@ fn list_secrets(state: State<'_, AppState>, project_id: Uuid) -> IpcResult<Vec<V
     state.with(|vault| vault.list_secrets(project_id))
 }
 
-/// Create a project by hand.
+/// Create a DevLedger project by hand.
 #[tauri::command]
 fn create_project(
     state: State<'_, AppState>,
     name: String,
-    project_ref: Option<String>,
-    environment: Environment,
+    description: Option<String>,
 ) -> IpcResult<Project> {
-    state.with(|vault| vault.create_project(&name, project_ref.as_deref(), environment))
+    state.with(|vault| vault.create_project(&name, description.as_deref()))
+}
+
+/// Rename a project or change its description.
+#[tauri::command]
+fn update_project(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    name: String,
+    description: Option<String>,
+) -> IpcResult<()> {
+    state.with(|vault| vault.update_project(project_id, &name, description.as_deref()))
+}
+
+/// Delete a project. Provider resources survive; only the link is lost.
+#[tauri::command]
+fn delete_project(state: State<'_, AppState>, project_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_project(project_id))
+}
+
+/// The whole Identity -> Account -> Organization -> resource graph.
+#[tauri::command]
+fn identity_graph(state: State<'_, AppState>) -> IpcResult<Vec<IdentityNode>> {
+    state.with(|vault| vault.identity_graph())
+}
+
+/// Everything DevLedger could not work out on its own.
+#[tauri::command]
+fn needs_attention(state: State<'_, AppState>) -> IpcResult<Vec<AttentionItem>> {
+    state.with(|vault| vault.needs_attention())
+}
+
+/// Every subscription and trial, with the account behind it.
+#[tauri::command]
+fn list_subscriptions(state: State<'_, AppState>) -> IpcResult<Vec<SubscriptionSummary>> {
+    state.with(|vault| vault.list_subscriptions())
+}
+
+/// Every provider resource, with its account, organization and links.
+#[tauri::command]
+fn list_service_projects(state: State<'_, AppState>) -> IpcResult<Vec<ServiceProjectSummary>> {
+    state.with(|vault| vault.list_service_projects())
+}
+
+/// Provider resources linked to a project.
+#[tauri::command]
+fn service_projects_for_project(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+) -> IpcResult<Vec<ServiceProject>> {
+    state.with(|vault| vault.service_projects_for_project(project_id))
+}
+
+/// Move a resource into an organization, or clear the assignment.
+#[tauri::command]
+fn assign_organization(
+    state: State<'_, AppState>,
+    service_project_id: Uuid,
+    organization_id: Option<Uuid>,
+) -> IpcResult<()> {
+    state.with(|vault| {
+        vault.assign_service_project_organization(service_project_id, organization_id)
+    })
+}
+
+/// Record that a project uses a provider resource.
+#[tauri::command]
+fn link_service_project(
+    state: State<'_, AppState>,
+    service_project_id: Uuid,
+    project_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.link_service_project(service_project_id, project_id))
+}
+
+/// Undo a link between a project and a provider resource.
+#[tauri::command]
+fn unlink_service_project(
+    state: State<'_, AppState>,
+    service_project_id: Uuid,
+    project_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.unlink_service_project(service_project_id, project_id))
+}
+
+/// Create an organization under an account.
+#[tauri::command]
+fn create_organization(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+    name: String,
+) -> IpcResult<Organization> {
+    state.with(|vault| vault.create_organization(account_id, &name))
+}
+
+/// Organizations under an account.
+#[tauri::command]
+fn organizations_for_account(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+) -> IpcResult<Vec<Organization>> {
+    state.with(|vault| vault.organizations_for_account(account_id))
+}
+
+/// Every identity.
+#[tauri::command]
+fn list_identities(state: State<'_, AppState>) -> IpcResult<Vec<Identity>> {
+    state.with(|vault| vault.list_identities())
+}
+
+/// Accounts belonging to an identity.
+#[tauri::command]
+fn accounts_for_identity(state: State<'_, AppState>, identity_id: Uuid) -> IpcResult<Vec<Account>> {
+    state.with(|vault| vault.accounts_for_identity(identity_id))
+}
+
+/// Every relation touching an entity, in either direction.
+#[tauri::command]
+fn relations_for(
+    state: State<'_, AppState>,
+    kind: EntityKind,
+    id: Uuid,
+) -> IpcResult<Vec<Relation>> {
+    state.with(|vault| vault.relations_for(EntityRef::new(kind, id)))
 }
 
 /// Delete a secret and its ciphertext.
@@ -262,6 +389,21 @@ pub fn run() {
             list_projects,
             list_secrets,
             create_project,
+            update_project,
+            delete_project,
+            identity_graph,
+            needs_attention,
+            list_subscriptions,
+            list_service_projects,
+            service_projects_for_project,
+            assign_organization,
+            link_service_project,
+            unlink_service_project,
+            create_organization,
+            organizations_for_account,
+            list_identities,
+            accounts_for_identity,
+            relations_for,
             delete_secret,
             secret_provenance,
             recent_audit,

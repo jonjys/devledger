@@ -144,3 +144,134 @@ describe("ReviewSheet", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 });
+
+describe("ReviewSheet chain and questions", () => {
+  it("shows every rung of the proposed chain with its evidence", () => {
+    renderSheet();
+
+    // Scoped to the chain: these names also appear as question options.
+    const chain = screen
+      .getByText("How this fits together")
+      .closest(".section") as HTMLElement;
+
+    expect(within(chain).getByText("dev-a@example.com")).toBeInTheDocument();
+    expect(within(chain).getByText("AcmeOrg")).toBeInTheDocument();
+    expect(within(chain).getByText("abcdefghijklmnopqrst")).toBeInTheDocument();
+    expect(within(chain).getByText("Acme Storefront")).toBeInTheDocument();
+
+    // Rungs are labelled by role, so the hierarchy is readable.
+    expect(within(chain).getByText("Identity")).toBeInTheDocument();
+    expect(within(chain).getByText("Organization")).toBeInTheDocument();
+    expect(within(chain).getByText("Service project")).toBeInTheDocument();
+
+    // And each carries the reason DevLedger believes it.
+    expect(
+      within(chain).getByText(/The paste names this email address/),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a rung the paste did not state as not stated", () => {
+    const analysis = analysisFixture();
+    const chain = { ...analysis.chain, organization: null };
+    renderSheet({ ...analysis, chain });
+    expect(screen.getByText("not stated")).toBeInTheDocument();
+  });
+
+  it("asks which project and which organization", () => {
+    renderSheet();
+    expect(screen.getByText("Which project is this for?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Which Supabase organization owns this?"),
+    ).toBeInTheDocument();
+    // The required one is marked as such.
+    expect(screen.getByText("required")).toBeInTheDocument();
+  });
+
+  it("sends the recommended answers when Save is pressed unchanged", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderSheet();
+
+    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+
+    const submission = onSave.mock.calls[0]![0];
+    expect(submission.answers).toEqual([
+      { question_id: "project", choice: { sort: "new_named", name: "Acme Storefront" } },
+      { question_id: "organization", choice: { sort: "new_named", name: "AcmeOrg" } },
+    ]);
+  });
+
+  it("lets the user say an organization is unknown rather than guessing", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderSheet();
+
+    const orgBlock = screen
+      .getByText("Which Supabase organization owns this?")
+      .closest(".question") as HTMLElement;
+    await user.click(within(orgBlock).getByRole("button", { name: /don't know/i }));
+
+    expect(
+      within(orgBlock).getByText(/appear under Needs attention/i),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    const submission = onSave.mock.calls[0]![0];
+    expect(submission.answers).toContainEqual({
+      question_id: "organization",
+      choice: { sort: "unknown" },
+    });
+  });
+
+  it("accepts a typed name in place of the suggestion", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderSheet();
+
+    const projectBlock = screen
+      .getByText("Which project is this for?")
+      .closest(".question") as HTMLElement;
+    await user.click(
+      within(projectBlock).getByRole("button", { name: /something else/i }),
+    );
+    await user.type(
+      within(projectBlock).getByLabelText("Which project is this for?"),
+      "Curl-to-Buy",
+    );
+
+    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    const submission = onSave.mock.calls[0]![0];
+    expect(submission.answers).toContainEqual({
+      question_id: "project",
+      choice: { sort: "new_named", name: "Curl-to-Buy" },
+    });
+  });
+
+  it("blocks Save until a required question is answered", async () => {
+    const user = userEvent.setup();
+    const analysis = analysisFixture({
+      questions: [
+        {
+          id: "project",
+          kind: "which_project",
+          prompt: "Which project is this for?",
+          candidates: [],
+          allow_free_text: true,
+          required: true,
+        },
+      ],
+    });
+    renderSheet(analysis);
+
+    const save = screen.getByRole("button", { name: /Answer the questions above/ });
+    expect(save).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("Which project is this for?"),
+      "Some Project",
+    );
+    expect(screen.getByRole("button", { name: /^Save 2$/ })).toBeEnabled();
+  });
+
+  it("reads a relation as a sentence with its verb", () => {
+    renderSheet();
+    expect(screen.getAllByText("authenticates to").length).toBeGreaterThan(0);
+  });
+});

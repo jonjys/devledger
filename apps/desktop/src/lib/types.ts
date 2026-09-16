@@ -63,6 +63,7 @@ export type EntityKind =
   | "identity"
   | "account"
   | "organization"
+  | "service_project"
   | "project"
   | "secret"
   | "subscription";
@@ -76,6 +77,7 @@ export type MatchType =
   | "exact_value"
   | "same_name_different_value"
   | "same_project_ref"
+  | "same_name"
   | "same_email";
 
 export interface ExistingMatch {
@@ -88,9 +90,95 @@ export interface ExistingMatch {
 
 export type ProposedEndpoint =
   | { sort: "existing"; entity: EntityRef; label: string }
-  | { sort: "new"; kind: EntityKind; label: string; entity_index: number | null };
+  | { sort: "new"; kind: EntityKind; label: string; entity_index: number | null }
+  | { sort: "chain"; role: ChainRole; label: string };
 
-export type RelationKind = "owns" | "authenticates_to" | "bills" | "same_as";
+export type RelationKind =
+  | "owns"
+  | "member_of"
+  | "contains"
+  | "used_by"
+  | "authenticates_to"
+  | "bills"
+  | "same_as";
+
+export const RELATION_VERB: Record<RelationKind, string> = {
+  owns: "owns",
+  member_of: "is a member of",
+  contains: "contains",
+  used_by: "is used by",
+  authenticates_to: "authenticates to",
+  bills: "bills",
+  same_as: "is the same as",
+};
+
+/** Where a node sits in the Identity → … → Project chain. */
+export type ChainRole =
+  | "identity"
+  | "account"
+  | "organization"
+  | "service_project"
+  | "project";
+
+export const CHAIN_ROLE_LABEL: Record<ChainRole, string> = {
+  identity: "Identity",
+  account: "Account",
+  organization: "Organization",
+  service_project: "Service project",
+  project: "Project",
+};
+
+export interface ChainNode {
+  role: ChainRole;
+  label: string;
+  existing_id: string | null;
+  evidence: Evidence;
+  entity_index: number | null;
+}
+
+/**
+ * The chain a paste implies. Any rung may be null, which means the paste did
+ * not say — DevLedger raises an OpenQuestion rather than filling it in.
+ */
+export interface ProposedChain {
+  identity: ChainNode | null;
+  account: ChainNode | null;
+  organization: ChainNode | null;
+  service_project: ChainNode | null;
+  project: ChainNode | null;
+}
+
+export type QuestionKind =
+  | "which_project"
+  | "which_organization"
+  | "which_identity"
+  | "label_role";
+
+export interface QuestionCandidate {
+  existing: EntityRef | null;
+  label: string;
+  reason: string;
+  recommended: boolean;
+}
+
+export interface OpenQuestion {
+  id: string;
+  kind: QuestionKind;
+  prompt: string;
+  candidates: QuestionCandidate[];
+  allow_free_text: boolean;
+  required: boolean;
+}
+
+export type AnswerChoice =
+  | { sort: "existing"; entity: EntityRef }
+  | { sort: "new_named"; name: string }
+  | { sort: "unknown" };
+
+export interface QuestionAnswer {
+  question_id: string;
+  choice: AnswerChoice;
+}
 
 export interface ProposedRelation {
   index: number;
@@ -124,6 +212,7 @@ export interface ReviewSubmission {
   accepted_relations: number[];
   acknowledge_critical: boolean;
   target_project_id: string | null;
+  answers: QuestionAnswer[];
 }
 
 export type Severity = "info" | "warning" | "critical";
@@ -159,6 +248,7 @@ export interface ParsedSubscription {
   amount_cents: number | null;
   currency: string | null;
   interval: "monthly" | "yearly" | null;
+  trial_ends_at: string | null;
 }
 
 export type SourceKind = "smart_paste" | "env_file" | "manual";
@@ -175,12 +265,14 @@ export interface PasteAnalysis {
   entities: DetectedEntity[];
   recommendations: RecommendedAction[];
   matches: ExistingMatch[];
+  chain: ProposedChain;
+  questions: OpenQuestion[];
   proposed_relations: ProposedRelation[];
   warnings: Warning[];
   subscription: ParsedSubscription | null;
   provenance: Provenance;
   blocks_save: boolean;
-  inferred_project_ref: string | null;
+  provider: Provider;
 }
 
 export interface CommitOutcome {
@@ -189,14 +281,29 @@ export interface CommitOutcome {
   entities_skipped: number;
   projects_created: number;
   identities_created: number;
+  accounts_created: number;
+  organizations_created: number;
+  service_projects_created: number;
+  left_unassigned: number;
   relations_created: number;
   touched_project_ids: string[];
 }
 
+/** A DevLedger project: the thing you work on, e.g. "Curl-to-Buy". */
 export interface Project {
   id: string;
-  organization_id: string;
-  provider_project_ref: string | null;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+/** A provider-side resource: a Supabase project, a Vercel project, a repo. */
+export interface ServiceProject {
+  id: string;
+  account_id: string;
+  organization_id: string | null;
+  provider: Provider;
+  provider_ref: string | null;
   name: string;
   region: string | null;
   environment: Environment;
@@ -205,13 +312,112 @@ export interface Project {
 
 export interface ProjectSummary {
   project: Project;
-  organization_name: string;
+  service_project_count: number;
   secret_count: number;
+  providers: Provider[];
+}
+
+export interface ProjectRefLabel {
+  id: string;
+  name: string;
+}
+
+export interface ServiceProjectSummary {
+  service_project: ServiceProject;
+  account_label: string;
+  identity_email: string | null;
+  organization_name: string | null;
+  secret_count: number;
+  used_by: ProjectRefLabel[];
+}
+
+export interface Identity {
+  id: string;
+  label: string;
+  email: string | null;
+  email_blind_index: string | null;
+  created_at: string;
+}
+
+export interface Account {
+  id: string;
+  identity_id: string;
+  provider: Provider;
+  external_ref: string | null;
+  label: string;
+  created_at: string;
+}
+
+export interface Organization {
+  id: string;
+  account_id: string;
+  provider_org_id: string | null;
+  name: string;
+  created_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  account_id: string;
+  plan: string;
+  status: SubscriptionStatus;
+  amount_cents: number | null;
+  currency: string | null;
+  interval: "monthly" | "yearly" | null;
+  trial_ends_at: string | null;
+  created_at: string;
+}
+
+export interface SubscriptionSummary {
+  subscription: Subscription;
+  provider: Provider;
+  account_label: string;
+  identity_email: string | null;
+}
+
+export interface OrganizationNode {
+  organization: Organization;
+  service_projects: ServiceProjectSummary[];
+}
+
+export interface AccountNode {
+  account: Account;
+  organizations: OrganizationNode[];
+  unassigned: ServiceProjectSummary[];
+  subscriptions: Subscription[];
+}
+
+export interface IdentityNode {
+  identity: Identity;
+  accounts: AccountNode[];
+}
+
+export type AttentionKind =
+  | "unassigned_organization"
+  | "unlinked_service_project"
+  | "identity_without_email"
+  | "orphan_secret";
+
+export interface AttentionItem {
+  kind: AttentionKind;
+  title: string;
+  detail: string;
+  entity: EntityRef;
+}
+
+export interface Relation {
+  id: string;
+  from: EntityRef;
+  to: EntityRef;
+  kind: RelationKind;
+  evidence: Evidence;
+  created_at: string;
 }
 
 export interface SecretRecord {
   id: string;
-  project_id: string;
+  project_id: string | null;
+  service_project_id: string | null;
   kind: SecretKind;
   name: string;
   preview: string;
@@ -225,6 +431,7 @@ export interface VaultEntry {
   secret: SecretRecord;
   client_unsafe: boolean;
   provider: Provider;
+  service_project_name: string | null;
 }
 
 export interface VaultStatus {

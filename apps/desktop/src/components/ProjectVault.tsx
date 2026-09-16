@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import * as api from "../lib/api";
-import { environmentLabel, formatTime, plural, secretKindLabel } from "../lib/format";
-import type { ProjectSummary, VaultEntry } from "../lib/types";
+import { formatTime, plural, secretKindLabel } from "../lib/format";
+import type { ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
 
 interface Props {
   summary: ProjectSummary;
@@ -19,6 +19,7 @@ interface Props {
  */
 export default function ProjectVault({ summary, onNotify }: Props) {
   const [entries, setEntries] = useState<VaultEntry[]>([]);
+  const [resources, setResources] = useState<ServiceProject[]>([]);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
@@ -29,10 +30,11 @@ export default function ProjectVault({ summary, onNotify }: Props) {
     setLoading(true);
     // Revealed plaintext must not survive a switch to another project.
     setRevealed({});
-    api
-      .listSecrets(projectId)
-      .then((rows) => {
-        if (live) setEntries(rows);
+    Promise.all([api.listSecrets(projectId), api.serviceProjectsForProject(projectId)])
+      .then(([rows, linked]) => {
+        if (!live) return;
+        setEntries(rows);
+        setResources(linked);
       })
       .catch((e: unknown) => onNotify(e instanceof Error ? e.message : String(e), true))
       .finally(() => {
@@ -89,19 +91,19 @@ export default function ProjectVault({ summary, onNotify }: Props) {
     }
   }
 
-  const environment = environmentLabel(summary.project.environment);
-
   return (
     <div>
       <div className="vault-head">
         <div>
           <h1>{summary.project.name}</h1>
           <div className="sub">
-            {summary.organization_name}
-            {summary.project.provider_project_ref
-              ? ` · ${summary.project.provider_project_ref}`
-              : ""}
-            {environment ? ` · ${environment}` : ""} · {plural(entries.length, "secret")}
+            {summary.project.description ? `${summary.project.description} · ` : ""}
+            {plural(entries.length, "secret")} ·{" "}
+            {resources.length === 0
+              ? "no linked resources"
+              : resources
+                  .map((r) => `${r.provider}${r.provider_ref ? ` ${r.provider_ref}` : ""}`)
+                  .join(", ")}
           </div>
         </div>
         <span className="spacer" />
@@ -116,7 +118,8 @@ export default function ProjectVault({ summary, onNotify }: Props) {
         <div className="empty">Loading…</div>
       ) : entries.length === 0 ? (
         <div className="empty">
-          No secrets in this project yet. Paste a <code>.env</code> block above to fill it.
+          No secrets in this project yet. Paste a <code>.env</code> block above, or link a
+          provider resource to it from the Map.
         </div>
       ) : (
         <table className="secrets">
@@ -140,6 +143,11 @@ export default function ProjectVault({ summary, onNotify }: Props) {
                   </td>
                   <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>
                     {secretKindLabel(entry.secret.kind)}
+                    {entry.service_project_name && (
+                      <div style={{ color: "var(--text-faint)", fontSize: 11.5 }}>
+                        via {entry.service_project_name}
+                      </div>
+                    )}
                   </td>
                   <td>
                     {plaintext !== undefined ? (

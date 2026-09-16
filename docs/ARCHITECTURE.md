@@ -26,16 +26,44 @@ The desktop crate is deliberately thin: it owns a `Vault` behind a mutex, maps
 
 ## Domain model
 
-`Identity → Account → Organization → Project`, with secrets hanging off
-projects. A Smart Paste that names a project DevLedger has never seen builds the
-whole chain, filling in defaults (`This device`, `Personal`) for the levels the
-paste did not mention.
+```
+Identity (an email)
+  └─ Account (one per provider, per identity)
+      └─ Organization (0..n, only when named)
+          └─ ServiceProject (a Supabase project, a Vercel project, a repo)
+                 │
+                 └─ used_by ──▶ Project (what you call it: "Curl-to-Buy")
+```
 
-Relations are stored separately from the ownership hierarchy, each carrying an
-`Evidence { level, rule, reason }`. The level decides whether the review sheet
-pre-ticks the proposal: explicit, strong and heuristic do; weak never does. The
-reason is shown verbatim so a user can disagree with the inference rather than
-having to trust it.
+The distinction that matters: **a DevLedger project is not a provider's
+project.** "Curl-to-Buy" is a `Project`; the Supabase project it runs on is a
+`ServiceProject`. One project draws on several resources across providers, and
+one resource can be shared by two projects. Collapsing the two, as the first cut
+of this schema did, makes it impossible to represent a developer who holds three
+Supabase accounts under different emails — which is the situation DevLedger
+exists to untangle.
+
+Secrets attach to the `ServiceProject` they authenticate to when one is known,
+and directly to a `Project` otherwise. A project's `.env` is assembled by
+walking every resource it uses, which is why one export can carry Supabase keys
+and Stripe keys together.
+
+`Organization` is nullable throughout. DevLedger never invents one. A resource
+whose organization is unknown is stored unassigned and listed under **Needs
+attention**, alongside resources no project uses and identities with no email.
+
+Relations are stored separately from the foreign keys, each carrying an
+`Evidence { level, rule, reason }`. The reason is shown verbatim so a user can
+disagree with the inference rather than having to trust it.
+
+### A note on `EvidenceLevel` ordering
+
+The variants are declared most-confident-first (`Explicit, Strong, Heuristic,
+Weak`), so the derived `Ord` runs backwards from intuition: `Weak > Explicit`.
+Comparing with `>=` to mean "at least this confident" is a bug, and was one
+during development — it silently suppressed every open question. Use
+`EvidenceLevel::is_at_least` and `EvidenceLevel::weaker_of` instead of bare
+comparisons.
 
 ## Smart Paste
 
@@ -43,13 +71,44 @@ having to trust it.
 text
  ├─ detect_all         regex + structural parsing, fixed order, sorted by position
  ├─ redact             span redaction, then a standalone-pattern sweep
+ ├─ build_chain        identity → account → organization → resource → project
  ├─ recommend          blind-index lookup → Create / Update / Skip per entity
- ├─ match              existing projects, identities and secrets
+ ├─ match              existing resources, organizations, identities and secrets
  ├─ warn               client exposure, ref mismatch, expiry, duplicates
- └─ propose relations  evidence level from how many signals corroborate
+ ├─ build_questions    one per rung the evidence does not settle
+ └─ propose relations  owns / member_of / contains / used_by / authenticates_to
       ↓
  PasteAnalysis (display-safe)  +  StagedSecrets (stays in Rust)
 ```
+
+### Inferring the chain
+
+Bare lines that are not assignments, URLs, emails or credentials become
+*candidate labels*. A label matching an existing project or organization name is
+`Strong` evidence and is used directly. Anything left over is only a suggestion:
+the first unmatched label is proposed as the project and the second as the
+organization, both at `Weak` evidence, which is the signal that the user must
+confirm before anything is written.
+
+For a paste like
+
+```
+Curl-to-Buy
+Fredbase2
+me@example.com
+Supabase
+https://abcdefghijklmnopqrst.supabase.co
+```
+
+the chain comes out as identity `me@example.com`, a Supabase account,
+organization `Fredbase2`, Supabase project `abcdefghijklmnopqrst`, DevLedger
+project `Curl-to-Buy` — with two questions asked, because the two names were
+guesses. Answering is how a guess becomes a row. **"I don't know" is a
+first-class answer**: it stores the gap and surfaces it under Needs attention.
+
+The backend is the authority here, not the sheet: an organization is created
+only from a name the user supplied or confirmed. A submission with no answers
+falls back to using only rows that already exist.
 
 Determinism is a property the tests assert, not just an intention: `analyze` is
 a pure function of `(text, vault contents, now)`, with `now` injected so the
@@ -101,4 +160,12 @@ staged analysis rather than the copy it sent back.
 - There is no idle-timeout auto-lock yet; locking is manual.
 - Copy `.env` decrypts every secret in a project in one pass. Fine at MVP
   scale, worth streaming later.
-- Subscriptions are parsed and stored, but nothing in the UI surfaces them yet.
+- Only Supabase resources are created automatically from a paste. Other
+  providers are detected and their credentials classified, but a Vercel or
+  Stripe resource has to be linked by hand from the Map.
+- The label heuristic (first unmatched name is the project, second is the
+  organization) is positional. It is always presented as a question rather than
+  applied silently, but a paste that lists them the other way round needs the
+  answer corrected.
+- `identity_graph` re-reads the resource list per account. Fine for tens of
+  accounts, not for thousands.

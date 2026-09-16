@@ -8,10 +8,14 @@ pub mod subscription;
 pub mod warn;
 
 pub use detect::{DetectedEntity, DetectedKind};
-pub use pipeline::{analyze, EmptyLookup, MatchLookup, PasteAnalysis, StagedSecrets};
+pub use pipeline::{
+    analyze, answer_for, EmptyLookup, MatchLookup, PasteAnalysis, StagedSecrets, Q_IDENTITY,
+    Q_ORGANIZATION, Q_PROJECT,
+};
 pub use review::{
-    CommitOutcome, EntityDecision, ExistingMatch, MatchType, ProposedEndpoint, ProposedRelation,
-    RecommendedAction, ReviewDecision, ReviewSubmission,
+    AnswerChoice, ChainNode, ChainRole, CommitOutcome, EntityDecision, ExistingMatch, MatchType,
+    OpenQuestion, ProposedChain, ProposedEndpoint, ProposedRelation, QuestionAnswer,
+    QuestionCandidate, QuestionKind, RecommendedAction, ReviewDecision, ReviewSubmission,
 };
 pub use subscription::ParsedSubscription;
 pub use warn::{Severity, Warning, WarningCode};

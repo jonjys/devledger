@@ -5,19 +5,25 @@ import {
   buildSubmission,
   countToSave,
   describeChoice,
+  initialAnswers,
   initialChoices,
   initialRelations,
   isActionable,
   matchesFor,
+  unansweredRequired,
+  type AnswerState,
   type Choice,
   type EntityChoice,
 } from "../lib/review";
 import type {
+  ChainNode,
   DetectedEntity,
+  OpenQuestion,
   PasteAnalysis,
   ProposedEndpoint,
   ReviewSubmission,
 } from "../lib/types";
+import { CHAIN_ROLE_LABEL, RELATION_VERB } from "../lib/types";
 
 interface Props {
   analysis: PasteAnalysis;
@@ -27,7 +33,11 @@ interface Props {
 }
 
 function endpointLabel(endpoint: ProposedEndpoint): string {
-  return endpoint.sort === "existing" ? endpoint.label : `${endpoint.label} (new)`;
+  if (endpoint.sort === "existing") return endpoint.label;
+  if (endpoint.sort === "chain") {
+    return `${endpoint.label} (${CHAIN_ROLE_LABEL[endpoint.role].toLowerCase()})`;
+  }
+  return `${endpoint.label} (new)`;
 }
 
 /**
@@ -43,6 +53,9 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
     initialChoices(analysis),
   );
   const [relations, setRelations] = useState<Set<number>>(() => initialRelations(analysis));
+  const [answers, setAnswers] = useState<Record<string, AnswerState>>(() =>
+    initialAnswers(analysis),
+  );
   const [acknowledged, setAcknowledged] = useState(false);
 
   const actionable = useMemo(
@@ -55,7 +68,8 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
   );
 
   const toSave = countToSave(choices);
-  const blocked = analysis.blocks_save && !acknowledged;
+  const missing = unansweredRequired(analysis, answers);
+  const blocked = (analysis.blocks_save && !acknowledged) || missing.length > 0;
 
   function setChoice(index: number, choice: Choice) {
     setChoices((prev) => {
@@ -82,9 +96,16 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
     });
   }
 
+  function setAnswer(questionId: string, next: Partial<AnswerState>) {
+    setAnswers((prev) => {
+      const existing = prev[questionId] ?? { selection: "unknown", freeText: "" };
+      return { ...prev, [questionId]: { ...existing, ...next } };
+    });
+  }
+
   function save() {
     onSave(
-      buildSubmission(analysis, choices, relations, acknowledged, null),
+      buildSubmission(analysis, choices, relations, acknowledged, null, answers),
     );
   }
 
@@ -94,13 +115,29 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
         <header>
           <h2>Review what DevLedger found</h2>
           <p>
-            {analysis.inferred_project_ref
-              ? `Project ${analysis.inferred_project_ref} · nothing is saved until you choose.`
+            {analysis.chain.project
+              ? `${analysis.chain.project.label} · nothing is saved until you choose.`
               : "Nothing is saved until you choose."}
           </p>
         </header>
 
         <div className="scroll">
+          <ChainSummary analysis={analysis} />
+
+          {analysis.questions.length > 0 && (
+            <section className="section">
+              <h3>Confirm</h3>
+              {analysis.questions.map((question) => (
+                <QuestionBlock
+                  key={question.id}
+                  question={question}
+                  state={answers[question.id]}
+                  onChange={(next) => setAnswer(question.id, next)}
+                />
+              ))}
+            </section>
+          )}
+
           {analysis.warnings.length > 0 && (
             <section className="section">
               <h3>Findings</h3>
@@ -159,7 +196,9 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
                   />
                   <span className="txt">
                     <span className="r">
-                      {endpointLabel(relation.from)} → {endpointLabel(relation.to)}{" "}
+                      {endpointLabel(relation.from)}{" "}
+                      <span className="verb">{RELATION_VERB[relation.kind]}</span>{" "}
+                      {endpointLabel(relation.to)}{" "}
                       <span className={`tag ${relation.evidence.level}`}>
                         {relation.evidence.level}
                       </span>
@@ -218,9 +257,20 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
             type="button"
             className="primary"
             onClick={save}
-            disabled={blocked || saving || toSave === 0}
+            disabled={blocked || saving}
+            title={
+              missing.length > 0
+                ? `Answer: ${missing.map((q) => q.prompt).join(", ")}`
+                : undefined
+            }
           >
-            {saving ? "Saving…" : toSave === 0 ? "Nothing selected" : `Save ${toSave}`}
+            {saving
+              ? "Saving…"
+              : missing.length > 0
+                ? "Answer the questions above"
+                : toSave === 0
+                  ? "Save links only"
+                  : `Save ${toSave}`}
           </button>
         </footer>
       </div>
@@ -293,6 +343,111 @@ function EntityRow({ entity, analysis, choice, onChoice, onTarget }: RowProps) {
       </div>
 
       <div className="why">{describeChoice(current, recommendation)}</div>
+    </div>
+  );
+}
+
+/** The Identity → Account → Organization → Resource → Project chain. */
+function ChainSummary({ analysis }: { analysis: PasteAnalysis }) {
+  const rungs: [string, ChainNode | null][] = [
+    ["identity", analysis.chain.identity],
+    ["account", analysis.chain.account],
+    ["organization", analysis.chain.organization],
+    ["service_project", analysis.chain.service_project],
+    ["project", analysis.chain.project],
+  ];
+  if (rungs.every(([, node]) => node === null)) return null;
+
+  return (
+    <section className="section">
+      <h3>How this fits together</h3>
+      <div className="chain">
+        {rungs.map(([role, node]) => (
+          <div key={role} className={`rung${node ? "" : " unknown"}`}>
+            <span className="role">{CHAIN_ROLE_LABEL[role as keyof typeof CHAIN_ROLE_LABEL]}</span>
+            {node ? (
+              <>
+                <span className="val">{node.label}</span>
+                <span className={`tag ${node.evidence.level}`}>{node.evidence.level}</span>
+                <span className="why">{node.evidence.reason}</span>
+              </>
+            ) : (
+              <span className="val muted">not stated</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+interface QuestionProps {
+  question: OpenQuestion;
+  state: AnswerState | undefined;
+  onChange: (next: Partial<AnswerState>) => void;
+}
+
+/**
+ * One decision DevLedger will not take on its own.
+ *
+ * "I don't know" is a first-class answer: it stores the gap rather than a
+ * guess, and the item shows up under Needs attention afterwards.
+ */
+function QuestionBlock({ question, state, onChange }: QuestionProps) {
+  const selection = state?.selection ?? "unknown";
+  return (
+    <div className="question">
+      <div className="q-prompt">
+        {question.prompt}
+        {question.required && <span className="req">required</span>}
+      </div>
+      <div className="q-options">
+        {question.candidates.map((candidate, i) => (
+          <button
+            key={`${candidate.label}-${i}`}
+            type="button"
+            aria-pressed={selection === i}
+            onClick={() => onChange({ selection: i })}
+            title={candidate.reason}
+          >
+            {candidate.label}
+            {candidate.existing && <span className="existing-dot" aria-hidden="true" />}
+          </button>
+        ))}
+        {question.allow_free_text && (
+          <button
+            type="button"
+            aria-pressed={selection === "free"}
+            onClick={() => onChange({ selection: "free" })}
+          >
+            Something else…
+          </button>
+        )}
+        {!question.required && (
+          <button
+            type="button"
+            aria-pressed={selection === "unknown"}
+            onClick={() => onChange({ selection: "unknown" })}
+          >
+            I don&apos;t know
+          </button>
+        )}
+      </div>
+      {selection === "free" && (
+        <input
+          className="q-free"
+          autoFocus
+          placeholder="Type a name"
+          value={state?.freeText ?? ""}
+          onChange={(e) => onChange({ freeText: e.target.value })}
+          aria-label={question.prompt}
+        />
+      )}
+      {selection === "unknown" && (
+        <p className="q-note">
+          Stored as unknown. It will appear under Needs attention so you can fill it in later.
+        </p>
+      )}
     </div>
   );
 }

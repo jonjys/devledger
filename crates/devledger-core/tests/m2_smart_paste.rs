@@ -119,7 +119,8 @@ fn analysis_is_deterministic() {
         first.provenance.redacted_excerpt,
         second.provenance.redacted_excerpt
     );
-    assert_eq!(first.inferred_project_ref, second.inferred_project_ref);
+    assert_eq!(first.chain, second.chain);
+    assert_eq!(first.questions, second.questions);
     assert_ne!(first.analysis_id, second.analysis_id);
 }
 
@@ -152,9 +153,13 @@ fn project_ref_is_recovered_from_url_jwt_and_connection_string() {
     )
     .expect("analyze");
     assert_eq!(
-        analysis.inferred_project_ref.as_deref(),
+        analysis
+            .chain
+            .service_project
+            .as_ref()
+            .map(|n| n.label.as_str()),
         Some("abcdefghijklmnopqrst"),
-        "all four lines agree on one project"
+        "all four lines agree on one Supabase project"
     );
 }
 
@@ -169,15 +174,25 @@ fn corroborated_project_refs_are_strong_evidence() {
     )
     .expect("analyze");
 
-    assert!(!analysis.proposed_relations.is_empty());
-    let strong = analysis
+    // Four lines name the same Supabase project, so the chain node that stands
+    // for that resource is corroborated rather than merely stated once.
+    let resource = analysis
+        .chain
+        .service_project
+        .as_ref()
+        .expect("a resource was inferred");
+    assert_eq!(resource.evidence.level, EvidenceLevel::Strong);
+    assert_eq!(resource.evidence.rule, "service_project.ref");
+
+    // Each credential that names the ref itself is explicit about it.
+    let self_declared = analysis
         .proposed_relations
         .iter()
-        .filter(|r| r.evidence.level == EvidenceLevel::Strong)
+        .filter(|r| r.evidence.rule == "secret.self_declared_ref")
         .count();
     assert!(
-        strong >= 2,
-        "several values independently name the same project ref"
+        self_declared >= 2,
+        "the anon key, the service_role key and the database URL all name the ref"
     );
     assert!(analysis
         .proposed_relations
@@ -255,9 +270,9 @@ URL_B=https://zyxwvutsrqponmlkjihg.supabase.co";
         .expect("mismatch warning");
     assert_eq!(warning.severity, Severity::Warning);
     assert_eq!(warning.entity_indexes.len(), 2);
-    assert_eq!(
-        analysis.inferred_project_ref, None,
-        "an ambiguous paste must not silently pick one project"
+    assert!(
+        analysis.chain.service_project.is_none(),
+        "an ambiguous paste must not silently pick one resource"
     );
 }
 
