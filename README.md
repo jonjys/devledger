@@ -17,7 +17,7 @@ only ever reads.
 | **M2** | Deterministic Smart Paste: detectors, JWT claim inspection, subscription parsing, account/project inference, evidence levels | Done — 18 tests |
 | **M3** | Current stable Rust, Tauri v2 shell, SQLCipher persistence, unlock/onboarding, desktop shell, review sheet, Project Vault | Done — 22 Rust tests + 26 frontend tests |
 
-169 tests in total: 102 Rust, 67 TypeScript.
+194 tests in total: 124 Rust, 70 TypeScript, plus a screenshot-based UI smoke test.
 
 ## Running it
 
@@ -100,4 +100,8 @@ cargo test --workspace
 cd apps/desktop
 npm run typecheck
 npm test
+
+# Boot the built app on a virtual display and screenshot each screen.
+# Linux only; needs xvfb, xdotool and imagemagick.
+(cd apps/desktop && npx tauri build --no-bundle) && ./scripts/smoke-ui.sh
 ```

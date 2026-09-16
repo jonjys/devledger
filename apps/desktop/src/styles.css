@@ -446,3 +446,8 @@ button.tiny { padding: 3px 8px; font-size: 11.5px; }
   font-family: var(--mono); font-size: 11.5px; color: var(--text-faint);
 }
 .import-row .e { display: block; color: var(--text-faint); font-size: 12px; margin-top: 4px; }
+
+.net-note {
+  color: var(--text-faint); font-size: 12px;
+  border-bottom: 1px dotted var(--border-strong); cursor: help;
+}

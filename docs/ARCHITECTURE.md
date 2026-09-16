@@ -208,6 +208,32 @@ exist precisely so the common flows need no plaintext in JavaScript. The
 frontend also cannot be trusted with policy, so `commit_review` re-reads the
 staged analysis rather than the copy it sent back.
 
+## How the connector is tested
+
+Outbound access to `api.supabase.com` is blocked by this development sandbox's
+egress policy, so the suite cannot call the live API. It gets as close as it can
+without one:
+
+- **Real response shapes.** The fixtures were captured from a live Supabase
+  account through its Management API and then renamed. That is how the `id` vs
+  `ref` bug was found: the canonical project reference is `ref`, and an
+  implementation reading `id` happens to work until it does not.
+- **The real HTTP path.** `tests/supabase_live_path.rs` runs the actual
+  `discover` against a local HTTP server, asserting the bearer header, the
+  `GET`-only rule, 401/403/429/500 handling, redirect refusal and malformed
+  bodies.
+- **The whole pipeline.** `tests/end_to_end.rs` goes local server → connector →
+  vault → reconcile → import → graph, including a lock/unlock cycle to prove the
+  sealed credential survives.
+- **The shipped binary.** `scripts/smoke-ui.sh` boots the built app on a virtual
+  display, drives onboarding, and screenshots each screen. It has already caught
+  a binary that compiled but showed "Could not connect to localhost", because a
+  plain `cargo build --release` embeds the dev-server URL — only the Tauri CLI
+  sets the release configuration.
+
+What none of this covers: Supabase changing its API, rate-limit behaviour under
+real load, and TLS against the real endpoint.
+
 ## Known gaps
 
 - There is no idle-timeout auto-lock yet; locking is manual.
@@ -223,6 +249,11 @@ staged analysis rather than the copy it sent back.
   instead, and DevLedger does not guess.
 - A connector credential is long-lived and not rotated automatically. Revoking
   is done at the provider.
+- The connector has never run against the live Supabase API from this
+  environment; see "How the connector is tested" above for what stands in.
+- Discovery fetches every project in one call. Supabase does not paginate these
+  endpoints today; if it starts, the enveloped-response handling is in place but
+  the cursor loop is not.
 - The label heuristic (first unmatched name is the project, second is the
   organization) is positional. It is always presented as a question rather than
   applied silently, but a paste that lists them the other way round needs the

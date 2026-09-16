@@ -133,6 +133,7 @@ pub fn discovery(
             .iter()
             .map(|(id, name)| DiscoveredOrganization {
                 provider_org_id: (*id).to_string(),
+                slug: Some((*id).to_string()),
                 name: (*name).to_string(),
             })
             .collect(),
@@ -144,6 +145,7 @@ pub fn discovery(
                 name: (*name).to_string(),
                 region: Some("eu-west-1".to_string()),
                 status: Some("ACTIVE_HEALTHY".to_string()),
+                database_host: Some(format!("db.{}.supabase.co", r)),
             })
             .collect(),
         account_email: None,

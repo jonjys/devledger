@@ -25,6 +25,9 @@ function item(over: Partial<ReconcileItem> & Pick<ReconcileItem, "provider_id" |
     parent_provider_org_id: null,
     detail: "",
     existing: null,
+    region: null,
+    status_at_provider: null,
+    active_at_provider: true,
     selected_by_default:
       over.status === "unmatched" || over.status === "needs_attention",
     ...over,
@@ -91,6 +94,7 @@ export function reportFixture(overrides: Partial<ReconcileReport> = {}): Reconci
     possible: 1,
     conflicts: 1,
     needs_attention: 1,
+    paused: 0,
     ...overrides,
   };
 }

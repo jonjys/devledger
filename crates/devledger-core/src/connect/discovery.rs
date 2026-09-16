@@ -11,8 +11,13 @@ use crate::model::Provider;
 /// One organization or team at the provider.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveredOrganization {
-    /// Provider-side id or slug. Stable across renames.
+    /// Provider-side id. Stable across renames.
     pub provider_org_id: String,
+    /// Provider-side slug, when the provider has a separate one.
+    ///
+    /// Supabase returns `slug` alongside `id`; they are currently equal, but
+    /// treating them as one field would break if that ever stops being true.
+    pub slug: Option<String>,
     /// Display name at the provider.
     pub name: String,
 }
@@ -28,8 +33,28 @@ pub struct DiscoveredProject {
     pub name: String,
     /// Region, when the provider reports one.
     pub region: Option<String>,
-    /// Lifecycle status at the provider, e.g. `ACTIVE_HEALTHY`.
+    /// Lifecycle status at the provider, e.g. `ACTIVE_HEALTHY` or `INACTIVE`.
     pub status: Option<String>,
+    /// Database hostname, when the provider reports one.
+    ///
+    /// Worth capturing because it is the same string a `DATABASE_URL` carries,
+    /// so a resource Smart Paste created from a connection string can be
+    /// recognised by the connector even before it has a provider ref.
+    pub database_host: Option<String>,
+}
+
+impl DiscoveredProject {
+    /// Whether the provider reports this project as running.
+    ///
+    /// Anything other than an explicit healthy status is treated as not
+    /// running, so a paused project is flagged rather than quietly imported as
+    /// if it were live.
+    pub fn is_active(&self) -> bool {
+        match self.status.as_deref() {
+            None => true,
+            Some(status) => status.starts_with("ACTIVE"),
+        }
+    }
 }
 
 /// The full snapshot from one connected account.

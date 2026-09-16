@@ -246,6 +246,41 @@ describe("Import review", () => {
     expect(mocked.connectorImport.mock.calls[0]![1]).toContain("eeeeeeeeeeeeeeeeeeee");
   });
 
+  it("marks a project the provider reports as paused", async () => {
+    const user = userEvent.setup();
+    const base = reportFixture();
+    const paused = base.items.map((i) =>
+      i.name === "Legacy"
+        ? { ...i, active_at_provider: false, status_at_provider: "INACTIVE" }
+        : i,
+    );
+    mocked.connectorReport.mockResolvedValue({ ...base, items: paused, paused: 1 });
+    renderView([connection("a@example.com")]);
+    await user.click(await screen.findByRole("button", { name: "Review import" }));
+    await screen.findByRole("dialog", { name: "Review import" });
+
+    const row = screen.getByText("Legacy").closest(".import-row") as HTMLElement;
+    expect(within(row).getByText("paused")).toBeInTheDocument();
+
+    // Still importable: losing track of a paused project is the actual problem.
+    expect(within(row).getByRole("checkbox")).toBeChecked();
+  });
+
+  it("shows the region the provider reported", async () => {
+    const user = userEvent.setup();
+    const base = reportFixture();
+    const withRegion = base.items.map((i) =>
+      i.name === "Storefront" ? { ...i, region: "eu-west-1" } : i,
+    );
+    mocked.connectorReport.mockResolvedValue({ ...base, items: withRegion });
+    renderView([connection("a@example.com")]);
+    await user.click(await screen.findByRole("button", { name: "Review import" }));
+    await screen.findByRole("dialog", { name: "Review import" });
+
+    const row = screen.getByText("Storefront").closest(".import-row") as HTMLElement;
+    expect(within(row).getByText("eu-west-1")).toBeInTheDocument();
+  });
+
   it("cancels without importing", async () => {
     const { user } = await openReview();
     await user.click(screen.getByRole("button", { name: "Cancel" }));

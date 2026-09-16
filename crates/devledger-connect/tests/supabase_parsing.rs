@@ -117,9 +117,18 @@ fn a_discovery_is_stable_regardless_of_the_order_the_api_replied_in() {
       { "id": "org_b", "name": "Acme Labs" },
       { "id": "org_a", "name": "Acme" }
     ]"#;
+    // The same two projects, same fields, reversed order.
     let reversed_projects = r#"[
       { "id": "zyxwvutsrqponmlkjihg", "organization_id": "org_b", "name": "Internal", "region": "us-east-1", "status": "INACTIVE" },
-      { "id": "abcdefghijklmnopqrst", "organization_id": "org_a", "name": "Storefront", "region": "eu-west-1", "status": "ACTIVE_HEALTHY" }
+      {
+        "id": "abcdefghijklmnopqrst",
+        "organization_id": "org_a",
+        "name": "Storefront",
+        "region": "eu-west-1",
+        "created_at": "2026-01-01T00:00:00Z",
+        "status": "ACTIVE_HEALTHY",
+        "database": { "host": "db.abcdefghijklmnopqrst.supabase.co", "version": "15" }
+      }
     ]"#;
     let backward = build_discovery(reversed_orgs, reversed_projects).expect("build");
 

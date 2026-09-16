@@ -95,6 +95,16 @@ pub struct ReconcileItem {
     pub existing: Option<EntityRef>,
     /// Whether the row starts ticked.
     pub selected_by_default: bool,
+    /// Region the provider reports, for project rows.
+    pub region: Option<String>,
+    /// Lifecycle status the provider reports, for project rows.
+    pub status_at_provider: Option<String>,
+    /// Whether the provider reports this as running.
+    ///
+    /// A paused project is worth importing -- losing track of it is exactly the
+    /// problem DevLedger solves -- but it should be visibly paused rather than
+    /// sitting in the map looking live.
+    pub active_at_provider: bool,
 }
 
 /// The whole review screen.
@@ -114,6 +124,8 @@ pub struct ReconcileReport {
     pub conflicts: usize,
     /// Rows that would fill in a gap.
     pub needs_attention: usize,
+    /// Rows the provider reports as not running.
+    pub paused: usize,
 }
 
 impl ReconcileReport {
@@ -183,9 +195,13 @@ pub fn reconcile(
         possible: 0,
         conflicts: 0,
         needs_attention: 0,
+        paused: 0,
         items,
     };
     for item in &report.items {
+        if !item.active_at_provider {
+            report.paused += 1;
+        }
         match item.status {
             MatchStatus::Matched => report.matched += 1,
             MatchStatus::Unmatched => report.unmatched += 1,
@@ -211,6 +227,9 @@ fn reconcile_organization(
         status,
         detail,
         existing,
+        region: None,
+        status_at_provider: None,
+        active_at_provider: true,
     };
 
     // Same provider id under this account: already ours.
@@ -269,15 +288,31 @@ fn reconcile_project(
     project: &super::DiscoveredProject,
     graph: &dyn GraphView,
 ) -> crate::Result<ReconcileItem> {
-    let build = |status: MatchStatus, detail: String, existing: Option<EntityRef>| ReconcileItem {
-        scope: ReconcileScope::Project,
-        provider_id: project.provider_ref.clone(),
-        name: project.name.clone(),
-        parent_provider_org_id: Some(project.provider_org_id.clone()),
-        selected_by_default: status.selected_by_default(),
-        status,
-        detail,
-        existing,
+    let active = project.is_active();
+    let build = |status: MatchStatus, detail: String, existing: Option<EntityRef>| {
+        // A paused project gets the fact appended rather than a separate
+        // status, so it can still be imported while being obviously paused.
+        let detail = if active {
+            detail
+        } else {
+            format!(
+                "{detail} The provider reports it as {}.",
+                project.status.as_deref().unwrap_or("not running")
+            )
+        };
+        ReconcileItem {
+            scope: ReconcileScope::Project,
+            provider_id: project.provider_ref.clone(),
+            name: project.name.clone(),
+            parent_provider_org_id: Some(project.provider_org_id.clone()),
+            selected_by_default: status.selected_by_default(),
+            status,
+            detail,
+            existing,
+            region: project.region.clone(),
+            status_at_provider: project.status.clone(),
+            active_at_provider: active,
+        }
     };
 
     if let Some(existing) = graph.service_project_by_ref(provider, &project.provider_ref)? {

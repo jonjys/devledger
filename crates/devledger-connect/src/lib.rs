@@ -79,17 +79,40 @@ impl From<ConnectError> for devledger_core::CoreError {
 /// Called before every request. The allowlist is a property of the connector,
 /// not of the call site, so a new endpoint cannot quietly widen it.
 pub fn check_host(url: &str, allowed: &[&str]) -> Result<(), ConnectError> {
+    check_host_inner(url, allowed, true)
+}
+
+/// Whether a host is the loopback interface.
+///
+/// Used for the one case where plaintext is acceptable: a test harness talking
+/// to a server on this machine, where there is no network to protect.
+pub fn is_loopback(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+/// The allowlist check, with the https requirement made explicit.
+pub(crate) fn check_host_inner(
+    url: &str,
+    allowed: &[&str],
+    require_https: bool,
+) -> Result<(), ConnectError> {
     let parsed =
         url::Url::parse(url).map_err(|e| ConnectError::HostNotAllowed(format!("{url} ({e})")))?;
-    if parsed.scheme() != "https" {
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ConnectError::HostNotAllowed(url.to_string()))?;
+
+    // Plaintext is refused everywhere except loopback, and even there only when
+    // the caller has already established it is talking to a local test server.
+    if parsed.scheme() != "https" && (require_https || !is_loopback(host)) {
         return Err(ConnectError::HostNotAllowed(format!(
             "{url} (only https is allowed)"
         )));
     }
-    match parsed.host_str() {
-        Some(host) if allowed.contains(&host) => Ok(()),
-        Some(host) => Err(ConnectError::HostNotAllowed(host.to_string())),
-        None => Err(ConnectError::HostNotAllowed(url.to_string())),
+    if allowed.contains(&host) {
+        Ok(())
+    } else {
+        Err(ConnectError::HostNotAllowed(host.to_string()))
     }
 }
 

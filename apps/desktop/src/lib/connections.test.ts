@@ -82,6 +82,10 @@ describe("summaries", () => {
     );
   });
 
+  it("mentions paused projects so they are not assumed live", () => {
+    expect(summarise({ ...reportFixture(), paused: 2 })).toContain("2 paused");
+  });
+
   it("says so when there is nothing", () => {
     expect(
       summarise({
@@ -92,6 +96,7 @@ describe("summaries", () => {
         possible: 0,
         conflicts: 0,
         needs_attention: 0,
+        paused: 0,
       }),
     ).toBe("nothing found");
   });

@@ -482,6 +482,12 @@ function ImportRow({ item, checked, indented, onToggle }: RowProps) {
           <span className={`tag ${statusTone(item.status)}`}>
             {MATCH_STATUS_LABEL[item.status]}
           </span>
+          {!item.active_at_provider && (
+            <span className="tag heuristic" title={item.status_at_provider ?? undefined}>
+              paused
+            </span>
+          )}
+          {item.region && <span className="map-meta">{item.region}</span>}
           <code className="ref">{item.provider_id}</code>
         </span>
         <span className="e">{item.detail}</span>

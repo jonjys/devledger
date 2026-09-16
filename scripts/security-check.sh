@@ -44,10 +44,19 @@ if grep -qE '\.post\(|\.put\(|\.patch\(|\.delete\(' crates/devledger-connect/src
 else
   ok "only GET requests are issued"
 fi
-if grep -q 'check_host(' crates/devledger-connect/src/supabase.rs; then
+# Matches check_host and check_host_inner: what matters is that the request
+# path runs an allowlist check, not which spelling it uses.
+if grep -qE 'check_host(_inner)?\(' crates/devledger-connect/src/supabase.rs; then
   ok "requests are checked against the host allowlist"
 else
   bad "the Supabase connector does not check its host allowlist"
+fi
+# The relaxed-allowlist constructor must refuse anything that is not loopback,
+# or it becomes a way to point a credential at an arbitrary host.
+if grep -q 'is_loopback(host)' crates/devledger-connect/src/supabase.rs; then
+  ok "the test-only client refuses non-loopback bases"
+else
+  bad "the test-only client does not verify its base is loopback"
 fi
 if grep -q 'redirect::Policy::none()' crates/devledger-connect/src/lib.rs; then
   ok "redirects are refused, so a bearer token cannot follow one off-host"
@@ -75,6 +84,21 @@ if grep -qE 'fn connection_token' apps/desktop/src-tauri/src/lib.rs; then
   bad "the stored credential is exposed over IPC"
 else
   ok "no IPC command returns a stored credential"
+fi
+
+check "The app does not claim to be offline now that connectors exist"
+# The top-bar label and the capability description are user-facing security
+# claims. They said "no network" before Connect & Discover shipped; a stale
+# claim is worse than none, so this fails if one comes back.
+if grep -rn "no network" apps/desktop/src --include=*.tsx --include=*.ts | grep -q .; then
+  bad "the UI still claims 'no network'"
+else
+  ok "the UI's network claim matches what the app does"
+fi
+if grep -q "fully offline" apps/desktop/src-tauri/capabilities/default.json; then
+  bad "the capability file still claims the app is fully offline"
+else
+  ok "the capability description is accurate"
 fi
 
 check "Secret containers cannot be serialized"

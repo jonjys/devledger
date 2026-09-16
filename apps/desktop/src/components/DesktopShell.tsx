@@ -132,8 +132,16 @@ export default function DesktopShell({ onLock }: Props) {
           ))}
         </nav>
         <span className="spacer" />
-        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
-          Local only · no network
+        {/*
+          This label has to stay true. Before connectors existed it read "no
+          network"; that stopped being accurate the moment Connect & Discover
+          shipped, so it now states the actual rule.
+        */}
+        <span
+          className="net-note"
+          title="DevLedger stores everything locally and sends no telemetry. It contacts a provider only while you are connecting or refreshing a connection, and only ever reads."
+        >
+          Local-first · network only for connectors
         </span>
         <button type="button" onClick={onLock}>
           Lock

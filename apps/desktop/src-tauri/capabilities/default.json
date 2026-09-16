@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "DevLedger runs fully offline. The window may manage itself and write to the clipboard; nothing here grants filesystem, shell, or network access.",
+  "description": "The window may manage itself and write to the clipboard. Nothing here grants filesystem, shell, process or HTTP access: connector requests are made by Rust, not by the webview, so the frontend cannot reach the network at all.",
   "windows": ["main"],
   "permissions": [
     "core:default",

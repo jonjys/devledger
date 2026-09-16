@@ -22,6 +22,7 @@ export function summarise(report: ReconcileReport): string {
   if (report.possible > 0) parts.push(`${report.possible} possible`);
   if (report.matched > 0) parts.push(`${report.matched} already known`);
   if (report.conflicts > 0) parts.push(`${report.conflicts} in conflict`);
+  if (report.paused > 0) parts.push(`${report.paused} paused`);
   return parts.length > 0 ? parts.join(", ") : "nothing found";
 }
 

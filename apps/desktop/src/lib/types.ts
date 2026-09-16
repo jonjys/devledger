@@ -519,6 +519,9 @@ export interface ReconcileItem {
   detail: string;
   existing: EntityRef | null;
   selected_by_default: boolean;
+  region: string | null;
+  status_at_provider: string | null;
+  active_at_provider: boolean;
 }
 
 export interface ReconcileReport {
@@ -529,6 +532,7 @@ export interface ReconcileReport {
   possible: number;
   conflicts: number;
   needs_attention: number;
+  paused: number;
 }
 
 export interface ConnectOutcome {
