@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "DevLedger runs fully offline. The window may manage itself and write to the clipboard; nothing here grants filesystem, shell, or network access.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "clipboard-manager:allow-write-text"
+  ]
+}

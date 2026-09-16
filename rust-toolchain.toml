@@ -1,0 +1,5 @@
+# M3: the baseline moved off the pinned 1.75 compatibility floor and now tracks
+# current stable. Nothing in the workspace relies on a legacy compiler anymore.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

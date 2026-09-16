@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/devledger-core", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+authors = ["DevLedger"]
+repository = "https://github.com/jonjys/devledger"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

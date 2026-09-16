@@ -1,0 +1,129 @@
+import { describe, expect, it } from "vitest";
+
+import { analysisFixture } from "../test/fixtures";
+import {
+  buildSubmission,
+  countToSave,
+  defaultChoice,
+  describeChoice,
+  initialChoices,
+  initialRelations,
+  isActionable,
+  matchesFor,
+  type EntityChoice,
+} from "./review";
+
+describe("review sheet state", () => {
+  it("only offers decisions for entities that carry a value", () => {
+    const analysis = analysisFixture();
+    const actionable = analysis.entities.filter(isActionable);
+    expect(actionable.map((e) => e.index)).toEqual([1, 2]);
+    // The URL is context, not something to store as a secret.
+    expect(isActionable(analysis.entities[0]!)).toBe(false);
+  });
+
+  it("starts each row on the backend's recommendation", () => {
+    const analysis = analysisFixture();
+    const choices = initialChoices(analysis);
+    expect(Object.keys(choices)).toEqual(["1", "2"]);
+    expect(choices[1]!.choice).toBe("save");
+    expect(choices[2]!.choice).toBe("save");
+  });
+
+  it("starts a row on skip when the value is already stored", () => {
+    const analysis = analysisFixture({
+      recommendations: [
+        { sort: "create" },
+        { sort: "skip", reason: "Identical value already stored as ANON_KEY" },
+        { sort: "create" },
+      ],
+    });
+    expect(initialChoices(analysis)[1]!.choice).toBe("skip");
+    expect(defaultChoice(undefined)).toBe("skip");
+  });
+
+  it("ticks only the relations the backend pre-selected", () => {
+    const relations = initialRelations(analysisFixture());
+    // Weak evidence is never auto-applied.
+    expect([...relations]).toEqual([0]);
+  });
+
+  it("surfaces the matches belonging to one entity", () => {
+    const analysis = analysisFixture();
+    expect(matchesFor(analysis, 2)).toHaveLength(1);
+    expect(matchesFor(analysis, 1)).toHaveLength(0);
+  });
+
+  it("counts what Save will actually write", () => {
+    const choices: Record<number, EntityChoice> = {
+      1: { choice: "save", targetSecretId: null, nameOverride: null },
+      2: { choice: "skip", targetSecretId: null, nameOverride: null },
+    };
+    expect(countToSave(choices)).toBe(1);
+  });
+});
+
+describe("buildSubmission", () => {
+  it("maps each choice onto its backend decision", () => {
+    const analysis = analysisFixture();
+    const choices: Record<number, EntityChoice> = {
+      1: { choice: "save", targetSecretId: null, nameOverride: null },
+      2: { choice: "change", targetSecretId: "22222222-2222-4222-8222-222222222222", nameOverride: null },
+    };
+    const submission = buildSubmission(analysis, choices, new Set([0]), false, null);
+
+    expect(submission.analysis_id).toBe(analysis.analysis_id);
+    expect(submission.decisions).toEqual([
+      { entity_index: 1, decision: { sort: "accept" }, name_override: null },
+      {
+        entity_index: 2,
+        decision: { sort: "change", secret_id: "22222222-2222-4222-8222-222222222222" },
+        name_override: null,
+      },
+    ]);
+    expect(submission.accepted_relations).toEqual([0]);
+    expect(submission.acknowledge_critical).toBe(false);
+  });
+
+  it("falls back to accept when Change was picked without a target", () => {
+    const analysis = analysisFixture();
+    const choices: Record<number, EntityChoice> = {
+      2: { choice: "change", targetSecretId: null, nameOverride: null },
+    };
+    const submission = buildSubmission(analysis, choices, new Set(), false, null);
+    expect(submission.decisions[0]!.decision).toEqual({ sort: "accept" });
+  });
+
+  it("carries a name override and a create-new override", () => {
+    const analysis = analysisFixture();
+    const choices: Record<number, EntityChoice> = {
+      2: { choice: "create_new", targetSecretId: null, nameOverride: "SERVICE_KEY" },
+    };
+    const submission = buildSubmission(analysis, choices, new Set(), true, "proj-1");
+    expect(submission.decisions[0]).toEqual({
+      entity_index: 2,
+      decision: { sort: "create_new" },
+      name_override: "SERVICE_KEY",
+    });
+    expect(submission.acknowledge_critical).toBe(true);
+    expect(submission.target_project_id).toBe("proj-1");
+  });
+
+  it("emits accepted relations in a stable order", () => {
+    const analysis = analysisFixture();
+    const submission = buildSubmission(analysis, {}, new Set([1, 0]), false, null);
+    expect(submission.accepted_relations).toEqual([0, 1]);
+  });
+});
+
+describe("describeChoice", () => {
+  it("explains what each choice will do", () => {
+    expect(describeChoice("save", { sort: "create" })).toMatch(/new secret/i);
+    expect(describeChoice("save", { sort: "update", secret_id: "x" })).toMatch(/replace/i);
+    expect(describeChoice("skip", { sort: "skip", reason: "Already stored as K" })).toBe(
+      "Already stored as K",
+    );
+    expect(describeChoice("create_new", { sort: "update", secret_id: "x" })).toMatch(/new secret/i);
+    expect(describeChoice("change", { sort: "create" })).toMatch(/overwrite/i);
+  });
+});
