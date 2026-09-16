@@ -17,6 +17,9 @@
 
 use std::sync::Mutex;
 
+use devledger_core::connect::reconcile::ReconcileReport;
+use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
+use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
 use devledger_core::model::{
     Account, EntityKind, EntityRef, Identity, Organization, Project, Relation, ServiceProject,
 };
@@ -359,6 +362,101 @@ fn copy_env(
     Ok(count)
 }
 
+// ------------------------------------------------------------------ connectors
+//
+// These are the only commands that touch the network, and each one runs because
+// the user pressed a button. The fetch happens in `devledger-connect`, outside
+// the vault lock, so the mutex is never held across an await.
+
+/// The connectors this build ships.
+#[tauri::command]
+fn list_connectors(state: State<'_, AppState>) -> IpcResult<Vec<ConnectorDescriptor>> {
+    state.with(|vault| Ok(vault.connectors()))
+}
+
+/// Every connected provider account.
+#[tauri::command]
+fn list_connections(state: State<'_, AppState>) -> IpcResult<Vec<ConnectionSummary>> {
+    state.with(|vault| vault.list_connections())
+}
+
+/// Connect a provider account.
+///
+/// The token is verified against the provider *before* it is stored, so a
+/// mistyped or revoked credential never reaches the database. Nothing is
+/// imported: the returned report is what the user reviews.
+#[tauri::command]
+async fn connector_connect(
+    state: State<'_, AppState>,
+    connector: String,
+    token: String,
+    label: String,
+) -> IpcResult<ConnectOutcome> {
+    let connector_id = ConnectorId(connector);
+
+    // Fail fast on an obviously wrong token, before opening a socket.
+    {
+        let descriptor = state.with(|_| devledger_core::connect::connector(&connector_id))?;
+        state.with(|_| devledger_core::connect::check_token_shape(&descriptor.auth, &token))?;
+    }
+
+    let discovery = devledger_connect::supabase::verify(&token)
+        .await
+        .map_err(|e| IpcError {
+            code: "connector",
+            message: e.to_string(),
+        })?;
+
+    state.with(|vault| {
+        vault.connect_provider(
+            &connector_id,
+            &SecretString::new(token.clone()),
+            &label,
+            &discovery,
+        )
+    })
+}
+
+/// Re-read a connected account using its stored credential.
+#[tauri::command]
+async fn connector_refresh(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+) -> IpcResult<ReconcileReport> {
+    let token = state.with(|vault| vault.connection_token(connection_id))?;
+
+    let discovery = devledger_connect::supabase::discover(token.expose())
+        .await
+        .map_err(|e| IpcError {
+            code: "connector",
+            message: e.to_string(),
+        })?;
+
+    state.with(|vault| vault.record_discovery(connection_id, &discovery))
+}
+
+/// The review screen for the most recent discovery, without re-fetching.
+#[tauri::command]
+fn connector_report(state: State<'_, AppState>, connection_id: Uuid) -> IpcResult<ReconcileReport> {
+    state.with(|vault| vault.connection_report(connection_id))
+}
+
+/// Apply the rows the user ticked.
+#[tauri::command]
+fn connector_import(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    accepted: Vec<String>,
+) -> IpcResult<ImportOutcome> {
+    state.with(|vault| vault.import_discovery(connection_id, &accepted))
+}
+
+/// Forget a connection. Imported data is kept.
+#[tauri::command]
+fn connector_disconnect(state: State<'_, AppState>, connection_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.disconnect(connection_id))
+}
+
 /// Build and run the desktop application.
 ///
 /// # Panics
@@ -410,6 +508,13 @@ pub fn run() {
             reveal_secret,
             copy_secret,
             copy_env,
+            list_connectors,
+            list_connections,
+            connector_connect,
+            connector_refresh,
+            connector_report,
+            connector_import,
+            connector_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevLedger");

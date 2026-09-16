@@ -14,10 +14,15 @@
 //! - [`model`] -- Identity / Account / Organization / Project and relations
 //! - [`redact`] -- provenance capture with secrets stripped
 //! - [`paste`] -- the deterministic Smart Paste pipeline
+//! - [`connect`] -- Connect & Discover: connector descriptors, discovery
+//!   snapshots and reconciliation. Defines no I/O; the `devledger-connect`
+//!   crate does the fetching and hands back a snapshot.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod connect;
+pub mod connect_vault;
 pub mod crypto;
 pub mod error;
 pub mod model;

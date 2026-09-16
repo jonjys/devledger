@@ -12,27 +12,70 @@ check() { printf '\n== %s\n' "$1"; }
 bad() { printf '  FAIL: %s\n' "$1"; fail=1; }
 ok() { printf '  ok: %s\n' "$1"; }
 
-check "No HTTP or websocket client is linked into the desktop binary"
-# `cargo tree -i` exits 0 even when it finds nothing, and `--target all` pulls in
-# dependencies that only exist for mobile targets (tauri declares reqwest for
-# Android/iOS only). What matters is the normal dependency graph for the target
-# actually being built, so enumerate that and search it.
-TARGET="${SECURITY_CHECK_TARGET:-}"
-if [ -n "$TARGET" ]; then
-  graph=$(cargo tree -p devledger-desktop -e normal --target "$TARGET" --prefix none 2>/dev/null | sed 's/ .*//' | sort -u)
-else
-  graph=$(cargo tree -p devledger-desktop -e normal --prefix none 2>/dev/null | sed 's/ .*//' | sort -u)
-fi
-if [ -z "$graph" ]; then
-  bad "could not resolve the dependency graph"
+check "The crate holding key material has no HTTP client"
+# DevLedger is local-first but not permanently offline: a connector may reach a
+# provider during an explicit Connect, Refresh or Discover. That networking is
+# confined to devledger-connect. The crate that derives keys, seals secrets and
+# owns the vault must still have no way to open a socket, which is what this
+# checks.
+core_graph=$(cargo tree -p devledger-core -e normal --prefix none 2>/dev/null | sed 's/ .*//' | sort -u)
+if [ -z "$core_graph" ]; then
+  bad "could not resolve the devledger-core dependency graph"
 fi
 for crate in reqwest hyper ureq curl isahc surf tokio-tungstenite awc h2; do
-  if printf '%s\n' "$graph" | grep -qx "$crate"; then
-    bad "$crate is linked into the desktop build"
+  if printf '%s\n' "$core_graph" | grep -qx "$crate"; then
+    bad "$crate is linked into devledger-core"
   else
-    ok "$crate absent"
+    ok "$crate absent from devledger-core"
   fi
 done
+
+check "Networking is confined to the connector crate"
+connect_graph=$(cargo tree -p devledger-connect -e normal --prefix none 2>/dev/null | sed 's/ .*//' | sort -u)
+if printf '%s\n' "$connect_graph" | grep -qx reqwest; then
+  ok "devledger-connect is the crate that carries the HTTP client"
+else
+  bad "expected devledger-connect to carry the HTTP client"
+fi
+
+check "The connector is read-only and host-allowlisted"
+if grep -qE '\.post\(|\.put\(|\.patch\(|\.delete\(' crates/devledger-connect/src/*.rs; then
+  bad "the connector issues a non-GET request"
+else
+  ok "only GET requests are issued"
+fi
+if grep -q 'check_host(' crates/devledger-connect/src/supabase.rs; then
+  ok "requests are checked against the host allowlist"
+else
+  bad "the Supabase connector does not check its host allowlist"
+fi
+if grep -q 'redirect::Policy::none()' crates/devledger-connect/src/lib.rs; then
+  ok "redirects are refused, so a bearer token cannot follow one off-host"
+else
+  bad "redirects are not disabled"
+fi
+
+check "No telemetry or analytics endpoint is referenced"
+if grep -rniE '(telemetry|analytics|sentry|posthog|mixpanel|amplitude|segment\.io)' \
+     --include=*.rs --include=*.ts --include=*.tsx --include=*.json \
+     crates apps/desktop/src apps/desktop/src-tauri 2>/dev/null \
+     | grep -v 'no telemetry' | grep -q .; then
+  bad "something looks like telemetry"
+else
+  ok "no telemetry"
+fi
+
+check "Connector credentials are sealed, never returned to the frontend"
+if grep -q 'aead::seal' crates/devledger-core/src/connect_vault.rs; then
+  ok "credentials are sealed with the vault AEAD key"
+else
+  bad "connector credentials are not sealed"
+fi
+if grep -qE 'fn connection_token' apps/desktop/src-tauri/src/lib.rs; then
+  bad "the stored credential is exposed over IPC"
+else
+  ok "no IPC command returns a stored credential"
+fi
 
 check "Secret containers cannot be serialized"
 if grep -nE '^\s*#\[derive\(.*Serialize' crates/devledger-core/src/secret.rs >/dev/null 2>&1; then

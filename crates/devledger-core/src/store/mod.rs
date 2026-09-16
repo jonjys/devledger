@@ -8,6 +8,7 @@
 
 pub mod schema;
 
+mod connections;
 mod enums;
 mod repo;
 

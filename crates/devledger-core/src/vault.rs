@@ -226,6 +226,35 @@ impl Vault {
         self.inner.as_mut().ok_or(CoreError::VaultLocked)
     }
 
+    /// The open store. Errors when locked.
+    pub(crate) fn store(&self) -> Result<&Store> {
+        Ok(&self.unlocked()?.store)
+    }
+
+    /// The per-secret AEAD key. Errors when locked.
+    pub(crate) fn aead_key(&self) -> Result<&SecretBytes> {
+        Ok(&self.unlocked()?.aead_key)
+    }
+
+    /// The blind-index key. Errors when locked.
+    pub(crate) fn index_key(&self) -> Result<&SecretBytes> {
+        Ok(&self.unlocked()?.index_key)
+    }
+
+    /// Find or create the identity for an email address.
+    pub(crate) fn identity_id_for_email(&self, email: &str) -> Result<Uuid> {
+        let inner = self.unlocked()?;
+        let lowered = email.trim().to_ascii_lowercase();
+        let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, &lowered)?;
+        if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
+            return Ok(id);
+        }
+        Ok(inner
+            .store
+            .create_identity(&lowered, Some(&lowered), Some(&bi))?
+            .id)
+    }
+
     // ------------------------------------------------------------ smart paste
 
     /// Analyse pasted text and stage its secrets for review.

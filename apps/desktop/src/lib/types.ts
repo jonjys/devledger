@@ -452,3 +452,96 @@ export interface IpcError {
   code: string;
   message: string;
 }
+
+
+// --- Connect & Discover ----------------------------------------------------
+
+export type AuthKind =
+  | {
+      sort: "personal_access_token";
+      create_url: string;
+      expected_prefix: string;
+      guidance: string;
+    }
+  | { sort: "oauth2_pkce"; authorize_url: string; token_url: string; scopes: string[] };
+
+export interface ConnectorDescriptor {
+  id: string;
+  display_name: string;
+  summary: string;
+  auth: AuthKind;
+  provider: Provider;
+  read_only: boolean;
+  allowed_hosts: string[];
+}
+
+export interface Connection {
+  id: string;
+  connector_id: string;
+  identity_id: string;
+  account_id: string;
+  label: string;
+  account_fingerprint: string;
+  created_at: string;
+  last_checked_at: string | null;
+}
+
+export interface ConnectionSummary {
+  connection: Connection;
+  identity_email: string | null;
+  organization_count: number;
+  resource_count: number;
+}
+
+export type MatchStatus =
+  | "matched"
+  | "unmatched"
+  | "possible_match"
+  | "conflict"
+  | "needs_attention";
+
+export const MATCH_STATUS_LABEL: Record<MatchStatus, string> = {
+  matched: "Matched",
+  unmatched: "Unmatched",
+  possible_match: "Possible match",
+  conflict: "Conflict",
+  needs_attention: "Needs attention",
+};
+
+export type ReconcileScope = "organization" | "project";
+
+export interface ReconcileItem {
+  scope: ReconcileScope;
+  provider_id: string;
+  name: string;
+  parent_provider_org_id: string | null;
+  status: MatchStatus;
+  detail: string;
+  existing: EntityRef | null;
+  selected_by_default: boolean;
+}
+
+export interface ReconcileReport {
+  connection_id: string;
+  items: ReconcileItem[];
+  matched: number;
+  unmatched: number;
+  possible: number;
+  conflicts: number;
+  needs_attention: number;
+}
+
+export interface ConnectOutcome {
+  connection: Connection;
+  reconnected: boolean;
+  report: ReconcileReport;
+}
+
+export interface ImportOutcome {
+  organizations_created: number;
+  organizations_updated: number;
+  resources_created: number;
+  resources_updated: number;
+  skipped: number;
+  conflicts_refused: number;
+}

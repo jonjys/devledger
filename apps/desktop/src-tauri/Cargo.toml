@@ -15,6 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+devledger-connect = { path = "../../../crates/devledger-connect" }
 # Path-only: this crate is never published, and pinning a version here
 # would break on every workspace version bump.
 devledger-core = { path = "../../../crates/devledger-core" }

@@ -3,26 +3,33 @@
 ## Shape
 
 ```
-┌──────────────────────────────────────────────┐
-│ React + TypeScript (apps/desktop/src)        │
-│   Gate · Shell · Smart Paste · Review · Vault│
-└───────────────────┬──────────────────────────┘
-                    │ Tauri IPC — 16 commands, typed in lib/api.ts
-┌───────────────────▼──────────────────────────┐
-│ devledger-desktop (Tauri v2)                 │
-│   Mutex<Vault>, error mapping, clipboard     │
-└───────────────────┬──────────────────────────┘
-                    │
-┌───────────────────▼──────────────────────────┐
-│ devledger-core                               │
-│   vault · paste · store · crypto · secret    │
-└──────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ React + TypeScript (apps/desktop/src)                  │
+│  Gate · Projects · Map · Connections · Subscriptions   │
+└───────────────────┬────────────────────────────────────┘
+                    │ Tauri IPC, typed in lib/api.ts
+┌───────────────────▼────────────────────────────────────┐
+│ devledger-desktop (Tauri v2)                           │
+│   Mutex<Vault>, error mapping, clipboard               │
+└──────────┬──────────────────────────────┬──────────────┘
+           │                              │
+┌──────────▼─────────────────┐  ┌─────────▼──────────────┐
+│ devledger-core             │  │ devledger-connect      │
+│  vault · paste · connect   │◄─┤  Supabase API client   │
+│  store · crypto · secret   │  │  the only socket       │
+│  NO networking             │  │                        │
+└────────────────────────────┘  └────────────────────────┘
 ```
 
-`devledger-core` has no UI and no networking dependency. It is the only crate
-that touches key material, and the only one that can decrypt a stored secret.
-The desktop crate is deliberately thin: it owns a `Vault` behind a mutex, maps
-`CoreError` onto a coded IPC error, and does nothing else.
+`devledger-core` has no UI and **no HTTP client in its dependency graph**. It is
+the only crate that touches key material, and the only one that can decrypt a
+stored secret. `devledger-connect` is the only crate that opens a socket, and it
+holds no keys: a token is passed in, a snapshot comes back. The desktop crate is
+deliberately thin: it owns a `Vault` behind a mutex, maps `CoreError` onto a
+coded IPC error, and wires the two together.
+
+That split is the point. Adding networking to the product did not add networking
+to the crate that holds your secrets.
 
 ## Domain model
 
@@ -120,6 +127,52 @@ whether something is an anon key or a service_role key, so
 `SUPABASE_ANON_KEY=<a service_role JWT>` is still identified as service_role —
 and then flagged, because that is exactly the mistake worth catching.
 
+## Two ways in
+
+Smart Paste handles whatever is on your clipboard. Connect & Discover handles
+the case where you would rather DevLedger just read the account.
+
+```
+connect  ──▶ verify token against provider   (devledger-connect, one GET)
+         ──▶ seal token into the vault        (only after it demonstrably works)
+         ──▶ reconcile discovery vs. graph    (pure, writes nothing)
+         ──▶ review                           (user confirms)
+         ──▶ import                           (rows appear in the Map)
+```
+
+Reconciliation labels every discovered row:
+
+| Status | Meaning |
+| --- | --- |
+| Matched | Already in the graph, unchanged. Importing does nothing. |
+| Unmatched | New. Importing creates it. |
+| Possible match | A same-named row exists with no provider id. The user opts in. |
+| Conflict | The provider id is held by a *different* connected account. Refused. |
+| Needs attention | Ours, but incomplete — typically missing an organization. |
+
+A conflict is never pre-ticked and never importable, in the UI *and* in the
+backend. Moving a resource between two connected accounts is exactly the merge
+this model exists to prevent, so it is not something a checkbox can do.
+
+Connections are per **account**, not per provider. Several Supabase accounts
+each get their own connection, identity, provider account and credential. An
+account is recognised by a blind index over the organization ids its credential
+can see, so re-connecting the same account refreshes it while a different one
+always gets its own row.
+
+### Adding a connector
+
+1. Add a `ConnectorDescriptor` to `available_connectors()` in
+   `devledger-core/src/connect/mod.rs`.
+2. Implement fetching in `devledger-connect`, returning a `Discovery`.
+3. Wire the two commands in the desktop crate.
+
+Reconciliation, import, storage, multi-account handling and the whole
+Connections UI are provider-agnostic and need no changes. `AuthKind` already has
+an OAuth2-with-PKCE variant for a provider that supports public clients, and
+nothing outside the connector layer knows which kind a connection uses — which
+is also what an inbox connector would slot into later.
+
 ## Persistence
 
 SQLCipher via `rusqlite` with `bundled-sqlcipher-vendored-openssl`, so the
@@ -163,6 +216,13 @@ staged analysis rather than the copy it sent back.
 - Only Supabase resources are created automatically from a paste. Other
   providers are detected and their credentials classified, but a Vercel or
   Stripe resource has to be linked by hand from the Map.
+- Supabase is the only connector. GitHub, Vercel, Stripe and inbox discovery are
+  designed for but not built.
+- The Supabase Management API exposes no "current user" endpoint, so DevLedger
+  cannot learn a connected account's email. The user labels the connection
+  instead, and DevLedger does not guess.
+- A connector credential is long-lived and not rotated automatically. Revoking
+  is done at the provider.
 - The label heuristic (first unmatched name is the project, second is the
   organization) is positional. It is always presented as a question rather than
   applied silently, but a paste that lists them the other way round needs the

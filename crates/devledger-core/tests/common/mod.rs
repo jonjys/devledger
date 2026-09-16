@@ -118,3 +118,39 @@ pub fn accept_all(
         answers,
     }
 }
+
+/// Build a discovery snapshot the way a connector would return one.
+pub fn discovery(
+    orgs: &[(&str, &str)],
+    projects: &[(&str, &str, &str)],
+) -> devledger_core::connect::Discovery {
+    use devledger_core::connect::{DiscoveredOrganization, DiscoveredProject, Discovery};
+    use devledger_core::model::Provider;
+
+    Discovery {
+        provider: Provider::Supabase,
+        organizations: orgs
+            .iter()
+            .map(|(id, name)| DiscoveredOrganization {
+                provider_org_id: (*id).to_string(),
+                name: (*name).to_string(),
+            })
+            .collect(),
+        projects: projects
+            .iter()
+            .map(|(r, org, name)| DiscoveredProject {
+                provider_ref: (*r).to_string(),
+                provider_org_id: (*org).to_string(),
+                name: (*name).to_string(),
+                region: Some("eu-west-1".to_string()),
+                status: Some("ACTIVE_HEALTHY".to_string()),
+            })
+            .collect(),
+        account_email: None,
+    }
+}
+
+/// A plausible-looking Supabase personal access token. Not a real credential.
+pub const FAKE_TOKEN_A: &str = "sbp_0000000000000000000000000000000000000001";
+/// A second one, for the second account.
+pub const FAKE_TOKEN_B: &str = "sbp_0000000000000000000000000000000000000002";

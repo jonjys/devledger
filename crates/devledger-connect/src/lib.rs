@@ -1,0 +1,117 @@
+//! DevLedger connectors.
+//!
+//! This is the only crate in the workspace that opens a socket. Keeping it
+//! separate from `devledger-core` means the crate that holds key material has
+//! no HTTP client at all, which `scripts/security-check.sh` verifies.
+//!
+//! Everything here is read-only and explicit:
+//!
+//! - Only `GET` requests are issued. There is no code path that writes to a
+//!   provider.
+//! - Every request is checked against a per-connector host allowlist before a
+//!   connection is opened, so a malformed or tampered base URL cannot redirect
+//!   a credential somewhere else.
+//! - Redirects are refused, for the same reason.
+//! - A request only happens because the user pressed Connect, Refresh or
+//!   Discover. Nothing polls, and nothing is sent anywhere on startup.
+//!
+//! The network-facing surface is deliberately thin: a fetch, then pure parsing
+//! functions that the tests exercise directly without a mock server.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+pub mod supabase;
+
+use std::time::Duration;
+
+use thiserror::Error;
+
+/// How long a single provider request may take.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The User-Agent DevLedger identifies itself with.
+pub const USER_AGENT: &str = concat!("DevLedger/", env!("CARGO_PKG_VERSION"), " (+local-first)");
+
+/// What can go wrong talking to a provider.
+///
+/// Messages are written to be shown to a user, and never contain the
+/// credential.
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    /// The credential was rejected.
+    #[error("the provider rejected this token. It may have been revoked, or it may lack the permissions DevLedger needs.")]
+    Unauthorized,
+
+    /// The credential is valid but lacks permission for something.
+    #[error("this token does not have permission to read {0}. Create one with read access and try again.")]
+    Forbidden(String),
+
+    /// The provider asked us to slow down.
+    #[error("the provider is rate limiting this token. Wait a minute and try again.")]
+    RateLimited,
+
+    /// The provider returned something unexpected.
+    #[error("the provider returned an unexpected response: {0}")]
+    Unexpected(String),
+
+    /// The response did not parse.
+    #[error("could not read the provider's response: {0}")]
+    Malformed(String),
+
+    /// The request never reached the provider.
+    #[error("could not reach the provider: {0}")]
+    Network(String),
+
+    /// A URL outside the connector's allowlist was constructed.
+    #[error("refused to contact {0}: it is not an allowed host for this connector")]
+    HostNotAllowed(String),
+}
+
+impl From<ConnectError> for devledger_core::CoreError {
+    fn from(error: ConnectError) -> Self {
+        devledger_core::CoreError::Invalid(error.to_string())
+    }
+}
+
+/// Refuse any URL whose host is not on the connector's allowlist.
+///
+/// Called before every request. The allowlist is a property of the connector,
+/// not of the call site, so a new endpoint cannot quietly widen it.
+pub fn check_host(url: &str, allowed: &[&str]) -> Result<(), ConnectError> {
+    let parsed =
+        url::Url::parse(url).map_err(|e| ConnectError::HostNotAllowed(format!("{url} ({e})")))?;
+    if parsed.scheme() != "https" {
+        return Err(ConnectError::HostNotAllowed(format!(
+            "{url} (only https is allowed)"
+        )));
+    }
+    match parsed.host_str() {
+        Some(host) if allowed.contains(&host) => Ok(()),
+        Some(host) => Err(ConnectError::HostNotAllowed(host.to_string())),
+        None => Err(ConnectError::HostNotAllowed(url.to_string())),
+    }
+}
+
+/// Build the shared HTTP client.
+///
+/// Redirects are disabled on purpose: following one could send the
+/// `Authorization` header to a host that is not on the allowlist.
+pub(crate) fn http_client() -> Result<reqwest::Client, ConnectError> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| ConnectError::Network(e.to_string()))
+}
+
+/// Turn an HTTP status into a typed error.
+pub(crate) fn status_error(status: reqwest::StatusCode, what: &str) -> ConnectError {
+    match status.as_u16() {
+        401 => ConnectError::Unauthorized,
+        403 => ConnectError::Forbidden(what.to_string()),
+        429 => ConnectError::RateLimited,
+        other => ConnectError::Unexpected(format!("HTTP {other} while reading {what}")),
+    }
+}

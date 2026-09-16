@@ -54,6 +54,13 @@ cannot rewrite history.
 - **Clipboard scraping.** Copy Secret keeps the value out of the frontend, but
   anything on the OS clipboard is readable by other local processes. Automatic
   clipboard expiry is not implemented.
+- **A provider being compromised.** A connector trusts what the provider's API
+  returns. A malicious response could describe organizations and projects that
+  do not exist. Nothing is imported without the user confirming it, and the
+  connector cannot write to the provider, so the blast radius is a wrong entry
+  in your map.
+- **Traffic analysis.** Connecting reveals to Supabase that a client at your IP
+  read your account structure, the same as using their dashboard would.
 - **Physical memory capture.** `zeroize` clears buffers on drop, which bounds
   exposure, but it cannot undo a page that has already been swapped.
 

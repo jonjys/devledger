@@ -419,7 +419,7 @@ impl Store {
         })
     }
 
-    fn organization_from_row(row: &Row<'_>) -> rusqlite::Result<(Organization, String)> {
+    pub(crate) fn organization_from_row(row: &Row<'_>) -> rusqlite::Result<(Organization, String)> {
         let created: String = row.get(4)?;
         Ok((
             Organization {
@@ -501,7 +501,7 @@ impl Store {
 
     // --------------------------------------------------------- service project
 
-    const SERVICE_PROJECT_COLUMNS: &'static str =
+    pub(crate) const SERVICE_PROJECT_COLUMNS: &'static str =
         "id, account_id, organization_id, provider, provider_ref, name, region, environment, created_at";
 
     /// Insert a provider resource.
@@ -554,7 +554,7 @@ impl Store {
         })
     }
 
-    fn service_project_from_row(
+    pub(crate) fn service_project_from_row(
         row: &Row<'_>,
     ) -> rusqlite::Result<(ServiceProject, String, String, String)> {
         let provider: String = row.get(3)?;
@@ -578,7 +578,7 @@ impl Store {
         ))
     }
 
-    fn finish_service_project(
+    pub(crate) fn finish_service_project(
         entry: (ServiceProject, String, String, String),
     ) -> Result<ServiceProject> {
         let (mut sp, provider, environment, created) = entry;

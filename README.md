@@ -5,7 +5,9 @@ accumulates. Paste a `.env` block, a Supabase URL or a billing page into one
 box; DevLedger works out what it is, shows you what it will do, and stores it
 encrypted on your own machine.
 
-No cloud. No account. No telemetry. No network calls at all.
+No cloud. No account. No telemetry. The only time DevLedger touches the network
+is when you explicitly connect or refresh a provider account, and even then it
+only ever reads.
 
 ## Where the milestones stand
 
@@ -15,7 +17,7 @@ No cloud. No account. No telemetry. No network calls at all.
 | **M2** | Deterministic Smart Paste: detectors, JWT claim inspection, subscription parsing, account/project inference, evidence levels | Done — 18 tests |
 | **M3** | Current stable Rust, Tauri v2 shell, SQLCipher persistence, unlock/onboarding, desktop shell, review sheet, Project Vault | Done — 22 Rust tests + 26 frontend tests |
 
-116 tests in total: 74 Rust, 42 TypeScript.
+169 tests in total: 102 Rust, 67 TypeScript.
 
 ## Running it
 
@@ -38,10 +40,11 @@ artifacts on every push and attaches them to the run.
 
 ```
 crates/devledger-core/     Security, parsing and persistence. No UI, no network.
+crates/devledger-connect/  Connectors. The only crate that opens a socket.
 apps/desktop/src-tauri/    Tauri v2 shell: IPC commands and capability config.
 apps/desktop/src/          React + TypeScript frontend.
 scripts/security-check.sh  The invariants CI enforces on every push.
-docs/                      Architecture and threat model.
+docs/                      Architecture, threat model and decision records.
 ```
 
 ## How it behaves
@@ -59,6 +62,12 @@ analysis. Classification comes from the value itself wherever it can: a JWT's
 own `role` claim decides whether something is an anon key or a service_role
 key, so a credential filed under a misleading variable name is still identified
 correctly. There is no model and no guessing.
+
+**Two ways in.** Paste something and DevLedger works out what it is, or connect
+a provider account and DevLedger reads its structure directly. Connecting is
+read-only, happens only when you press a button, and nothing reaches your map
+until you review what was found. Several accounts with the same provider stay
+separate — connecting a second Supabase account never overwrites the first.
 
 **It asks rather than assuming.** Paste a few lines naming your project, your
 organization, your email and a provider URL, and DevLedger proposes the whole

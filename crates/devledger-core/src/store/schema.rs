@@ -4,10 +4,10 @@
 //! transaction, and `schema_version` records how far the database has got.
 
 /// The schema version this build expects.
-pub const CURRENT_VERSION: i64 = 2;
+pub const CURRENT_VERSION: i64 = 3;
 
 /// Ordered migration steps. Index `n` upgrades the database to version `n + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 const V1: &str = r#"
 CREATE TABLE identities (
@@ -259,4 +259,40 @@ UPDATE service_projects
 DELETE FROM organizations WHERE name = 'Personal' AND provider_org_id IS NULL;
 
 ALTER TABLE subscriptions ADD COLUMN trial_ends_at TEXT;
+"#;
+
+/// v3 adds Connect & Discover.
+///
+/// A connection is one *connected provider account*, not one provider: someone
+/// with three Supabase accounts gets three rows, each with its own credential,
+/// its own identity and its own account in the graph. The unique index is on
+/// `(connector_id, account_fingerprint)` so reconnecting the same account
+/// refreshes it, while a genuinely different account always gets its own row.
+///
+/// The credential is stored as an AEAD envelope under the vault's secret key,
+/// exactly like a secret value, and is never handed to the frontend.
+const V3: &str = r#"
+CREATE TABLE connections (
+    id                  TEXT PRIMARY KEY,
+    connector_id        TEXT NOT NULL,
+    identity_id         TEXT NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+    account_id          TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    label               TEXT NOT NULL,
+    account_fingerprint TEXT NOT NULL,
+    auth_kind           TEXT NOT NULL,
+    credential          BLOB NOT NULL,
+    created_at          TEXT NOT NULL,
+    last_checked_at     TEXT
+);
+CREATE UNIQUE INDEX idx_connections_account
+    ON connections (connector_id, account_fingerprint);
+CREATE INDEX idx_connections_identity ON connections (identity_id);
+
+-- The most recent discovery for a connection, kept so the review screen can be
+-- reopened without spending another request. Provider data only; no credential.
+CREATE TABLE discoveries (
+    connection_id TEXT PRIMARY KEY REFERENCES connections (id) ON DELETE CASCADE,
+    payload       TEXT NOT NULL,
+    fetched_at    TEXT NOT NULL
+);
 "#;

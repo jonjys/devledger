@@ -4,6 +4,7 @@ import * as api from "../lib/api";
 import { plural } from "../lib/format";
 import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/types";
 
+import ConnectionsView from "./ConnectionsView";
 import MapView from "./MapView";
 import NewProjectForm from "./NewProjectForm";
 import ProjectVault from "./ProjectVault";
@@ -11,11 +12,12 @@ import ReviewSheet from "./ReviewSheet";
 import SmartPasteBar from "./SmartPasteBar";
 import SubscriptionsView from "./SubscriptionsView";
 
-type Tab = "projects" | "map" | "subscriptions";
+type Tab = "projects" | "map" | "connections" | "subscriptions";
 
 const TABS: [Tab, string][] = [
   ["projects", "Projects"],
   ["map", "Map"],
+  ["connections", "Connections"],
   ["subscriptions", "Subscriptions"],
 ];
 
@@ -196,6 +198,8 @@ export default function DesktopShell({ onLock }: Props) {
           <main className="main">
             {tab === "map" ? (
               <MapView projects={projects} onNotify={notify} onChanged={refresh} />
+            ) : tab === "connections" ? (
+              <ConnectionsView onNotify={notify} onChanged={refresh} />
             ) : (
               <SubscriptionsView onNotify={notify} />
             )}

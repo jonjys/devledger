@@ -9,6 +9,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   Account,
+  ConnectionSummary,
+  ConnectOutcome,
+  ConnectorDescriptor,
+  ImportOutcome,
+  ReconcileReport,
   AttentionItem,
   AuditEntry,
   CommitOutcome,
@@ -171,3 +176,35 @@ export const copySecret = (secretId: string) =>
 /** Copy a project as a `.env` file. Returns how many variables were written. */
 export const copyEnv = (projectId: string) =>
   call<number>("copy_env", { projectId });
+
+
+// --- Connect & Discover ----------------------------------------------------
+//
+// These are the only calls that cause DevLedger to touch the network, and each
+// one is the direct result of a button press. The token is sent to Rust, which
+// verifies it against the provider and seals it into the vault; it is never
+// stored in the frontend and never comes back.
+
+export const listConnectors = () => call<ConnectorDescriptor[]>("list_connectors");
+
+export const listConnections = () => call<ConnectionSummary[]>("list_connections");
+
+/** Verify a token against the provider, store it, and return what it found. */
+export const connectorConnect = (connector: string, token: string, label: string) =>
+  call<ConnectOutcome>("connector_connect", { connector, token, label });
+
+/** Re-read a connected account using the credential already in the vault. */
+export const connectorRefresh = (connectionId: string) =>
+  call<ReconcileReport>("connector_refresh", { connectionId });
+
+/** The review screen for the last discovery, without spending a request. */
+export const connectorReport = (connectionId: string) =>
+  call<ReconcileReport>("connector_report", { connectionId });
+
+/** Apply the ticked rows. */
+export const connectorImport = (connectionId: string, accepted: string[]) =>
+  call<ImportOutcome>("connector_import", { connectionId, accepted });
+
+/** Forget a connection. Imported data is kept. */
+export const connectorDisconnect = (connectionId: string) =>
+  call<void>("connector_disconnect", { connectionId });
