@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "devledger-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "devledger-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "devledger-core",
  "serde",
