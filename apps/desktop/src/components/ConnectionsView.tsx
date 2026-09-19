@@ -58,7 +58,7 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
       ]);
       setConnectors(descriptors);
       setConnections(existing);
-      setGraph(identityGraph);
+      setGraph(identityGraph ?? []);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {
