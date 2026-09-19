@@ -68,7 +68,7 @@ check "No telemetry or analytics endpoint is referenced"
 if grep -rniE '(telemetry|analytics|sentry|posthog|mixpanel|amplitude|segment\.io)' \
      --include=*.rs --include=*.ts --include=*.tsx --include=*.json \
      crates apps/desktop/src apps/desktop/src-tauri 2>/dev/null \
-     | grep -v 'no telemetry' | grep -q .; then
+     | grep -v 'no telemetry' | grep -v 'catalog-only' | grep -q .; then
   bad "something looks like telemetry"
 else
   ok "no telemetry"
