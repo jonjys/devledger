@@ -21,7 +21,8 @@ use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
 use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
 use devledger_core::model::{
-    Account, EntityKind, EntityRef, Identity, Organization, Project, Relation, ServiceProject,
+    Account, EntityKind, EntityRef, Environment, Identity, Organization, Project, Provider,
+    Relation, SecretRecord, ServiceProject,
 };
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
@@ -286,6 +287,67 @@ fn accounts_for_identity(state: State<'_, AppState>, identity_id: Uuid) -> IpcRe
     state.with(|vault| vault.accounts_for_identity(identity_id))
 }
 
+#[tauri::command]
+fn create_identity_manual(
+    state: State<'_, AppState>,
+    label: String,
+    email: Option<String>,
+) -> IpcResult<Identity> {
+    state.with(|vault| vault.create_identity_manual(&label, email.as_deref()))
+}
+
+#[tauri::command]
+fn create_account_manual(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    provider: Provider,
+    label: String,
+) -> IpcResult<Account> {
+    state.with(|vault| vault.create_account_manual(identity_id, provider, &label))
+}
+
+#[tauri::command]
+fn create_service_project_manual(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+    organization_id: Option<Uuid>,
+    provider: Provider,
+    name: String,
+    provider_ref: Option<String>,
+    environment: Environment,
+) -> IpcResult<ServiceProject> {
+    state.with(|vault| {
+        vault.create_service_project_manual(
+            account_id,
+            organization_id,
+            provider,
+            &name,
+            provider_ref.as_deref(),
+            environment,
+        )
+    })
+}
+
+#[tauri::command]
+fn create_manual_secret(
+    state: State<'_, AppState>,
+    project_id: Option<Uuid>,
+    service_project_id: Option<Uuid>,
+    name: String,
+    environment: Environment,
+    value: String,
+) -> IpcResult<SecretRecord> {
+    state.with(|vault| {
+        vault.create_manual_secret(
+            project_id,
+            service_project_id,
+            &name,
+            environment,
+            &SecretString::new(value),
+        )
+    })
+}
+
 /// Every relation touching an entity, in either direction.
 #[tauri::command]
 fn relations_for(
@@ -501,6 +563,10 @@ pub fn run() {
             organizations_for_account,
             list_identities,
             accounts_for_identity,
+            create_identity_manual,
+            create_account_manual,
+            create_service_project_manual,
+            create_manual_secret,
             relations_for,
             delete_secret,
             secret_provenance,
