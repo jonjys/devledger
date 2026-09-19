@@ -1,8 +1,14 @@
 //! Smart Paste: deterministic extraction of structure from pasted text.
 
 pub mod detect;
+pub mod document;
 pub mod jwt;
-pub mod pipeline;
+#[path = "pipeline.rs"]
+mod base_pipeline;
+pub mod pipeline {
+    pub use super::base_pipeline::*;
+    pub use super::document::analyze;
+}
 pub mod review;
 pub mod subscription;
 pub mod warn;
