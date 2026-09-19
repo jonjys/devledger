@@ -47,8 +47,7 @@ static AMOUNT: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)([$€£])\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)").expect("amount pattern")
 });
 static CARD: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:visa|mastercard|amex)\s*[-*•· ]+\s*(\d{4})\b")
-        .expect("card pattern")
+    Regex::new(r"(?i)\b(?:visa|mastercard|amex)\s*[-*•· ]+\s*(\d{4})\b").expect("card pattern")
 });
 static ENV: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?m)^\s*(?:export\s+)?[A-Za-z_][A-Za-z_0-9]*\s*=")
@@ -73,7 +72,10 @@ pub fn classify(text: &str) -> DocumentKind {
     let receipt = lower.contains("receipt number")
         || lower.contains("kvittonummer")
         || lower.lines().any(|line| {
-            matches!(line.trim(), "receipt" | "Receipt" | "RECEIPT" | "Kvitto" | "KVITTO")
+            matches!(
+                line.trim(),
+                "receipt" | "Receipt" | "RECEIPT" | "Kvitto" | "KVITTO"
+            )
         });
     if (receipt || invoice) && (billing || AMOUNT.is_match(text)) {
         return if receipt {
@@ -149,9 +151,11 @@ fn merchant_name(text: &str) -> Option<String> {
         .find(|line| {
             let upper = line.to_uppercase();
             line.len() <= 110
-                && [" INC", " INC.", " LLC", " LTD", " LTD.", " GMBH", " AB", " OY"]
-                    .iter()
-                    .any(|suffix| upper.contains(suffix))
+                && [
+                    " INC", " INC.", " LLC", " LTD", " LTD.", " GMBH", " AB", " OY",
+                ]
+                .iter()
+                .any(|suffix| upper.contains(suffix))
                 && !upper.starts_with("INVOICE")
                 && !upper.starts_with("RECEIPT")
         })
@@ -215,8 +219,8 @@ pub fn extract_receipt(text: &str) -> Option<ReceiptPreview> {
         .find(|line| {
             (line.contains('–') || line.contains(" - "))
                 && [
-                    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
-                    "nov", "dec",
+                    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                    "dec",
                 ]
                 .iter()
                 .any(|month| line.to_lowercase().contains(month))
@@ -244,10 +248,7 @@ pub fn extract_receipt(text: &str) -> Option<ReceiptPreview> {
             .lines()
             .take_while(|line| !line.to_lowercase().contains("bill to"))
             .find_map(first_email),
-        invoice_number: value_after_label(
-            text,
-            &["invoice number", "invoice #", "fakturanummer"],
-        ),
+        invoice_number: value_after_label(text, &["invoice number", "invoice #", "fakturanummer"]),
         receipt_number: value_after_label(text, &["receipt number", "kvittonummer"]),
         amount_minor: amount.map(|a| a.0),
         currency: amount.map(|a| a.1),
@@ -322,9 +323,7 @@ pub fn analyze(
         facts.push(format!("Payment date: {date}"));
     }
     if let Some(period) = &receipt.service_period {
-        facts.push(format!(
-            "Service period: {period} (renewal not confirmed)"
-        ));
+        facts.push(format!("Service period: {period} (renewal not confirmed)"));
     }
     if let Some(invoice) = &receipt.invoice_number {
         facts.push(format!("Invoice number: {invoice}"));
@@ -360,15 +359,24 @@ mod tests {
         assert_eq!(receipt.merchant.as_deref(), Some("EXAMPLE LABS INC"));
         assert_eq!(receipt.service.as_deref(), Some("example"));
         assert_eq!(receipt.plan.as_deref(), Some("Standard"));
-        assert_eq!(receipt.billing_email.as_deref(), Some("customer@example.test"));
-        assert_eq!(receipt.merchant_email.as_deref(), Some("support@example.test"));
+        assert_eq!(
+            receipt.billing_email.as_deref(),
+            Some("customer@example.test")
+        );
+        assert_eq!(
+            receipt.merchant_email.as_deref(),
+            Some("support@example.test")
+        );
         assert_eq!(receipt.invoice_number.as_deref(), Some("ABC-0003"));
         assert_eq!(receipt.receipt_number.as_deref(), Some("2821-3523"));
         assert_eq!(receipt.amount_minor, Some(2000));
         assert_eq!(receipt.currency, Some("USD"));
         assert_eq!(receipt.card_last_four.as_deref(), Some("5351"));
         assert_eq!(receipt.payment_date.as_deref(), Some("August 29, 2026"));
-        assert_eq!(receipt.service_period.as_deref(), Some("Aug 29–Sep 29, 2026"));
+        assert_eq!(
+            receipt.service_period.as_deref(),
+            Some("Aug 29–Sep 29, 2026")
+        );
     }
 
     #[test]
@@ -397,10 +405,14 @@ mod tests {
 
     #[test]
     fn support_address_is_not_a_billing_identity() {
-        let input = "Receipt\nInvoice number INV-7\nMERCHANT INC\nsupport@merchant.test\nAmount paid $5.00";
+        let input =
+            "Receipt\nInvoice number INV-7\nMERCHANT INC\nsupport@merchant.test\nAmount paid $5.00";
         let receipt = extract_receipt(input).expect("receipt");
         assert!(receipt.billing_email.is_none());
-        assert_eq!(receipt.merchant_email.as_deref(), Some("support@merchant.test"));
+        assert_eq!(
+            receipt.merchant_email.as_deref(),
+            Some("support@merchant.test")
+        );
         assert!(receipt.service_period.is_none());
         let (analysis, _) = analyze(
             input,
@@ -420,7 +432,10 @@ mod tests {
             classify("API_KEY=dummy\nReceipt\nAmount paid $20.00"),
             DocumentKind::Environment
         );
-        assert_eq!(classify("Hello\nhttps://example.test"), DocumentKind::Generic);
+        assert_eq!(
+            classify("Hello\nhttps://example.test"),
+            DocumentKind::Generic
+        );
         assert_eq!(
             classify("Verify your email to create your account"),
             DocumentKind::AccountMessage
