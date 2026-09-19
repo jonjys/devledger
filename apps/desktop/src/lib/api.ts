@@ -22,6 +22,9 @@ import type {
   IdentityNode,
   IpcError,
   Organization,
+  Environment,
+  Provider,
+  SecretRecord,
   PasteAnalysis,
   Project,
   ProjectSummary,
@@ -144,6 +147,47 @@ export const listIdentities = () => call<Identity[]>("list_identities");
 
 export const accountsForIdentity = (identityId: string) =>
   call<Account[]>("accounts_for_identity", { identityId });
+
+export const createIdentityManual = (label: string, email: string | null) =>
+  call<Identity>("create_identity_manual", { label, email });
+
+export const createAccountManual = (
+  identityId: string,
+  provider: Provider,
+  label: string,
+) => call<Account>("create_account_manual", { identityId, provider, label });
+
+export const createServiceProjectManual = (
+  accountId: string,
+  organizationId: string | null,
+  provider: Provider,
+  name: string,
+  providerRef: string | null,
+  environment: Environment,
+) =>
+  call<ServiceProject>("create_service_project_manual", {
+    accountId,
+    organizationId,
+    provider,
+    name,
+    providerRef,
+    environment,
+  });
+
+export const createManualSecret = (
+  projectId: string | null,
+  serviceProjectId: string | null,
+  name: string,
+  environment: Environment,
+  value: string,
+) =>
+  call<SecretRecord>("create_manual_secret", {
+    projectId,
+    serviceProjectId,
+    name,
+    environment,
+    value,
+  });
 
 export const relationsFor = (kind: EntityKind, id: string) =>
   call<Relation[]>("relations_for", { kind, id });
