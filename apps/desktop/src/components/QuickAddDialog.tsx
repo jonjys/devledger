@@ -109,6 +109,7 @@ export default function QuickAddDialog({
       } else {
         if (!secretTarget) throw new Error("Choose where this API key belongs");
         const [targetKind, id] = secretTarget.split(":");
+        if (!id) throw new Error("Invalid secret target");
         await api.createManualSecret(
           targetKind === "project" ? id : null,
           targetKind === "resource" ? id : null,
