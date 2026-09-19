@@ -26,6 +26,7 @@ export const SERVICE_CATALOG: CatalogService[] = [
   { id: "openai", name: "OpenAI", category: "AI", provider: "openai", capabilities: ["API keys"] },
   { id: "anthropic", name: "Anthropic", category: "AI", provider: "unknown", capabilities: ["API keys"] },
   { id: "resend", name: "Resend", category: "Email", provider: "unknown", capabilities: ["API keys"] },
+  // catalog-only: provider name, not a telemetry dependency or endpoint.
   { id: "sentry", name: "Sentry", category: "Observability", provider: "unknown", capabilities: ["Manual"] },
   { id: "gitlab", name: "GitLab", category: "Source", provider: "unknown", capabilities: ["Manual"] },
   { id: "bitbucket", name: "Bitbucket", category: "Source", provider: "unknown", capabilities: ["Manual"] },
