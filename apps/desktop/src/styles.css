@@ -686,3 +686,37 @@ button.tiny { padding: 3px 8px; font-size: 11.5px; }
   .account-branch { grid-template-columns: 190px minmax(220px, 1fr); gap: 18px; }
   .resource-branch { grid-template-columns: minmax(190px, 1fr) 180px; gap: 18px; }
 }
+
+
+/* ============================================================= APIs view */
+
+.api-projection { display: grid; gap: 12px; }
+.api-project {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  overflow: hidden;
+}
+.api-project-head {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.api-project-head h3 { margin: 1px 0 0; font-size: 14px; }
+.api-project-head .tag { margin-left: auto; }
+.api-list { display: flex; flex-direction: column; }
+.api-row {
+  display: grid; grid-template-columns: 36px minmax(180px, 1fr) minmax(120px, 220px) auto;
+  align-items: center; gap: 11px; padding: 10px 13px; border-bottom: 1px solid var(--border);
+}
+.api-row:last-child { border-bottom: 0; }
+.api-row:hover { background: #1a1f3380; }
+.api-icon {
+  width: 31px; height: 31px; border-radius: 8px; display: grid; place-items: center;
+  border: 1px solid var(--border-strong); color: var(--mint); font-size: 8px;
+  font-weight: 800; letter-spacing: .06em; background: var(--bg);
+}
+.api-copy { min-width: 0; }
+.api-copy strong, .api-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-copy strong { font-family: var(--mono); font-size: 11.5px; }
+.api-copy span { color: var(--text-faint); font-size: 10.5px; margin-top: 2px; }
+.api-row code { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-row button { padding: 4px 9px; font-size: 11px; }
+.api-empty { padding: 18px 14px; color: var(--text-faint); font-size: 12px; }
