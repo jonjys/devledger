@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "devledger-connect"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "devledger-core",
  "reqwest",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "devledger-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "devledger-desktop"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "devledger-connect",
  "devledger-core",
