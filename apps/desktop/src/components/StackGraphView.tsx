@@ -7,10 +7,11 @@ import type {
   IdentityNode,
   ProjectSummary,
   ServiceProjectSummary,
+  VaultEntry,
 } from "../lib/types";
 import QuickAddDialog, { type AddKind } from "./QuickAddDialog";
 
-type ViewMode = "stack" | "identity" | "project" | "attention";
+type ViewMode = "stack" | "identity" | "project" | "apis" | "attention";
 
 interface Props {
   projects: ProjectSummary[];
@@ -29,6 +30,7 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
   const [graph, setGraph] = useState<IdentityNode[]>([]);
   const [attention, setAttention] = useState<AttentionItem[]>([]);
   const [resources, setResources] = useState<ServiceProjectSummary[]>([]);
+  const [apiEntries, setApiEntries] = useState<Record<string, VaultEntry[]>>({});
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<ViewMode>("stack");
   const [query, setQuery] = useState("");
@@ -39,20 +41,27 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [g, a, r] = await Promise.all([
+      const [g, a, r, secretRows] = await Promise.all([
         api.identityGraph(),
         api.needsAttention(),
         api.listServiceProjects(),
+        Promise.all(
+          projects.map(async (project) => [
+            project.project.id,
+            await api.listSecrets(project.project.id),
+          ] as const),
+        ),
       ]);
       setGraph(g);
       setAttention(a);
       setResources(r);
+      setApiEntries(Object.fromEntries(secretRows));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {
       setLoading(false);
     }
-  }, [onNotify]);
+  }, [onNotify, projects]);
 
   useEffect(() => {
     void load();
@@ -129,6 +138,7 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
             ["stack", "My Stack"],
             ["identity", "By identity"],
             ["project", "By project"],
+            ["apis", "APIs / Secrets"],
             ["attention", `Needs attention ${attention.length ? `(${attention.length})` : ""}`],
           ] as [ViewMode, string][]).map(([id, label]) => (
             <button
@@ -152,6 +162,8 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
 
       {mode === "attention" ? (
         <AttentionView items={attention} />
+      ) : mode === "apis" ? (
+        <ApiProjection projects={projects} entries={apiEntries} onNotify={onNotify} />
       ) : mode === "project" ? (
         <ProjectProjection
           projects={projects}
@@ -411,6 +423,67 @@ function ProjectProjection({
               </span>
             </div>
           </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ApiProjection({
+  projects,
+  entries,
+  onNotify,
+}: {
+  projects: ProjectSummary[];
+  entries: Record<string, VaultEntry[]>;
+  onNotify: (message: string, bad?: boolean) => void;
+}) {
+  if (!projects.length) {
+    return <div className="stack-empty"><strong>No projects yet</strong><span>Add a project before filing API keys.</span></div>;
+  }
+
+  async function copy(secretId: string, name: string) {
+    try {
+      await api.copySecret(secretId);
+      onNotify(`Copied ${name}`);
+    } catch (e: unknown) {
+      onNotify(e instanceof Error ? e.message : String(e), true);
+    }
+  }
+
+  return (
+    <div className="api-projection">
+      {projects.map((project) => {
+        const rows = entries[project.project.id] ?? [];
+        return (
+          <section className="api-project" key={project.project.id}>
+            <div className="api-project-head">
+              <div>
+                <span className="node-eyebrow">Project</span>
+                <h3>{project.project.name}</h3>
+              </div>
+              <span className="tag">{plural(rows.length, "secret")}</span>
+            </div>
+            {rows.length ? (
+              <div className="api-list">
+                {rows.map((entry) => (
+                  <div className="api-row" key={entry.secret.id}>
+                    <div className="api-icon">KEY</div>
+                    <div className="api-copy">
+                      <strong>{entry.secret.name}</strong>
+                      <span>
+                        {entry.service_project_name ?? "Project-level"} · {entry.secret.environment}
+                      </span>
+                    </div>
+                    <code>{entry.secret.preview}</code>
+                    <button type="button" onClick={() => copy(entry.secret.id, entry.secret.name)}>Copy</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="api-empty">No APIs or secrets filed here yet.</div>
+            )}
+          </section>
         );
       })}
     </div>
