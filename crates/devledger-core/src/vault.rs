@@ -936,6 +936,105 @@ impl Vault {
         self.unlocked()?.store.accounts_for_identity(identity_id)
     }
 
+    /// Create an identity explicitly from the visual stack editor.
+    ///
+    /// Email identities keep the same blind-index duplicate protection as Smart Paste.
+    pub fn create_identity_manual(&self, label: &str, email: Option<&str>) -> Result<Identity> {
+        let trimmed_label = label.trim();
+        let normalized_email = email.map(str::trim).filter(|v| !v.is_empty()).map(str::to_ascii_lowercase);
+        if trimmed_label.is_empty() && normalized_email.is_none() {
+            return Err(CoreError::Invalid("an identity needs a label or email".into()));
+        }
+        let inner = self.unlocked()?;
+        if let Some(email) = normalized_email.as_deref() {
+            let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, email)?;
+            if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
+                return inner.store.identity(id)?.ok_or_else(|| CoreError::NotFound(format!("identity {id}")));
+            }
+            let display = if trimmed_label.is_empty() { email } else { trimmed_label };
+            return inner.store.create_identity(display, Some(email), Some(&bi));
+        }
+        inner.store.create_identity(trimmed_label, None, None)
+    }
+
+    /// Create a provider account explicitly under an identity.
+    pub fn create_account_manual(
+        &self,
+        identity_id: Uuid,
+        provider: Provider,
+        label: &str,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        self.unlocked()?.store.create_account(identity_id, provider, None, trimmed)
+    }
+
+    /// Create a provider-side resource explicitly.
+    pub fn create_service_project_manual(
+        &self,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+        provider: Provider,
+        name: &str,
+        provider_ref: Option<&str>,
+        environment: Environment,
+    ) -> Result<ServiceProject> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("a resource needs a name".into()));
+        }
+        if let Some(org_id) = organization_id {
+            let belongs = self.unlocked()?.store.organizations_for_account(account_id)?
+                .iter().any(|org| org.id == org_id);
+            if !belongs {
+                return Err(CoreError::Invalid("organization does not belong to this account".into()));
+            }
+        }
+        self.unlocked()?.store.create_service_project(
+            account_id,
+            organization_id,
+            provider,
+            provider_ref.map(str::trim).filter(|v| !v.is_empty()),
+            trimmed,
+            None,
+            environment,
+        )
+    }
+
+    /// Store a manually entered API key/secret against a project or provider resource.
+    ///
+    /// The plaintext crosses IPC only on the explicit Add API/Secret action and is
+    /// immediately sealed by the same vault primitive used by Smart Paste.
+    pub fn create_manual_secret(
+        &mut self,
+        project_id: Option<Uuid>,
+        service_project_id: Option<Uuid>,
+        name: &str,
+        environment: Environment,
+        value: &SecretString,
+    ) -> Result<SecretRecord> {
+        if project_id.is_none() && service_project_id.is_none() {
+            return Err(CoreError::Invalid("choose a project or resource for the secret".into()));
+        }
+        if project_id.is_some() && service_project_id.is_some() {
+            return Err(CoreError::Invalid("a secret must attach to either a project or a resource".into()));
+        }
+        let trimmed = name.trim();
+        if trimmed.is_empty() || value.expose().is_empty() {
+            return Err(CoreError::Invalid("a secret needs both a name and value".into()));
+        }
+        self.insert_secret(
+            project_id,
+            service_project_id,
+            SecretKind::GenericApiKey,
+            trimmed,
+            environment,
+            value,
+        )
+    }
+
     /// Every relation touching an entity.
     pub fn relations_for(&self, entity: EntityRef) -> Result<Vec<Relation>> {
         self.unlocked()?.store.relations_for(entity)
