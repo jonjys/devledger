@@ -5,7 +5,7 @@ import { plural } from "../lib/format";
 import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/types";
 
 import ConnectionsView from "./ConnectionsView";
-import MapView from "./MapView";
+import StackGraphView from "./StackGraphView";
 import NewProjectForm from "./NewProjectForm";
 import ProjectVault from "./ProjectVault";
 import ReviewSheet from "./ReviewSheet";
@@ -16,7 +16,7 @@ type Tab = "projects" | "map" | "connections" | "subscriptions";
 
 const TABS: [Tab, string][] = [
   ["projects", "Projects"],
-  ["map", "Map"],
+  ["map", "Stack"],
   ["connections", "Connections"],
   ["subscriptions", "Subscriptions"],
 ];
@@ -205,9 +205,9 @@ export default function DesktopShell({ onLock }: Props) {
         ) : (
           <main className="main">
             {tab === "map" ? (
-              <MapView projects={projects} onNotify={notify} onChanged={refresh} />
+              <StackGraphView projects={projects} onNotify={notify} onChanged={refresh} />
             ) : tab === "connections" ? (
-              <ConnectionsView onNotify={notify} onChanged={refresh} />
+              <ConnectionsView projects={projects} onNotify={notify} onChanged={refresh} />
             ) : (
               <SubscriptionsView onNotify={notify} />
             )}
