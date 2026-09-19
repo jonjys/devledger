@@ -24,7 +24,7 @@ import QuickAddDialog from "./QuickAddDialog";
 import ServiceCatalog, { type CatalogService } from "./ServiceCatalog";
 
 interface Props {
-  projects: ProjectSummary[];
+  projects?: ProjectSummary[];
   onNotify: (message: string, bad?: boolean) => void;
   onChanged: () => void;
 }
@@ -37,7 +37,7 @@ interface Props {
  * explicit — a request only happens because a button was pressed, and nothing
  * reaches the graph until the import is confirmed.
  */
-export default function ConnectionsView({ projects, onNotify, onChanged }: Props) {
+export default function ConnectionsView({ projects = [], onNotify, onChanged }: Props) {
   const [connectors, setConnectors] = useState<ConnectorDescriptor[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [graph, setGraph] = useState<IdentityNode[]>([]);
