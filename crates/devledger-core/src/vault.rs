@@ -941,17 +941,29 @@ impl Vault {
     /// Email identities keep the same blind-index duplicate protection as Smart Paste.
     pub fn create_identity_manual(&self, label: &str, email: Option<&str>) -> Result<Identity> {
         let trimmed_label = label.trim();
-        let normalized_email = email.map(str::trim).filter(|v| !v.is_empty()).map(str::to_ascii_lowercase);
+        let normalized_email = email
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_ascii_lowercase);
         if trimmed_label.is_empty() && normalized_email.is_none() {
-            return Err(CoreError::Invalid("an identity needs a label or email".into()));
+            return Err(CoreError::Invalid(
+                "an identity needs a label or email".into(),
+            ));
         }
         let inner = self.unlocked()?;
         if let Some(email) = normalized_email.as_deref() {
             let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, email)?;
             if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
-                return inner.store.identity(id)?.ok_or_else(|| CoreError::NotFound(format!("identity {id}")));
+                return inner
+                    .store
+                    .identity(id)?
+                    .ok_or_else(|| CoreError::NotFound(format!("identity {id}")));
             }
-            let display = if trimmed_label.is_empty() { email } else { trimmed_label };
+            let display = if trimmed_label.is_empty() {
+                email
+            } else {
+                trimmed_label
+            };
             return inner.store.create_identity(display, Some(email), Some(&bi));
         }
         inner.store.create_identity(trimmed_label, None, None)
@@ -968,7 +980,9 @@ impl Vault {
         if trimmed.is_empty() {
             return Err(CoreError::Invalid("an account needs a label".into()));
         }
-        self.unlocked()?.store.create_account(identity_id, provider, None, trimmed)
+        self.unlocked()?
+            .store
+            .create_account(identity_id, provider, None, trimmed)
     }
 
     /// Create a provider-side resource explicitly.
@@ -986,10 +1000,16 @@ impl Vault {
             return Err(CoreError::Invalid("a resource needs a name".into()));
         }
         if let Some(org_id) = organization_id {
-            let belongs = self.unlocked()?.store.organizations_for_account(account_id)?
-                .iter().any(|org| org.id == org_id);
+            let belongs = self
+                .unlocked()?
+                .store
+                .organizations_for_account(account_id)?
+                .iter()
+                .any(|org| org.id == org_id);
             if !belongs {
-                return Err(CoreError::Invalid("organization does not belong to this account".into()));
+                return Err(CoreError::Invalid(
+                    "organization does not belong to this account".into(),
+                ));
             }
         }
         self.unlocked()?.store.create_service_project(
@@ -1016,14 +1036,20 @@ impl Vault {
         value: &SecretString,
     ) -> Result<SecretRecord> {
         if project_id.is_none() && service_project_id.is_none() {
-            return Err(CoreError::Invalid("choose a project or resource for the secret".into()));
+            return Err(CoreError::Invalid(
+                "choose a project or resource for the secret".into(),
+            ));
         }
         if project_id.is_some() && service_project_id.is_some() {
-            return Err(CoreError::Invalid("a secret must attach to either a project or a resource".into()));
+            return Err(CoreError::Invalid(
+                "a secret must attach to either a project or a resource".into(),
+            ));
         }
         let trimmed = name.trim();
         if trimmed.is_empty() || value.expose().is_empty() {
-            return Err(CoreError::Invalid("a secret needs both a name and value".into()));
+            return Err(CoreError::Invalid(
+                "a secret needs both a name and value".into(),
+            ));
         }
         self.insert_secret(
             project_id,
