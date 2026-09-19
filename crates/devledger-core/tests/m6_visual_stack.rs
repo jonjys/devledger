@@ -30,9 +30,7 @@ fn manual_stack_entries_round_trip_through_the_graph() {
             Environment::Production,
         )
         .expect("resource");
-    let project = vault
-        .create_project("Example", None)
-        .expect("project");
+    let project = vault.create_project("Example", None).expect("project");
     vault
         .link_service_project(resource.id, project.id)
         .expect("link");
