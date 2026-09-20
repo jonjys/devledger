@@ -10,7 +10,7 @@
 //! review sheet is open. It is keyed by analysis id, never serialized, and
 //! cleared on lock.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +38,12 @@ use crate::store::{
     AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary, Store,
     SubscriptionSummary, VaultEntry,
 };
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('_' | 'A'..='Z' | 'a'..='z'))
+        && chars.all(|c| matches!(c, '_' | 'A'..='Z' | 'a'..='z' | '0'..='9'))
+}
 
 /// Name of the cleartext sidecar holding KDF parameters.
 pub const META_FILE: &str = "vault.json";
@@ -763,27 +769,67 @@ impl Vault {
     /// ever holding the values in JavaScript. Includes every secret the project
     /// can reach, across all the provider resources it uses.
     pub fn export_env(&self, project_id: Uuid) -> Result<SecretString> {
+        self.export_env_for_environment(project_id, None)
+    }
+
+    /// Render only one deployment environment. When no environment is given,
+    /// duplicate names are allowed only when their decrypted values match.
+    pub fn export_env_for_environment(
+        &self,
+        project_id: Uuid,
+        environment: Option<Environment>,
+    ) -> Result<SecretString> {
         let inner = self.unlocked()?;
-        let entries = inner.store.list_secrets_for_project(project_id)?;
-        let mut out = String::new();
+        let entries = inner
+            .store
+            .list_secrets_for_project(project_id)?
+            .into_iter()
+            .filter(|entry| environment.is_none_or(|env| entry.secret.environment == env))
+            .collect::<Vec<_>>();
+        let mut variables = BTreeMap::<String, SecretString>::new();
         for entry in &entries {
+            if !valid_env_name(&entry.secret.name) {
+                return Err(CoreError::Invalid(format!(
+                    "{} is not a valid environment variable name",
+                    entry.secret.name
+                )));
+            }
             let value = self.reveal_secret(entry.secret.id)?;
+            if value.expose().contains(['\n', '\r']) {
+                return Err(CoreError::Invalid(format!(
+                    "{} contains a line break and cannot be exported safely",
+                    entry.secret.name
+                )));
+            }
+            if let Some(previous) = variables.get(&entry.secret.name) {
+                if previous.expose() != value.expose() {
+                    return Err(CoreError::Invalid(format!(
+                        "{} has conflicting values; choose one environment or correct the relationship",
+                        entry.secret.name
+                    )));
+                }
+            } else {
+                variables.insert(entry.secret.name.clone(), value);
+            }
+        }
+        let mut out = String::new();
+        for (name, value) in &variables {
             let needs_quotes = value
                 .expose()
                 .chars()
                 .any(|c| c.is_whitespace() || c == '#' || c == '"');
             if needs_quotes {
                 let escaped = value.expose().replace('\\', "\\\\").replace('"', "\\\"");
-                out.push_str(&format!("{}=\"{}\"\n", entry.secret.name, escaped));
+                out.push_str(&format!("{name}=\"{escaped}\"\n"));
             } else {
-                out.push_str(&format!("{}={}\n", entry.secret.name, value.expose()));
+                out.push_str(&format!("{name}={}\n", value.expose()));
             }
         }
         inner.store.audit(
             "project.export_env",
             Some("project"),
             Some(project_id),
-            &format!("Exported {} secrets as .env", entries.len()),
+            &format!("Exported {} variables as .env", variables.len()),
         )?;
         Ok(SecretString::new(out))
     }

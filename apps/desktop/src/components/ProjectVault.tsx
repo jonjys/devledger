@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import * as api from "../lib/api";
 import { formatTime, plural, secretKindLabel } from "../lib/format";
-import type { ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
+import type { Environment, ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
 
 interface Props {
   summary: ProjectSummary;
@@ -22,6 +22,7 @@ export default function ProjectVault({ summary, onNotify }: Props) {
   const [resources, setResources] = useState<ServiceProject[]>([]);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [exportEnvironment, setExportEnvironment] = useState<Environment | "all">("all");
 
   const projectId = summary.project.id;
 
@@ -65,7 +66,7 @@ export default function ProjectVault({ summary, onNotify }: Props) {
   async function copyOne(secretId: string, name: string) {
     try {
       await api.copySecret(secretId);
-      onNotify(`Copied ${name}`);
+      onNotify(`Copied ${name} · clipboard clears in 30 seconds`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -73,8 +74,11 @@ export default function ProjectVault({ summary, onNotify }: Props) {
 
   async function copyAll() {
     try {
-      const count = await api.copyEnv(projectId);
-      onNotify(`Copied ${plural(count, "variable")} as .env`);
+      const count = await api.copyEnv(
+        projectId,
+        exportEnvironment === "all" ? null : exportEnvironment,
+      );
+      onNotify(`Copied ${plural(count, "variable")} as .env · clipboard clears in 30 seconds`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -108,6 +112,19 @@ export default function ProjectVault({ summary, onNotify }: Props) {
         </div>
         <span className="spacer" />
         <div className="acts">
+          <select
+            aria-label="Environment to export"
+            value={exportEnvironment}
+            onChange={(event) =>
+              setExportEnvironment(event.target.value as Environment | "all")
+            }
+          >
+            <option value="all">All environments</option>
+            <option value="development">Development</option>
+            <option value="staging">Staging</option>
+            <option value="production">Production</option>
+            <option value="unknown">Unassigned</option>
+          </select>
           <button type="button" onClick={copyAll} disabled={entries.length === 0}>
             Copy .env
           </button>

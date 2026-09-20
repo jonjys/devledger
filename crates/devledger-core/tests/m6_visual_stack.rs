@@ -69,6 +69,53 @@ fn manual_stack_entries_round_trip_through_the_graph() {
 }
 
 #[test]
+fn env_export_separates_environments_and_rejects_conflicts() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    let identity = vault
+        .create_identity_manual("Work", Some("dev@example.com"))
+        .unwrap();
+    let account = vault
+        .create_account_manual(identity.id, Provider::Vercel, "Vercel")
+        .unwrap();
+    let project = vault.create_project("App", None).unwrap();
+
+    for (name, environment, value) in [
+        ("production", Environment::Production, "prod-value"),
+        ("staging", Environment::Staging, "stage-value"),
+    ] {
+        let resource = vault
+            .create_service_project_manual(
+                account.id,
+                None,
+                Provider::Vercel,
+                name,
+                None,
+                environment,
+            )
+            .unwrap();
+        vault.link_service_project(resource.id, project.id).unwrap();
+        vault
+            .create_manual_secret(
+                None,
+                Some(resource.id),
+                "SHARED_KEY",
+                environment,
+                &SecretString::new(value),
+            )
+            .unwrap();
+    }
+
+    let error = vault.export_env(project.id).unwrap_err().to_string();
+    assert!(error.contains("SHARED_KEY has conflicting values"));
+
+    let production = vault
+        .export_env_for_environment(project.id, Some(Environment::Production))
+        .unwrap();
+    assert_eq!(production.expose(), "SHARED_KEY=prod-value\n");
+    assert!(!production.expose().contains("stage-value"));
+}
+
+#[test]
 fn manual_email_entry_deduplicates_case_insensitively() {
     let (_dir, vault) = common::unlocked_vault();
 
