@@ -218,8 +218,8 @@ export const copySecret = (secretId: string) =>
   call<void>("copy_secret", { secretId });
 
 /** Copy a project as a `.env` file. Returns how many variables were written. */
-export const copyEnv = (projectId: string) =>
-  call<number>("copy_env", { projectId });
+export const copyEnv = (projectId: string, environment: Environment | null) =>
+  call<number>("copy_env", { projectId, environment });
 
 
 // --- Connect & Discover ----------------------------------------------------

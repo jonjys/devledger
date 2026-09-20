@@ -51,9 +51,10 @@ cannot rewrite history.
   screenshot the window after a Reveal, wins.
 - **A forgotten passphrase.** There is no recovery path, by design. The
   onboarding screen says so before the vault is created.
-- **Clipboard scraping.** Copy Secret keeps the value out of the frontend, but
-  anything on the OS clipboard is readable by other local processes. Automatic
-  clipboard expiry is not implemented.
+- **Clipboard scraping.** Copy Secret keeps the value out of the frontend and
+  clears it after 30 seconds (or immediately when the vault locks), but another
+  local process can still read it during that interval. The delayed cleanup
+  checks that the value is unchanged so it never erases newer clipboard data.
 - **A provider being compromised.** A connector trusts what the provider's API
   returns. A malicious response could describe organizations and projects that
   do not exist. Nothing is imported without the user confirming it, and the
@@ -66,16 +67,15 @@ cannot rewrite history.
 
 ## Networking
 
-There is none, and this is checked mechanically rather than asserted.
-`scripts/security-check.sh` enumerates the desktop binary's normal dependency
-graph for the target being built and fails if an HTTP or websocket client
-appears in it.
+The webview cannot make network requests: its capability file grants no HTTP,
+shell or filesystem access, and the CSP names no remote origin. Native provider
+connectors can make outbound HTTPS requests from Rust, only after the user
+presses Connect or Refresh. The current build ships a Supabase connector;
+catalog entries without a native connector remain manual-entry shortcuts.
 
-One subtlety worth recording: `tauri` does declare `reqwest`, but only under
-`cfg(any(target_os = "android", all(target_vendor = "apple", not(target_os =
-"macos"))))` — Android and iOS. It is not compiled into a Windows, Linux or
-macOS build. `cargo tree --target all` will show it; the per-target graph the
-check inspects does not, which is the one that reflects what actually links.
+`scripts/security-check.sh` checks that HTTP dependencies stay confined to the
+connector crate and that no secret-returning IPC command has been added without
+an explicit review point.
 
 The Tauri capability file grants only window controls and `clipboard-manager:
 allow-write-text`. There is no filesystem, shell, process or HTTP permission.

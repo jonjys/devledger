@@ -16,8 +16,11 @@ only ever reads.
 | **M1** | Secure foundation: Argon2id, XChaCha20-Poly1305, zeroizing secret types, redaction and provenance, blind-index duplicate detection | Done — 19 tests |
 | **M2** | Deterministic Smart Paste: detectors, JWT claim inspection, subscription parsing, account/project inference, evidence levels | Done — 18 tests |
 | **M3** | Current stable Rust, Tauri v2 shell, SQLCipher persistence, unlock/onboarding, desktop shell, review sheet, Project Vault | Done — 22 Rust tests + 26 frontend tests |
+| **M4** | Multi-account separation, shared resources, project links, subscriptions and attention queue | Done |
+| **M5** | Read-only Supabase connector with explicit review before import | Done |
+| **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
 
-194 tests in total: 124 Rust, 70 TypeScript, plus a screenshot-based UI smoke test.
+203 tests in total: 133 Rust, 70 TypeScript, plus a screenshot-based UI smoke test.
 
 ## Running it
 
@@ -84,7 +87,9 @@ new or Skip. Cancelling discards the staged plaintext.
 cross the IPC boundary by accident. `reveal_secret` is the only command that
 returns plaintext to JavaScript and it needs a deliberate click. Copy Secret and
 Copy `.env` are rendered in Rust and written straight to the OS clipboard, so
-the common flows never put a credential in the frontend at all.
+the common flows never put a credential in the frontend at all. `.env` export
+can be scoped to one deployment environment and refuses conflicting duplicate
+names instead of silently choosing a value.
 
 See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit.

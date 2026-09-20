@@ -11,11 +11,12 @@
 //!    for it. [`copy_secret`] and [`copy_env`] exist so the common cases --
 //!    pasting a key somewhere, seeding a `.env` -- never put the value in the
 //!    frontend at all: Rust writes it straight to the OS clipboard.
-//! 2. **Nothing reaches the network.** No HTTP client is linked, no shell or
-//!    filesystem plugin is enabled, and the capability file grants only window
-//!    controls plus clipboard writes.
+//! 2. **Network access is explicit.** Only connector commands call a provider,
+//!    after a user action. The webview has no HTTP, shell or filesystem
+//!    capability; provider requests stay in the Rust connector boundary.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
@@ -117,11 +118,14 @@ fn vault_unlock(state: State<'_, AppState>, passphrase: String) -> IpcResult<Vau
 
 /// Close the vault, dropping every key.
 #[tauri::command]
-fn vault_lock(state: State<'_, AppState>) -> IpcResult<VaultStatus> {
-    state.with(|vault| {
+fn vault_lock(app: tauri::AppHandle, state: State<'_, AppState>) -> IpcResult<VaultStatus> {
+    let status = state.with(|vault| {
         vault.lock();
         Ok(vault.status())
-    })
+    })?;
+    // Locking must drop secrets from both process memory and the OS clipboard.
+    let _ = app.clipboard().clear();
+    Ok(status)
 }
 
 // ---------------------------------------------------------------- smart paste
@@ -387,6 +391,28 @@ fn reveal_secret(state: State<'_, AppState>, secret_id: Uuid) -> IpcResult<Strin
     state.with(|vault| Ok(vault.reveal_secret(secret_id)?.expose().to_string()))
 }
 
+/// Write sensitive text and remove it after 30 seconds if it is still current.
+fn write_sensitive_clipboard(app: &tauri::AppHandle, value: &SecretString) -> IpcResult<()> {
+    let expected = value.clone();
+    app.clipboard()
+        .write_text(expected.expose().to_owned())
+        .map_err(|e| IpcError {
+            code: "clipboard",
+            message: format!("could not write to the clipboard: {e}"),
+        })?;
+
+    // Clear only if our value is still there. This avoids erasing something
+    // the user copied after the credential.
+    let cleanup_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        if cleanup_app.clipboard().read_text().ok().as_deref() == Some(expected.expose()) {
+            let _ = cleanup_app.clipboard().clear();
+        }
+    });
+    Ok(())
+}
+
 /// Copy a secret to the clipboard without it passing through the frontend.
 #[tauri::command]
 fn copy_secret(
@@ -395,12 +421,7 @@ fn copy_secret(
     secret_id: Uuid,
 ) -> IpcResult<()> {
     let value = state.with(|vault| vault.reveal_secret(secret_id))?;
-    app.clipboard()
-        .write_text(value.expose().to_string())
-        .map_err(|e| IpcError {
-            code: "clipboard",
-            message: format!("could not write to the clipboard: {e}"),
-        })
+    write_sensitive_clipboard(&app, &value)
 }
 
 /// Copy a whole project as a `.env` file, rendered in Rust.
@@ -412,15 +433,11 @@ fn copy_env(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     project_id: Uuid,
+    environment: Option<Environment>,
 ) -> IpcResult<usize> {
-    let rendered = state.with(|vault| vault.export_env(project_id))?;
+    let rendered = state.with(|vault| vault.export_env_for_environment(project_id, environment))?;
     let count = rendered.expose().lines().filter(|l| !l.is_empty()).count();
-    app.clipboard()
-        .write_text(rendered.expose().to_string())
-        .map_err(|e| IpcError {
-            code: "clipboard",
-            message: format!("could not write to the clipboard: {e}"),
-        })?;
+    write_sensitive_clipboard(&app, &rendered)?;
     Ok(count)
 }
 
