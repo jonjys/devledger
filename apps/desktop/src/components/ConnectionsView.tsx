@@ -14,12 +14,17 @@ import { formatTime, plural } from "../lib/format";
 import type {
   ConnectionSummary,
   ConnectorDescriptor,
+  IdentityNode,
+  ProjectSummary,
   ReconcileItem,
   ReconcileReport,
 } from "../lib/types";
 import { MATCH_STATUS_LABEL } from "../lib/types";
+import QuickAddDialog from "./QuickAddDialog";
+import ServiceCatalog, { type CatalogService } from "./ServiceCatalog";
 
 interface Props {
+  projects?: ProjectSummary[];
   onNotify: (message: string, bad?: boolean) => void;
   onChanged: () => void;
 }
@@ -32,9 +37,12 @@ interface Props {
  * explicit — a request only happens because a button was pressed, and nothing
  * reaches the graph until the import is confirmed.
  */
-export default function ConnectionsView({ onNotify, onChanged }: Props) {
+export default function ConnectionsView({ projects = [], onNotify, onChanged }: Props) {
   const [connectors, setConnectors] = useState<ConnectorDescriptor[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [graph, setGraph] = useState<IdentityNode[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [manualService, setManualService] = useState<CatalogService | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [review, setReview] = useState<ReconcileReport | null>(null);
@@ -43,12 +51,14 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [descriptors, existing] = await Promise.all([
+      const [descriptors, existing, identityGraph] = await Promise.all([
         api.listConnectors(),
         api.listConnections(),
+        api.identityGraph(),
       ]);
       setConnectors(descriptors);
       setConnections(existing);
+      setGraph(identityGraph ?? []);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {
@@ -99,6 +109,32 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
             and nothing is saved until you review it.
           </div>
         </div>
+      </div>
+
+      <ServiceCatalog
+        query={catalogQuery}
+        onQuery={setCatalogQuery}
+        onPick={(service) => {
+          if (service.nativeConnector && connectors.some((c) => c.id === service.nativeConnector)) {
+            setConnecting(service.nativeConnector);
+          } else {
+            setManualService(service);
+          }
+        }}
+        onCustom={() =>
+          setManualService({
+            id: "custom",
+            name: "",
+            category: "Custom",
+            provider: "unknown",
+            capabilities: ["Manual"],
+          })
+        }
+      />
+
+      <div className="connected-heading">
+        <span className="node-eyebrow">Connected services</span>
+        <h2>Your accounts</h2>
       </div>
 
       {connectors.map((connector) => {
@@ -171,6 +207,23 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
           </section>
         );
       })}
+
+      {manualService && (
+        <QuickAddDialog
+          kind="account"
+          graph={graph}
+          projects={projects}
+          presetService={manualService.name || null}
+          presetProvider={manualService.provider}
+          onClose={() => setManualService(null)}
+          onCreated={async () => {
+            setManualService(null);
+            await load();
+            onChanged();
+          }}
+          onNotify={onNotify}
+        />
+      )}
 
       {connecting && (
         <ConnectDialog
