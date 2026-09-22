@@ -110,8 +110,14 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
   }
 
   return (
-    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Review paste">
-      <div className="sheet">
+    <div
+      className="sheet-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Review paste"
+      onClick={onCancel}
+    >
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
         <header>
           <h2>Review what DevLedger found</h2>
           <p>
