@@ -23,16 +23,16 @@ use crate::crypto::kdf::{self, KdfParams};
 use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
 use crate::model::{
-    Account, BillingInterval, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity,
-    Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
+    Account, BillingInterval, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel,
+    Identity, Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
     ServiceProject, Subscription, SubscriptionStatus,
 };
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
-use crate::paste::ParsedSubscription;
 use crate::paste::review::{
     AnswerChoice, ChainRole, CommitOutcome, EntityDecision, ProposedChain, ProposedEndpoint,
     RecommendedAction, ReviewSubmission,
 };
+use crate::paste::ParsedSubscription;
 use crate::paste::{Q_IDENTITY, Q_ORGANIZATION, Q_PROJECT};
 use crate::redact::{Provenance, SourceKind};
 use crate::secret::{mask_preview, SecretBytes, SecretString};
@@ -1052,7 +1052,9 @@ impl Vault {
     ) -> Result<Subscription> {
         let plan = plan.trim();
         if plan.is_empty() {
-            return Err(CoreError::Invalid("a subscription needs a plan name".into()));
+            return Err(CoreError::Invalid(
+                "a subscription needs a plan name".into(),
+            ));
         }
         let identity_id = self.identity_for_optional_email(email)?;
         let label = email
@@ -1074,7 +1076,9 @@ impl Vault {
                 .filter(|r| !r.is_empty())
                 .map(str::to_string),
         };
-        self.unlocked()?.store.create_subscription(account.id, &parsed)
+        self.unlocked()?
+            .store
+            .create_subscription(account.id, &parsed)
     }
 
     /// Move an account under a different identity.

@@ -392,9 +392,7 @@ fn move_service_project(
     account_id: Uuid,
     organization_id: Option<Uuid>,
 ) -> IpcResult<()> {
-    state.with(|vault| {
-        vault.move_service_project(service_project_id, account_id, organization_id)
-    })
+    state.with(|vault| vault.move_service_project(service_project_id, account_id, organization_id))
 }
 
 /// Delete an account and everything under it.
@@ -411,10 +409,7 @@ fn delete_organization(state: State<'_, AppState>, organization_id: Uuid) -> Ipc
 
 /// Delete a provider resource and its secrets.
 #[tauri::command]
-fn delete_service_project(
-    state: State<'_, AppState>,
-    service_project_id: Uuid,
-) -> IpcResult<()> {
+fn delete_service_project(state: State<'_, AppState>, service_project_id: Uuid) -> IpcResult<()> {
     state.with(|vault| vault.delete_service_project(service_project_id))
 }
 

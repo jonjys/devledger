@@ -33,7 +33,10 @@ fn manual_account_lands_under_the_right_provider_and_identity() {
         .expect("create account");
 
     assert_eq!(account.provider, Provider::GitHub);
-    assert_eq!(account.external_ref.as_deref(), Some("github.com/fkornelind"));
+    assert_eq!(
+        account.external_ref.as_deref(),
+        Some("github.com/fkornelind")
+    );
 
     let graph = vault.identity_graph().expect("graph");
     assert_eq!(graph.len(), 1);
@@ -68,7 +71,11 @@ fn a_manual_account_without_an_email_hangs_off_the_unidentified_identity() {
         .expect("create");
 
     let emails = identity_email_ids(&vault);
-    assert_eq!(emails, vec![None], "no email means the Unidentified identity");
+    assert_eq!(
+        emails,
+        vec![None],
+        "no email means the Unidentified identity"
+    );
 }
 
 #[test]
