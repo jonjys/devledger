@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import * as api from "../lib/api";
 import { plural } from "../lib/format";
+import { ModeProvider, useMode } from "../lib/mode";
 import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/types";
 
 import ConnectionsView from "./ConnectionsView";
@@ -25,8 +26,49 @@ interface Props {
   onLock: () => void;
 }
 
+/**
+ * The Indie / Dev switch.
+ *
+ * Indie mode keeps the surface clean; Dev mode unlocks the technical detail.
+ * It is a two-segment control, like the toggles Coinbase uses for
+ * simple/advanced, and its choice is remembered between launches.
+ */
+function ModeToggle() {
+  const { mode, setMode } = useMode();
+  return (
+    <div className="mode-toggle" role="group" aria-label="Display mode">
+      <button
+        type="button"
+        className={mode === "indie" ? "active" : ""}
+        aria-pressed={mode === "indie"}
+        onClick={() => setMode("indie")}
+        title="Clean, human-readable view"
+      >
+        Indie
+      </button>
+      <button
+        type="button"
+        className={mode === "dev" ? "active" : ""}
+        aria-pressed={mode === "dev"}
+        onClick={() => setMode("dev")}
+        title="Full technical detail"
+      >
+        Dev
+      </button>
+    </div>
+  );
+}
+
 /** The main window: Smart Paste on top, projects on the left, vault on the right. */
-export default function DesktopShell({ onLock }: Props) {
+export default function DesktopShell(props: Props) {
+  return (
+    <ModeProvider>
+      <DesktopShellInner {...props} />
+    </ModeProvider>
+  );
+}
+
+function DesktopShellInner({ onLock }: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<PasteAnalysis | null>(null);
@@ -132,6 +174,7 @@ export default function DesktopShell({ onLock }: Props) {
           ))}
         </nav>
         <span className="spacer" />
+        <ModeToggle />
         {/*
           This label has to stay true. Before connectors existed it read "no
           network"; that stopped being accurate the moment Connect & Discover
@@ -190,7 +233,7 @@ export default function DesktopShell({ onLock }: Props) {
 
             <main className="main">
               {current ? (
-                <ProjectVault summary={current} onNotify={notify} />
+                <ProjectVault summary={current} onNotify={notify} onChanged={refresh} />
               ) : (
                 <div className="empty">
                   <p style={{ margin: 0, fontWeight: 600 }}>Your ledger is empty</p>
