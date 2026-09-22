@@ -23,10 +23,12 @@ use crate::crypto::kdf::{self, KdfParams};
 use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
 use crate::model::{
-    Account, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity, Organization,
-    Project, Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject,
+    Account, BillingInterval, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity,
+    Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
+    ServiceProject, Subscription, SubscriptionStatus,
 };
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
+use crate::paste::ParsedSubscription;
 use crate::paste::review::{
     AnswerChoice, ChainRole, CommitOutcome, EntityDecision, ProposedChain, ProposedEndpoint,
     RecommendedAction, ReviewSubmission,
@@ -934,6 +936,195 @@ impl Vault {
     /// Accounts belonging to an identity.
     pub fn accounts_for_identity(&self, identity_id: Uuid) -> Result<Vec<Account>> {
         self.unlocked()?.store.accounts_for_identity(identity_id)
+    }
+
+    // ------------------------------------------------------- manual entry
+
+    /// The shared "Unidentified" identity, created on demand.
+    ///
+    /// Used when the user records something by hand without naming an email, so
+    /// the entry still hangs off a real identity rather than floating free.
+    fn unidentified_identity_id(&self) -> Result<Uuid> {
+        const LABEL: &str = "Unidentified";
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner
+            .store
+            .list_identities()?
+            .into_iter()
+            .find(|i| i.email.is_none() && i.label == LABEL)
+        {
+            return Ok(existing.id);
+        }
+        Ok(inner.store.create_identity(LABEL, None, None)?.id)
+    }
+
+    /// Resolve an identity from an optional email, creating it if needed.
+    fn identity_for_optional_email(&self, email: Option<&str>) -> Result<Uuid> {
+        match email.map(str::trim).filter(|e| !e.is_empty()) {
+            Some(email) => self.identity_id_for_email(email),
+            None => self.unidentified_identity_id(),
+        }
+    }
+
+    /// Create (or reuse) a provider account for an identity resolved by email.
+    ///
+    /// This is the manual counterpart to Connect: it records that an account
+    /// exists without contacting the provider or storing a credential. An
+    /// account already held by the identity for this provider is returned as-is.
+    pub fn create_account_manual(
+        &self,
+        email: Option<&str>,
+        provider: Provider,
+        label: &str,
+        note: Option<&str>,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        let identity_id = self.identity_for_optional_email(email)?;
+        self.add_account(identity_id, provider, trimmed, note)
+    }
+
+    /// Create (or reuse) a provider account under a known identity.
+    pub fn add_account(
+        &self,
+        identity_id: Uuid,
+        provider: Provider,
+        label: &str,
+        note: Option<&str>,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner.store.account_for(identity_id, provider)? {
+            return Ok(existing);
+        }
+        let note = note.map(str::trim).filter(|n| !n.is_empty());
+        inner
+            .store
+            .create_account(identity_id, provider, note, trimmed)
+    }
+
+    /// Record a provider resource by hand, under an account.
+    pub fn create_service_project_manual(
+        &self,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+        provider: Provider,
+        name: &str,
+        reference: Option<&str>,
+    ) -> Result<ServiceProject> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("a resource needs a name".into()));
+        }
+        let reference = reference.map(str::trim).filter(|r| !r.is_empty());
+        self.unlocked()?.store.create_service_project(
+            account_id,
+            organization_id,
+            provider,
+            reference,
+            trimmed,
+            None,
+            Environment::Unknown,
+        )
+    }
+
+    /// Record a subscription by hand, without a paste.
+    ///
+    /// The subscription hangs off an account for the resolved identity. When no
+    /// provider is given it is filed under a generic account, which is enough to
+    /// track "what am I paying for" without pretending to know the provider.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_subscription_manual(
+        &self,
+        email: Option<&str>,
+        provider: Provider,
+        plan: &str,
+        status: SubscriptionStatus,
+        amount_cents: Option<i64>,
+        currency: Option<&str>,
+        interval: Option<BillingInterval>,
+        renews_at: Option<&str>,
+    ) -> Result<Subscription> {
+        let plan = plan.trim();
+        if plan.is_empty() {
+            return Err(CoreError::Invalid("a subscription needs a plan name".into()));
+        }
+        let identity_id = self.identity_for_optional_email(email)?;
+        let label = email
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| provider.label());
+        let account = self.add_account(identity_id, provider, label, None)?;
+        let parsed = ParsedSubscription {
+            plan: plan.to_string(),
+            status,
+            amount_cents,
+            currency: currency
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map(str::to_string),
+            interval,
+            trial_ends_at: renews_at
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_string),
+        };
+        self.unlocked()?.store.create_subscription(account.id, &parsed)
+    }
+
+    /// Move an account under a different identity.
+    pub fn move_account(&self, account_id: Uuid, identity_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .set_account_identity(account_id, identity_id)
+    }
+
+    /// Move an organization under a different account.
+    pub fn move_organization(&self, organization_id: Uuid, account_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .set_organization_account(organization_id, account_id)
+    }
+
+    /// Move a resource under a different account, clearing its organization.
+    pub fn move_service_project(
+        &self,
+        service_project_id: Uuid,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+    ) -> Result<()> {
+        self.unlocked()?.store.set_service_project_account(
+            service_project_id,
+            account_id,
+            organization_id,
+        )
+    }
+
+    /// Delete an account and everything under it.
+    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_account(account_id)
+    }
+
+    /// Delete an organization. Its resources survive, unassigned.
+    pub fn delete_organization(&self, organization_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_organization(organization_id)
+    }
+
+    /// Delete a provider resource and its secrets.
+    pub fn delete_service_project(&self, service_project_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .delete_service_project(service_project_id)
+    }
+
+    /// Delete a subscription.
+    pub fn delete_subscription(&self, subscription_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_subscription(subscription_id)
     }
 
     /// Every relation touching an entity.
