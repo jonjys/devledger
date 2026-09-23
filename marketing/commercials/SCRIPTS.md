@@ -11,7 +11,7 @@ Open a spot:
 - add `&lang=sv` for Swedish type
 - add `&t=8` to start 8 seconds in
 
-End card on every spot: Vibecoder OS, 50% off, code `LAUNCH50`, `https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true`.
+End card on every spot: DevLedger, now downloadable, on your machine. The Gumroad sheet stays a separate, plainer template. These films do not mention it or a discount.
 
 Claims on screen match the product: local encrypted vault, no account, no telemetry, read-only connect, paused badge in review, clipboard clear after 30 seconds unless something else was copied, and a map you can expand, move, or delete a branch from.
 
@@ -24,7 +24,7 @@ Claims on screen match the product: local encrypted vault, no account, no teleme
 | 0:09.8 | A copied example key counts down from 30 and the clipboard clears. |
 | 0:15.2 | Identity → project → supabase / vercel, and `old-sandbox` is cut. |
 | 0:21 | Local. Encrypted. No account. |
-| 0:25.2 | Vibecoder OS. 50% off. |
+| 0:25.2 | Now downloadable. On your machine. |
 
 Swedish open: "Du pausade det. Sen glömde du att det fanns."
 

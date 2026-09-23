@@ -381,7 +381,7 @@
     <div class="film">
       <div class="letterbox top">
         <span>DevLedger</span>
-        <span>Vibecoder OS</span>
+        <span></span>
         <div class="progress"><span id="bar"></span></div>
       </div>
       <div class="stage">
@@ -474,8 +474,6 @@
             <p class="brand rise d1">DEVLEDGER</p>
             <h2 class="rise d2" id="cta-product"></h2>
             <p class="serif rise d2" id="cta-sub"></p>
-            <div class="offer rise d3"><span id="cta-offer"></span><code>LAUNCH50</code></div>
-            <p class="url rise d4">fieldworkstudio.gumroad.com/l/vibecoder-os</p>
           </div>
         </section>
 
@@ -500,9 +498,8 @@
           mapCaption: "Expand a node. Move it. Or delete the whole branch.",
           words: ["Local.", "Encrypted.", "No account."],
           positionSub: "No cloud. No telemetry. Read-only when you connect.",
-          ctaProduct: "Vibecoder OS",
-          ctaSub: "The DevLedger control center.",
-          ctaOffer: "50% off",
+          ctaProduct: "Now downloadable.",
+          ctaSub: "On your machine.",
           spots: {
             clipboard: {
               hookKicker: "Clipboard",
@@ -528,9 +525,8 @@
           mapCaption: "Fäll ut en nod. Flytta den. Eller ta bort hela grenen.",
           words: ["Lokalt.", "Krypterat.", "Inget konto."],
           positionSub: "Inget moln. Ingen telemetri. Skrivskyddat när du ansluter.",
-          ctaProduct: "Vibecoder OS",
-          ctaSub: "DevLedgers kontrollrum.",
-          ctaOffer: "50% rabatt",
+          ctaProduct: "Nu nedladdningsbart.",
+          ctaSub: "På din dator.",
           spots: {
             clipboard: {
               hookKicker: "Urklipp",
@@ -605,7 +601,6 @@
       document.getElementById("position-sub").textContent = copy.positionSub;
       document.getElementById("cta-product").textContent = copy.ctaProduct;
       document.getElementById("cta-sub").textContent = copy.ctaSub;
-      document.getElementById("cta-offer").textContent = copy.ctaOffer;
       document.getElementById("words").innerHTML = copy.words.map((w) => `<li>${w}</li>`).join("");
 
       const scenes = [...document.querySelectorAll(".scene")];
