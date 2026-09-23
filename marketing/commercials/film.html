@@ -285,7 +285,7 @@
       @keyframes grow { to { transform: scaleY(1); } }
       .kids {
         display: flex;
-        gap: 18px;
+        gap: 28px;
         position: relative;
         padding-top: 18px;
       }
@@ -380,8 +380,8 @@
   <body>
     <div class="film">
       <div class="letterbox top">
-        <span id="spot-label">DevLedger</span>
-        <span id="lang-label"></span>
+        <span>DevLedger</span>
+        <span>Vibecoder OS</span>
         <div class="progress"><span id="bar"></span></div>
       </div>
       <div class="stage">
@@ -482,8 +482,8 @@
         <div class="vignette"></div>
       </div>
       <div class="letterbox bottom">
-        <span>Local · encrypted · no account</span>
-        <span id="clock">00:00</span>
+        <span id="clock"></span>
+        <span></span>
       </div>
     </div>
     <script>
@@ -593,8 +593,6 @@
       const seek = Math.max(0, Number(params.get("t") || 0) * 1000);
 
       document.documentElement.lang = lang;
-      document.getElementById("spot-label").textContent = "DevLedger · " + spotName;
-      document.getElementById("lang-label").textContent = lang;
       document.getElementById("hook-kicker").textContent = override.hookKicker || copy.hookKicker;
       document.getElementById("hook-line").textContent = override.hookLine || copy.hookLine;
       document.getElementById("hook-italic").textContent = override.hookItalic ?? copy.hookItalic;
@@ -653,25 +651,32 @@
         }, 48);
       }
 
-      const started = performance.now() - seek;
-      function frame(now) {
-        const elapsed = Math.min(spot.duration, now - started);
-        const sec = Math.max(0, elapsed / 1000);
-        let active = spot.scenes[0][0];
-        for (const [id, at] of spot.scenes) {
-          if (elapsed >= at) active = id;
+      function begin() {
+        const started = performance.now() - seek;
+        function frame(now) {
+          const elapsed = Math.min(spot.duration, now - started);
+          const sec = Math.max(0, elapsed / 1000);
+          let active = spot.scenes[0][0];
+          for (const [id, at] of spot.scenes) {
+            if (elapsed >= at) active = id;
+          }
+          show(active);
+          bar.style.width = (elapsed / spot.duration) * 100 + "%";
+          if (params.get("debug") === "1") {
+            const s = Math.floor(sec);
+            clock.textContent =
+              String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+          }
+          if (elapsed < spot.duration) requestAnimationFrame(frame);
+          else {
+            document.body.dataset.ended = "1";
+            bar.style.width = "100%";
+          }
         }
-        show(active);
-        bar.style.width = (elapsed / spot.duration) * 100 + "%";
-        const s = Math.floor(sec);
-        clock.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-        if (elapsed < spot.duration) requestAnimationFrame(frame);
-        else {
-          document.body.dataset.ended = "1";
-          bar.style.width = "100%";
-        }
+        requestAnimationFrame(frame);
       }
-      requestAnimationFrame(frame);
+      if (params.get("ready") === "1") window.__play = begin;
+      else begin();
     </script>
   </body>
 </html>
