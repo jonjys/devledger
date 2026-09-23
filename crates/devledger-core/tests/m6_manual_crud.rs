@@ -33,17 +33,11 @@ fn manual_account_lands_under_the_right_provider_and_identity() {
         .expect("create account");
 
     assert_eq!(account.provider, Provider::GitHub);
-    assert_eq!(
-        account.external_ref.as_deref(),
-        Some("github.com/test")
-    );
+    assert_eq!(account.external_ref.as_deref(), Some("github.com/test"));
 
     let graph = vault.identity_graph().expect("graph");
     assert_eq!(graph.len(), 1);
-    assert_eq!(
-        graph[0].identity.email.as_deref(),
-        Some("test@gmail.com")
-    );
+    assert_eq!(graph[0].identity.email.as_deref(), Some("test@gmail.com"));
     assert_eq!(graph[0].accounts.len(), 1);
     assert_eq!(graph[0].accounts[0].account.provider, Provider::GitHub);
 }
