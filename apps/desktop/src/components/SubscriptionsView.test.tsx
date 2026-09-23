@@ -25,8 +25,8 @@ function summary(overrides: Partial<SubscriptionSummary["subscription"]> = {}): 
       ...overrides,
     },
     provider: "unknown",
-    account_label: "fkornelind@hotmail.com",
-    identity_email: "fkornelind@hotmail.com",
+    account_label: "test@gmail.com",
+    identity_email: "test@gmail.com",
   };
 }
 
@@ -56,14 +56,14 @@ describe("Subscriptions screen", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Add subscription" });
     await user.type(within(dialog).getByLabelText("Plan name"), "Pro Plan");
-    await user.type(within(dialog).getByLabelText("Identity / email"), "fkornelind@hotmail.com");
+    await user.type(within(dialog).getByLabelText("Identity / email"), "test@gmail.com");
     await user.type(within(dialog).getByLabelText("Price"), "$12");
     await user.type(within(dialog).getByLabelText("Expiration / renewal"), "12/26");
     await user.click(within(dialog).getByRole("button", { name: "Save subscription" }));
 
     await waitFor(() => expect(mocked.createSubscriptionManual).toHaveBeenCalled());
     expect(mocked.createSubscriptionManual).toHaveBeenCalledWith({
-      email: "fkornelind@hotmail.com",
+      email: "test@gmail.com",
       provider: "unknown",
       plan: "Pro Plan",
       status: "active",

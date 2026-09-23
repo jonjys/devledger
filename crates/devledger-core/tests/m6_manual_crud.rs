@@ -25,24 +25,24 @@ fn manual_account_lands_under_the_right_provider_and_identity() {
 
     let account = vault
         .create_account_manual(
-            Some("fkornelind@hotmail.com"),
+            Some("test@gmail.com"),
             Provider::GitHub,
-            "fkornelind",
-            Some("github.com/fkornelind"),
+            "test",
+            Some("github.com/test"),
         )
         .expect("create account");
 
     assert_eq!(account.provider, Provider::GitHub);
     assert_eq!(
         account.external_ref.as_deref(),
-        Some("github.com/fkornelind")
+        Some("github.com/test")
     );
 
     let graph = vault.identity_graph().expect("graph");
     assert_eq!(graph.len(), 1);
     assert_eq!(
         graph[0].identity.email.as_deref(),
-        Some("fkornelind@hotmail.com")
+        Some("test@gmail.com")
     );
     assert_eq!(graph[0].accounts.len(), 1);
     assert_eq!(graph[0].accounts[0].account.provider, Provider::GitHub);
@@ -107,7 +107,7 @@ fn a_manual_subscription_is_recorded_and_can_be_deleted() {
 
     let sub = vault
         .create_subscription_manual(
-            Some("fkornelind@hotmail.com"),
+            Some("test@gmail.com"),
             Provider::Unknown,
             "Pro Plan",
             SubscriptionStatus::Active,

@@ -26,14 +26,14 @@ function graph(): IdentityNode[] {
     {
       identity: {
         id: "identity-1",
-        label: "fkornelind@hotmail.com",
-        email: "fkornelind@hotmail.com",
+        label: "test@gmail.com",
+        email: "test@gmail.com",
         email_blind_index: null,
         created_at: "2026-09-16T10:00:00Z",
       },
       accounts: [
         {
-          account: account("account-1", "fkornelind", "git_hub"),
+          account: account("account-1", "test", "git_hub"),
           organizations: [],
           unassigned: [],
           subscriptions: [],
@@ -71,7 +71,7 @@ describe("Skill tree map", () => {
   it("renders identities and their provider accounts", async () => {
     renderMap();
     expect(await screen.findByRole("heading", { name: "Skill tree" })).toBeInTheDocument();
-    expect(screen.getByText("fkornelind")).toBeInTheDocument();
+    expect(screen.getByText("test")).toBeInTheDocument();
     expect(screen.getByText("GitHub")).toBeInTheDocument();
   });
 
@@ -81,7 +81,7 @@ describe("Skill tree map", () => {
     renderMap();
 
     const identityHead = (
-      await screen.findByText("fkornelind@hotmail.com", { selector: ".map-name" })
+      await screen.findByText("test@gmail.com", { selector: ".map-name" })
     ).closest(".map-head") as HTMLElement;
     await user.click(within(identityHead).getByRole("button", { name: "+ Child node" }));
     await user.type(screen.getByLabelText("Account label"), "second");
@@ -97,7 +97,7 @@ describe("Skill tree map", () => {
     const user = userEvent.setup();
     renderMap();
 
-    await screen.findByText("fkornelind");
+    await screen.findByText("test");
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Move to identity" }),
       "identity-2",
@@ -111,8 +111,8 @@ describe("Skill tree map", () => {
     const user = userEvent.setup();
     renderMap();
 
-    await screen.findByText("fkornelind");
-    await user.click(screen.getByRole("button", { name: "Delete account fkornelind" }));
+    await screen.findByText("test");
+    await user.click(screen.getByRole("button", { name: "Delete account test" }));
 
     await waitFor(() => expect(mocked.deleteAccount).toHaveBeenCalledWith("account-1"));
   });

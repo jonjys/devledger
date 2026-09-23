@@ -228,7 +228,7 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
           <label htmlFor="sub-email">Identity / email</label>
           <input
             id="sub-email"
-            placeholder="fkornelind@hotmail.com"
+            placeholder="test@gmail.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />

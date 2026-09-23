@@ -54,8 +54,8 @@ describe("Service catalog", () => {
       id: "account-1",
       identity_id: "identity-1",
       provider: "git_hub",
-      external_ref: "github.com/fkornelind",
-      label: "fkornelind@hotmail.com",
+      external_ref: "github.com/test",
+      label: "test@gmail.com",
       created_at: "2026-09-16T10:00:00Z",
     });
     const { onChanged } = renderView();
@@ -64,20 +64,20 @@ describe("Service catalog", () => {
     await user.click(within(catalogCard("GitHub")).getByRole("button", { name: "+ Add" }));
     const dialog = screen.getByRole("dialog", { name: "Add GitHub" });
     await user.click(within(dialog).getByRole("tab", { name: "Manual Connection" }));
-    await user.type(within(dialog).getByLabelText("Account email"), "fkornelind@hotmail.com");
+    await user.type(within(dialog).getByLabelText("Account email"), "test@gmail.com");
     await user.type(
       within(dialog).getByLabelText("Custom note / link"),
-      "github.com/fkornelind",
+      "github.com/test",
     );
     await user.click(within(dialog).getByRole("button", { name: "Save account" }));
 
     await waitFor(() => expect(mocked.createAccountManual).toHaveBeenCalled());
     // The bug this fixes: the provider tag must be the serde snake_case form.
     expect(mocked.createAccountManual).toHaveBeenCalledWith(
-      "fkornelind@hotmail.com",
+      "test@gmail.com",
       "git_hub",
-      "fkornelind@hotmail.com",
-      "github.com/fkornelind",
+      "test@gmail.com",
+      "github.com/test",
     );
     expect(onChanged).toHaveBeenCalled();
   });

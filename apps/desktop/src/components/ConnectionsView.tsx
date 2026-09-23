@@ -529,7 +529,7 @@ function ServiceModal({
               <input
                 id="svc-email"
                 autoFocus
-                placeholder="fkornelind@hotmail.com"
+                placeholder="test@gmail.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
@@ -539,7 +539,7 @@ function ServiceModal({
               <label htmlFor="svc-note">Custom note / link</label>
               <input
                 id="svc-note"
-                placeholder="github.com/fkornelind or a webhook URL"
+                placeholder="github.com/test or a webhook URL"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />
