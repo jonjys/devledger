@@ -361,6 +361,66 @@ impl Store {
         }
     }
 
+    /// Fetch one account by id.
+    pub fn account(&self, id: Uuid) -> Result<Option<Account>> {
+        let row = self
+            .conn()
+            .query_row(
+                "SELECT id, identity_id, provider, external_ref, label, created_at
+                 FROM accounts WHERE id = ?1",
+                params![id.to_string()],
+                Self::account_from_row,
+            )
+            .optional()?;
+        Self::finish_account(row)
+    }
+
+    /// Move an account under a different identity.
+    pub fn set_account_identity(&self, account_id: Uuid, identity_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE accounts SET identity_id = ?2 WHERE id = ?1",
+            params![account_id.to_string(), identity_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("account {account_id}")));
+        }
+        self.audit(
+            "account.move",
+            Some("account"),
+            Some(account_id),
+            "Re-parented to another identity",
+        )?;
+        Ok(())
+    }
+
+    /// Delete an account and everything under it.
+    ///
+    /// Organizations, service resources, subscriptions and connections cascade
+    /// through foreign keys; relations that referenced the account are cleared
+    /// here because that table carries no foreign key of its own.
+    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM accounts WHERE id = ?1",
+            params![account_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("account {account_id}")));
+        }
+        self.conn().execute(
+            "DELETE FROM relations
+             WHERE (from_kind = 'account' AND from_id = ?1)
+                OR (to_kind = 'account' AND to_id = ?1)",
+            params![account_id.to_string()],
+        )?;
+        self.audit(
+            "account.delete",
+            Some("account"),
+            Some(account_id),
+            "Deleted account and everything under it",
+        )?;
+        Ok(())
+    }
+
     /// Every account belonging to an identity.
     pub fn accounts_for_identity(&self, identity_id: Uuid) -> Result<Vec<Account>> {
         let mut stmt = self.conn().prepare(
@@ -480,6 +540,52 @@ impl Store {
             }
             None => Ok(None),
         }
+    }
+
+    /// Move an organization under a different account.
+    pub fn set_organization_account(&self, organization_id: Uuid, account_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE organizations SET account_id = ?2 WHERE id = ?1",
+            params![organization_id.to_string(), account_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!(
+                "organization {organization_id}"
+            )));
+        }
+        self.audit(
+            "organization.move",
+            Some("organization"),
+            Some(organization_id),
+            "Re-parented to another account",
+        )?;
+        Ok(())
+    }
+
+    /// Delete an organization. Its resources survive, unassigned.
+    pub fn delete_organization(&self, organization_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM organizations WHERE id = ?1",
+            params![organization_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!(
+                "organization {organization_id}"
+            )));
+        }
+        self.conn().execute(
+            "DELETE FROM relations
+             WHERE (from_kind = 'organization' AND from_id = ?1)
+                OR (to_kind = 'organization' AND to_id = ?1)",
+            params![organization_id.to_string()],
+        )?;
+        self.audit(
+            "organization.delete",
+            Some("organization"),
+            Some(organization_id),
+            "Deleted organization",
+        )?;
+        Ok(())
     }
 
     /// Organizations under an account.
@@ -658,6 +764,65 @@ impl Store {
                 Some(_) => "Assigned to an organization",
                 None => "Cleared its organization",
             },
+        )?;
+        Ok(())
+    }
+
+    /// Move a resource under a different account, setting its organization.
+    ///
+    /// The organization is written verbatim (including `None`), so a resource
+    /// moved to another account never keeps an organization that belongs to the
+    /// account it left.
+    pub fn set_service_project_account(
+        &self,
+        service_project_id: Uuid,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+    ) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE service_projects SET account_id = ?2, organization_id = ?3 WHERE id = ?1",
+            params![
+                service_project_id.to_string(),
+                account_id.to_string(),
+                organization_id.map(|v| v.to_string())
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!(
+                "service project {service_project_id}"
+            )));
+        }
+        self.audit(
+            "service_project.move",
+            Some("service_project"),
+            Some(service_project_id),
+            "Re-parented to another account",
+        )?;
+        Ok(())
+    }
+
+    /// Delete a resource. Its secrets cascade; project links are cleared.
+    pub fn delete_service_project(&self, service_project_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM service_projects WHERE id = ?1",
+            params![service_project_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!(
+                "service project {service_project_id}"
+            )));
+        }
+        self.conn().execute(
+            "DELETE FROM relations
+             WHERE (from_kind = 'service_project' AND from_id = ?1)
+                OR (to_kind = 'service_project' AND to_id = ?1)",
+            params![service_project_id.to_string()],
+        )?;
+        self.audit(
+            "service_project.delete",
+            Some("service_project"),
+            Some(service_project_id),
+            "Deleted resource",
         )?;
         Ok(())
     }
@@ -1389,6 +1554,26 @@ impl Store {
             trial_ends_at: parsed.trial_ends_at.clone(),
             created_at: parse_rfc3339(&created_at)?,
         })
+    }
+
+    /// Delete a subscription.
+    pub fn delete_subscription(&self, subscription_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM subscriptions WHERE id = ?1",
+            params![subscription_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!(
+                "subscription {subscription_id}"
+            )));
+        }
+        self.audit(
+            "subscription.delete",
+            Some("subscription"),
+            Some(subscription_id),
+            "Deleted subscription",
+        )?;
+        Ok(())
     }
 
     const SUBSCRIPTION_COLUMNS: &'static str =

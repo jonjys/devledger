@@ -10,7 +10,7 @@ export interface CatalogService {
 }
 
 export const SERVICE_CATALOG: CatalogService[] = [
-  { id: "github", name: "GitHub", category: "Source", provider: "github", capabilities: ["Repos", "Tokens"] },
+  { id: "github", name: "GitHub", category: "Source", provider: "git_hub", capabilities: ["Repos", "Tokens"] },
   { id: "vercel", name: "Vercel", category: "Deploy", provider: "vercel", capabilities: ["Projects", "Deployments", "Domains"] },
   { id: "supabase", name: "Supabase", category: "Database", provider: "supabase", nativeConnector: "supabase", capabilities: ["Connect", "Organizations", "Projects"] },
   { id: "stripe", name: "Stripe", category: "Payments", provider: "stripe", capabilities: ["Accounts", "API keys"] },
@@ -23,8 +23,8 @@ export const SERVICE_CATALOG: CatalogService[] = [
   { id: "aws", name: "AWS", category: "Cloud", provider: "aws", capabilities: ["Accounts", "API keys"] },
   { id: "gcp", name: "Google Cloud", category: "Cloud", provider: "unknown", capabilities: ["Manual"] },
   { id: "azure", name: "Azure", category: "Cloud", provider: "unknown", capabilities: ["Manual"] },
-  { id: "openai", name: "OpenAI", category: "AI", provider: "openai", capabilities: ["API keys"] },
-  { id: "anthropic", name: "Anthropic", category: "AI", provider: "unknown", capabilities: ["API keys"] },
+  { id: "openai", name: "OpenAI", category: "AI", provider: "open_ai", capabilities: ["API keys"] },
+  { id: "anthropic", name: "Anthropic", category: "AI", provider: "anthropic", capabilities: ["API keys"] },
   { id: "resend", name: "Resend", category: "Email", provider: "unknown", capabilities: ["API keys"] },
   { id: "sentry", name: "Sentry", category: "Observability", provider: "unknown", capabilities: ["Manual"] }, // catalog-only
   { id: "gitlab", name: "GitLab", category: "Source", provider: "unknown", capabilities: ["Manual"] },

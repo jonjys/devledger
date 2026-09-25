@@ -24,10 +24,11 @@ interface Props {
 
 const PROVIDERS: { value: Provider; label: string }[] = [
   { value: "supabase", label: "Supabase" },
-  { value: "github", label: "GitHub" },
+  { value: "git_hub", label: "GitHub" },
   { value: "vercel", label: "Vercel" },
   { value: "stripe", label: "Stripe" },
-  { value: "openai", label: "OpenAI" },
+  { value: "open_ai", label: "OpenAI" },
+  { value: "anthropic", label: "Anthropic" },
   { value: "aws", label: "AWS" },
   { value: "postgres", label: "Postgres" },
   { value: "unknown", label: "Custom / other" },

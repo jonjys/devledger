@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "../lib/api";
 import {
@@ -11,54 +11,159 @@ import {
   summarise,
 } from "../lib/connections";
 import { formatTime, plural } from "../lib/format";
+import { useMode } from "../lib/mode";
 import type {
   ConnectionSummary,
   ConnectorDescriptor,
   IdentityNode,
-  ProjectSummary,
+  Provider,
   ReconcileItem,
   ReconcileReport,
 } from "../lib/types";
 import { MATCH_STATUS_LABEL } from "../lib/types";
-import QuickAddDialog from "./QuickAddDialog";
-import ServiceCatalog, { type CatalogService } from "./ServiceCatalog";
+
+import Modal from "./Modal";
 
 interface Props {
-  projects?: ProjectSummary[];
   onNotify: (message: string, bad?: boolean) => void;
   onChanged: () => void;
 }
+
+/** A service in the catalog that has no live connector — added by hand. */
+interface CatalogEntry {
+  provider: Provider;
+  name: string;
+  summary: string;
+  keyPlaceholder: string;
+}
+
+/**
+ * Services DevLedger knows how to file by hand. These have no automatic
+ * connector yet, so both tabs of the modal save a manual account rather than
+ * reading from the provider. Supabase is intentionally absent: it has a real
+ * connector and appears in its own section above.
+ */
+const CATALOG: CatalogEntry[] = [
+  {
+    provider: "git_hub",
+    name: "GitHub",
+    summary: "Repositories, tokens and webhooks.",
+    keyPlaceholder: "ghp_…",
+  },
+  {
+    provider: "vercel",
+    name: "Vercel",
+    summary: "Deployments and project settings.",
+    keyPlaceholder: "vercel token",
+  },
+  {
+    provider: "stripe",
+    name: "Stripe",
+    summary: "Billing, customers and payouts.",
+    keyPlaceholder: "sk_live_…",
+  },
+  {
+    provider: "open_ai",
+    name: "OpenAI",
+    summary: "API usage and keys.",
+    keyPlaceholder: "sk-…",
+  },
+  {
+    provider: "anthropic",
+    name: "Anthropic",
+    summary: "Claude API keys and usage.",
+    keyPlaceholder: "sk-ant-…",
+  },
+  {
+    provider: "aws",
+    name: "AWS",
+    summary: "Access keys and services.",
+    keyPlaceholder: "AKIA…",
+  },
+  {
+    provider: "postgres",
+    name: "Neon",
+    summary: "Serverless Postgres and connection strings.",
+    keyPlaceholder: "postgresql://…",
+  },
+  {
+    provider: "unknown",
+    name: "Cloudflare",
+    summary: "DNS, workers and API tokens.",
+    keyPlaceholder: "cf token",
+  },
+  {
+    provider: "unknown",
+    name: "Netlify",
+    summary: "Sites and deploy keys.",
+    keyPlaceholder: "nfp_…",
+  },
+  {
+    provider: "unknown",
+    name: "Firebase",
+    summary: "Projects and service accounts.",
+    keyPlaceholder: "service account",
+  },
+  {
+    provider: "unknown",
+    name: "Railway",
+    summary: "Projects and deploy tokens.",
+    keyPlaceholder: "railway token",
+  },
+  {
+    provider: "unknown",
+    name: "Render",
+    summary: "Services and API keys.",
+    keyPlaceholder: "rnd_…",
+  },
+  {
+    provider: "unknown",
+    name: "Sentry", // catalog-only
+    summary: "Projects and auth tokens.",
+    keyPlaceholder: "sntrys_…",
+  },
+  {
+    provider: "unknown",
+    name: "Resend",
+    summary: "Sending domains and API keys.",
+    keyPlaceholder: "re_…",
+  },
+];
+
+/** What the unified Add / Connect modal is currently opened for. */
+type ModalTarget =
+  | { kind: "connector"; connector: ConnectorDescriptor }
+  | { kind: "catalog"; entry: CatalogEntry };
 
 /**
  * Services / Connections.
  *
  * The second way information reaches DevLedger: instead of pasting, you connect
- * a provider account and DevLedger reads its structure. Everything here is
- * explicit — a request only happens because a button was pressed, and nothing
- * reaches the graph until the import is confirmed.
+ * a provider account (read-only, over the network) or record one by hand.
+ * Everything here is explicit — a request only happens because a button was
+ * pressed, and nothing reaches the graph until it is confirmed.
  */
-export default function ConnectionsView({ projects = [], onNotify, onChanged }: Props) {
+export default function ConnectionsView({ onNotify, onChanged }: Props) {
+  const { dev } = useMode();
   const [connectors, setConnectors] = useState<ConnectorDescriptor[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [graph, setGraph] = useState<IdentityNode[]>([]);
-  const [catalogQuery, setCatalogQuery] = useState("");
-  const [manualService, setManualService] = useState<CatalogService | null>(null);
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const [modal, setModal] = useState<ModalTarget | null>(null);
   const [review, setReview] = useState<ReconcileReport | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [descriptors, existing, identityGraph] = await Promise.all([
+      const [descriptors, existing, g] = await Promise.all([
         api.listConnectors(),
         api.listConnections(),
         api.identityGraph(),
       ]);
       setConnectors(descriptors);
       setConnections(existing);
-      setGraph(identityGraph ?? []);
+      setGraph(g ?? []);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {
@@ -69,6 +174,17 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // How many accounts already exist per provider, so a catalog card can say so.
+  const accountsByProvider = useMemo(() => {
+    const counts = new Map<Provider, number>();
+    for (const identity of graph) {
+      for (const account of identity.accounts) {
+        counts.set(account.account.provider, (counts.get(account.account.provider) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [graph]);
 
   async function refresh(connectionId: string) {
     setBusy(true);
@@ -105,36 +221,10 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
         <div>
           <h1>Services &amp; connections</h1>
           <div className="sub">
-            Connect an account and DevLedger reads its structure directly. Read-only,
-            and nothing is saved until you review it.
+            Connect an account and DevLedger reads its structure directly, or add any
+            service by hand. Read-only, and nothing is saved until you review it.
           </div>
         </div>
-      </div>
-
-      <ServiceCatalog
-        query={catalogQuery}
-        onQuery={setCatalogQuery}
-        onPick={(service) => {
-          if (service.nativeConnector && connectors.some((c) => c.id === service.nativeConnector)) {
-            setConnecting(service.nativeConnector);
-          } else {
-            setManualService(service);
-          }
-        }}
-        onCustom={() =>
-          setManualService({
-            id: "custom",
-            name: "",
-            category: "Custom",
-            provider: "unknown",
-            capabilities: ["Manual"],
-          })
-        }
-      />
-
-      <div className="connected-heading">
-        <span className="node-eyebrow">Connected services</span>
-        <h2>Your accounts</h2>
       </div>
 
       {connectors.map((connector) => {
@@ -145,7 +235,7 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
               <span className="connector-name">{connector.display_name}</span>
               {connector.read_only && <span className="tag explicit">read-only</span>}
               <span className="spacer" />
-              <button type="button" onClick={() => setConnecting(connector.id)}>
+              <button type="button" onClick={() => setModal({ kind: "connector", connector })}>
                 {existing.length === 0 ? "Connect" : "+ Connect another account"}
               </button>
             </div>
@@ -208,32 +298,47 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
         );
       })}
 
-      {manualService && (
-        <QuickAddDialog
-          kind="account"
-          graph={graph}
-          projects={projects}
-          presetService={manualService.name || null}
-          presetProvider={manualService.provider}
-          onClose={() => setManualService(null)}
-          onCreated={async () => {
-            setManualService(null);
-            await load();
-            onChanged();
-          }}
-          onNotify={onNotify}
-        />
-      )}
+      <section className="section catalog">
+        <h3>Add a service</h3>
+        <div className="catalog-grid">
+          {CATALOG.map((entry) => {
+            const count = accountsByProvider.get(entry.provider) ?? 0;
+            return (
+              <div key={entry.name} className="catalog-card">
+                <div className="catalog-head">
+                  <span className="catalog-name">{entry.name}</span>
+                  {dev && <code className="ref">{entry.provider}</code>}
+                </div>
+                <p className="catalog-summary">{entry.summary}</p>
+                <div className="catalog-foot">
+                  <span className="catalog-count">
+                    {count === 0 ? "Not added yet." : plural(count, "account")}
+                  </span>
+                  <span className="spacer" />
+                  <button type="button" onClick={() => setModal({ kind: "catalog", entry })}>
+                    + Add
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
-      {connecting && (
-        <ConnectDialog
-          connector={connectors.find((c) => c.id === connecting)!}
-          onCancel={() => setConnecting(null)}
+      {modal && (
+        <ServiceModal
+          target={modal}
+          onCancel={() => setModal(null)}
           onNotify={onNotify}
           onConnected={async (report) => {
-            setConnecting(null);
+            setModal(null);
             setReview(report);
             await load();
+          }}
+          onSavedManually={async () => {
+            setModal(null);
+            await load();
+            onChanged();
           }}
         />
       )}
@@ -254,45 +359,105 @@ export default function ConnectionsView({ projects = [], onNotify, onChanged }: 
   );
 }
 
-interface ConnectProps {
-  connector: ConnectorDescriptor;
+interface ServiceModalProps {
+  target: ModalTarget;
   onCancel: () => void;
   onConnected: (report: ReconcileReport) => void;
+  onSavedManually: () => void;
   onNotify: (message: string, bad?: boolean) => void;
 }
 
+type TabKey = "api" | "manual";
+
 /**
- * The connect dialog.
+ * The unified Add / Connect modal.
  *
- * Deliberately not a password box. DevLedger sends you to the provider's own
- * dashboard to mint a scoped, revocable token, and never sits in the
- * authentication path.
+ * Two tabs, always: **API Connection** verifies a token against a live
+ * connector when one exists (Supabase), and **Manual Connection** records an
+ * account by hand from an email and a note — no real secret required. Services
+ * without a connector still offer both, but the API tab saves rather than
+ * fetches, because there is nothing to fetch from yet.
  */
-function ConnectDialog({ connector, onCancel, onConnected, onNotify }: ConnectProps) {
+function ServiceModal({
+  target,
+  onCancel,
+  onConnected,
+  onSavedManually,
+  onNotify,
+}: ServiceModalProps) {
+  const connector = target.kind === "connector" ? target.connector : null;
+  const provider: Provider =
+    target.kind === "connector" ? target.connector.provider : target.entry.provider;
+  const displayName =
+    target.kind === "connector" ? target.connector.display_name : target.entry.name;
+  // Kept exactly "Connect" for the live connector so existing flows and tests
+  // that open it by name keep working.
+  const dialogLabel = target.kind === "connector" ? "Connect" : `Add ${displayName}`;
+
+  const [tab, setTab] = useState<TabKey>("api");
+
+  // API tab state.
   const [token, setToken] = useState("");
   const [label, setLabel] = useState("");
+  // Manual tab state.
+  const [email, setEmail] = useState("");
+  const [note, setNote] = useState("");
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const createUrl =
-    connector.auth.sort === "personal_access_token" ? connector.auth.create_url : null;
+    connector?.auth.sort === "personal_access_token" ? connector.auth.create_url : null;
   const guidance =
-    connector.auth.sort === "personal_access_token" ? connector.auth.guidance : "";
+    connector?.auth.sort === "personal_access_token" ? connector.auth.guidance : "";
+  const expectedPrefix =
+    connector?.auth.sort === "personal_access_token" ? connector.auth.expected_prefix : "";
+  const keyPlaceholder =
+    target.kind === "catalog" ? target.entry.keyPlaceholder : `${expectedPrefix}…`;
 
-  async function submit() {
-    if (!token.trim() || !label.trim() || busy) return;
+  async function submitApi() {
+    if (!label.trim() || !token.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const outcome = await api.connectorConnect(connector.id, token.trim(), label.trim());
-      // Drop the token from component state the moment it has been used.
-      setToken("");
-      onNotify(
-        outcome.reconnected
-          ? `Reconnected ${outcome.connection.label}`
-          : `Connected ${outcome.connection.label}: ${summarise(outcome.report)}`,
+      if (connector) {
+        const outcome = await api.connectorConnect(connector.id, token.trim(), label.trim());
+        setToken("");
+        onNotify(
+          outcome.reconnected
+            ? `Reconnected ${outcome.connection.label}`
+            : `Connected ${outcome.connection.label}: ${summarise(outcome.report)}`,
+        );
+        onConnected(outcome.report);
+      } else {
+        // No live connector: file it as a manual account. The key is not stored
+        // — DevLedger cannot verify it, so it is never persisted here.
+        await api.createAccountForEmail(null, provider, label.trim(), null);
+        setToken("");
+        onNotify(`Added ${displayName} account ${label.trim()}`);
+        onSavedManually();
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitManual() {
+    const finalLabel = email.trim() || displayName;
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createAccountForEmail(
+        email.trim() || null,
+        provider,
+        finalLabel,
+        note.trim() || null,
       );
-      onConnected(outcome.report);
+      onNotify(`Saved ${displayName} account`);
+      onSavedManually();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -301,94 +466,157 @@ function ConnectDialog({ connector, onCancel, onConnected, onNotify }: ConnectPr
   }
 
   return (
-    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Connect">
-      <div className="sheet" style={{ maxWidth: 560 }}>
-        <header>
-          <h2>Connect {connector.display_name}</h2>
-          <p>DevLedger will read your organizations and projects. It cannot change them.</p>
-        </header>
+    <Modal label={dialogLabel} onClose={onCancel} maxWidth={560}>
+      <header>
+        <h2>
+          {connector ? "Connect" : "Add"} {displayName}
+        </h2>
+        <p>
+          {connector
+            ? "DevLedger will read your organizations and projects. It cannot change them."
+            : "Record this service in your ledger. Nothing here leaves your machine."}
+        </p>
+      </header>
 
-        <div className="scroll">
-          {error && (
-            <div className="error" role="alert">
-              {error}
+      <div className="modal-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "api"}
+          className={tab === "api" ? "active" : ""}
+          onClick={() => setTab("api")}
+        >
+          API Connection
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "manual"}
+          className={tab === "manual" ? "active" : ""}
+          onClick={() => setTab("manual")}
+        >
+          Manual Connection
+        </button>
+      </div>
+
+      <div className="scroll">
+        {error && (
+          <div className="error" role="alert">
+            {error}
+          </div>
+        )}
+
+        {tab === "api" ? (
+          <>
+            {connector ? (
+              <ol className="connect-steps">
+                <li>
+                  Open{" "}
+                  {createUrl ? (
+                    <code>{createUrl}</code>
+                  ) : (
+                    <span>your provider&apos;s token settings</span>
+                  )}{" "}
+                  in your browser and create an access token.
+                </li>
+                <li>{guidance}</li>
+                <li>Paste it below. DevLedger checks it, then stores it encrypted.</li>
+              </ol>
+            ) : (
+              <div className="note">
+                DevLedger does not have an automatic connector for {displayName} yet, so it
+                cannot fetch from it. The key below is not stored — the account is saved so
+                you can track it, and you can add its resources by hand from the Map.
+              </div>
+            )}
+
+            <div className="field">
+              <label htmlFor="svc-label">Label this account</label>
+              <input
+                id="svc-label"
+                autoFocus
+                placeholder="e.g. the email this account uses"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+              />
             </div>
-          )}
 
-          <ol className="connect-steps">
-            <li>
-              Open{" "}
-              {createUrl ? (
-                <code>{createUrl}</code>
-              ) : (
-                <span>your provider&apos;s token settings</span>
-              )}{" "}
-              in your browser and create an access token.
-            </li>
-            <li>{guidance}</li>
-            <li>Paste it below. DevLedger checks it, then stores it encrypted.</li>
-          </ol>
+            <div className="field">
+              <label htmlFor="svc-token">{connector ? "Access token" : "API key / token"}</label>
+              <input
+                id="svc-token"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={keyPlaceholder}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitApi();
+                }}
+              />
+            </div>
 
-          <div className="field">
-            <label htmlFor="connect-label">Label this account</label>
-            <input
-              id="connect-label"
-              autoFocus
-              placeholder="e.g. the email this account uses"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-            <p className="q-note">
-              {connector.display_name} does not tell DevLedger which account a token
-              belongs to, so name it yourself. Using the email keeps your accounts
-              distinguishable.
-            </p>
-          </div>
+            {connector && (
+              <div className="note">
+                Never paste your {displayName} password here. DevLedger only accepts a token
+                you created yourself, and you can revoke it at any time from the same page.
+                Requests go only to <code>{connector.allowed_hosts.join(", ")}</code>.
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="note">
+              Save any service without an API secret. Enter the account email and, if you
+              like, a note or link — a dashboard URL, a webhook, anything worth remembering.
+            </div>
 
-          <div className="field">
-            <label htmlFor="connect-token">Access token</label>
-            <input
-              id="connect-token"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={
-                connector.auth.sort === "personal_access_token"
-                  ? `${connector.auth.expected_prefix}…`
-                  : ""
-              }
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void submit();
-              }}
-            />
-          </div>
+            <div className="field">
+              <label htmlFor="svc-email">Account email</label>
+              <input
+                id="svc-email"
+                autoFocus
+                placeholder="test@gmail.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
 
-          <div className="note">
-            Never paste your {connector.display_name} password here. DevLedger only
-            accepts a token you created yourself, and you can revoke it at any time from
-            the same page. Requests go only to{" "}
-            <code>{connector.allowed_hosts.join(", ")}</code>.
-          </div>
-        </div>
+            <div className="field">
+              <label htmlFor="svc-note">Custom note / link</label>
+              <input
+                id="svc-note"
+                placeholder="github.com/test or a webhook URL"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
+          </>
+        )}
+      </div>
 
-        <footer>
-          <span className="spacer" />
-          <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
+      <footer>
+        <span className="spacer" />
+        <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        {tab === "api" ? (
           <button
             type="button"
             className="primary"
-            onClick={submit}
+            onClick={submitApi}
             disabled={busy || !token.trim() || !label.trim()}
           >
-            {busy ? "Checking…" : "Connect"}
+            {busy ? "Checking…" : connector ? "Connect" : "Save"}
           </button>
-        </footer>
-      </div>
-    </div>
+        ) : (
+          <button type="button" className="primary" onClick={submitManual} disabled={busy}>
+            {busy ? "Saving…" : "Save account"}
+          </button>
+        )}
+      </footer>
+    </Modal>
   );
 }
 
@@ -441,74 +669,72 @@ function ImportReview({ report, onCancel, onImported, onNotify }: ReviewProps) {
   const toImport = countToImport(report, selected);
 
   return (
-    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Review import">
-      <div className="sheet">
-        <header>
-          <h2>Review import</h2>
-          <p>{summarise(report)} · nothing is saved until you confirm.</p>
-        </header>
+    <Modal label="Review import" onClose={onCancel}>
+      <header>
+        <h2>Review import</h2>
+        <p>{summarise(report)} · nothing is saved until you confirm.</p>
+      </header>
 
-        <div className="scroll">
-          {report.conflicts > 0 && (
-            <div className="finding critical">
-              <div className="t">
-                {plural(report.conflicts, "conflict")} cannot be imported
-              </div>
-              <div className="d">
-                These already belong to a different connected account. DevLedger will not
-                move them between accounts — resolve it at the provider, or disconnect the
-                other account first.
-              </div>
+      <div className="scroll">
+        {report.conflicts > 0 && (
+          <div className="finding critical">
+            <div className="t">
+              {plural(report.conflicts, "conflict")} cannot be imported
             </div>
-          )}
+            <div className="d">
+              These already belong to a different connected account. DevLedger will not
+              move them between accounts — resolve it at the provider, or disconnect the
+              other account first.
+            </div>
+          </div>
+        )}
 
-          {groups.length === 0 && <div className="empty">Nothing was discovered.</div>}
+        {groups.length === 0 && <div className="empty">Nothing was discovered.</div>}
 
-          {groups.map((group, i) => (
-            <section key={group.organization?.provider_id ?? `orphans-${i}`} className="section">
-              <h3>
-                {group.organization
-                  ? group.organization.name
-                  : "Projects with no visible organization"}
-              </h3>
+        {groups.map((group, i) => (
+          <section key={group.organization?.provider_id ?? `orphans-${i}`} className="section">
+            <h3>
+              {group.organization
+                ? group.organization.name
+                : "Projects with no visible organization"}
+            </h3>
 
-              {group.organization && (
-                <ImportRow
-                  item={group.organization}
-                  checked={selected.has(group.organization.provider_id)}
-                  onToggle={() => toggle(group.organization!.provider_id)}
-                />
-              )}
+            {group.organization && (
+              <ImportRow
+                item={group.organization}
+                checked={selected.has(group.organization.provider_id)}
+                onToggle={() => toggle(group.organization!.provider_id)}
+              />
+            )}
 
-              {group.projects.map((project) => (
-                <ImportRow
-                  key={project.provider_id}
-                  item={project}
-                  indented
-                  checked={selected.has(project.provider_id)}
-                  onToggle={() => toggle(project.provider_id)}
-                />
-              ))}
-            </section>
-          ))}
-        </div>
-
-        <footer>
-          <span className="spacer" />
-          <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={apply}
-            disabled={busy || toImport === 0}
-          >
-            {busy ? "Importing…" : toImport === 0 ? "Nothing selected" : `Import ${toImport}`}
-          </button>
-        </footer>
+            {group.projects.map((project) => (
+              <ImportRow
+                key={project.provider_id}
+                item={project}
+                indented
+                checked={selected.has(project.provider_id)}
+                onToggle={() => toggle(project.provider_id)}
+              />
+            ))}
+          </section>
+        ))}
       </div>
-    </div>
+
+      <footer>
+        <span className="spacer" />
+        <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={apply}
+          disabled={busy || toImport === 0}
+        >
+          {busy ? "Importing…" : toImport === 0 ? "Nothing selected" : `Import ${toImport}`}
+        </button>
+      </footer>
+    </Modal>
   );
 }
 

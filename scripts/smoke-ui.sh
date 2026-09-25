@@ -51,9 +51,11 @@ xdotool type --delay 35 "$PASSPHRASE"; sleep 1
 xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
-xdotool mousemove --window "$WINDOW" 500 30 click 1; sleep 4
+# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window.
+xdotool mousemove --window "$WINDOW" 120 270 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-xdotool mousemove --window "$WINDOW" 830 390 click 1; sleep 3
+# The Supabase "Connect" button sits at the right of the first connector row.
+xdotool mousemove --window "$WINDOW" 1040 210 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 DRIVE
 chmod +x "$DATA/drive.sh"

@@ -19,8 +19,11 @@ only ever reads.
 | **M4** | Multi-account separation, shared resources, project links, subscriptions and attention queue | Done |
 | **M5** | Read-only Supabase connector with explicit review before import | Done |
 | **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
+| **Launch** | Overview dashboard, Indie/Dev display, skill-tree editing, secrets and attention views, installer release workflow | Done |
 
-203 tests in total: 133 Rust, 70 TypeScript, plus a screenshot-based UI smoke test.
+143 Rust tests and 89 TypeScript tests, plus a screenshot-based UI smoke test.
+
+The launch build keeps the 0.6 ledger (encrypted vault, Smart Paste, Supabase connect, visual stack) and adds the shell it ships with: a sidebar, an Overview home screen, Indie versus Dev labels, and by-hand create, move and delete for accounts, resources and subscriptions.
 
 ## Running it
 
