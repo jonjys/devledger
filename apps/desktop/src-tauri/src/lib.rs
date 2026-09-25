@@ -21,7 +21,8 @@ use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
 use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
 use devledger_core::model::{
-    Account, EntityKind, EntityRef, Identity, Organization, Project, Relation, ServiceProject,
+    Account, BillingInterval, EntityKind, EntityRef, Identity, Organization, Project, Provider,
+    Relation, ServiceProject, Subscription, SubscriptionStatus,
 };
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
@@ -286,6 +287,138 @@ fn accounts_for_identity(state: State<'_, AppState>, identity_id: Uuid) -> IpcRe
     state.with(|vault| vault.accounts_for_identity(identity_id))
 }
 
+// ------------------------------------------------------------- manual entry
+
+/// Record a provider account by hand, resolving the identity from an email.
+///
+/// The manual counterpart to Connect: nothing touches the network and no
+/// credential is stored. `provider` deserialises from its snake_case tag, so
+/// GitHub arrives as `git_hub` and OpenAI as `open_ai`.
+#[tauri::command]
+fn create_account_manual(
+    state: State<'_, AppState>,
+    email: Option<String>,
+    provider: Provider,
+    label: String,
+    note: Option<String>,
+) -> IpcResult<Account> {
+    state.with(|vault| {
+        vault.create_account_manual(email.as_deref(), provider, &label, note.as_deref())
+    })
+}
+
+/// Add a provider account under a known identity.
+#[tauri::command]
+fn add_account(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    provider: Provider,
+    label: String,
+    note: Option<String>,
+) -> IpcResult<Account> {
+    state.with(|vault| vault.add_account(identity_id, provider, &label, note.as_deref()))
+}
+
+/// Record a provider resource by hand, under an account.
+#[tauri::command]
+fn create_service_project_manual(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+    organization_id: Option<Uuid>,
+    provider: Provider,
+    name: String,
+    reference: Option<String>,
+) -> IpcResult<ServiceProject> {
+    state.with(|vault| {
+        vault.create_service_project_manual(
+            account_id,
+            organization_id,
+            provider,
+            &name,
+            reference.as_deref(),
+        )
+    })
+}
+
+/// Record a subscription by hand, without a paste.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn create_subscription_manual(
+    state: State<'_, AppState>,
+    email: Option<String>,
+    provider: Provider,
+    plan: String,
+    status: SubscriptionStatus,
+    amount_cents: Option<i64>,
+    currency: Option<String>,
+    interval: Option<BillingInterval>,
+    renews_at: Option<String>,
+) -> IpcResult<Subscription> {
+    state.with(|vault| {
+        vault.create_subscription_manual(
+            email.as_deref(),
+            provider,
+            &plan,
+            status,
+            amount_cents,
+            currency.as_deref(),
+            interval,
+            renews_at.as_deref(),
+        )
+    })
+}
+
+/// Move an account under a different identity.
+#[tauri::command]
+fn move_account(state: State<'_, AppState>, account_id: Uuid, identity_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.move_account(account_id, identity_id))
+}
+
+/// Move an organization under a different account.
+#[tauri::command]
+fn move_organization(
+    state: State<'_, AppState>,
+    organization_id: Uuid,
+    account_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.move_organization(organization_id, account_id))
+}
+
+/// Move a resource under a different account, clearing its organization.
+#[tauri::command]
+fn move_service_project(
+    state: State<'_, AppState>,
+    service_project_id: Uuid,
+    account_id: Uuid,
+    organization_id: Option<Uuid>,
+) -> IpcResult<()> {
+    state.with(|vault| vault.move_service_project(service_project_id, account_id, organization_id))
+}
+
+/// Delete an account and everything under it.
+#[tauri::command]
+fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_account(account_id))
+}
+
+/// Delete an organization. Its resources survive, unassigned.
+#[tauri::command]
+fn delete_organization(state: State<'_, AppState>, organization_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_organization(organization_id))
+}
+
+/// Delete a provider resource and its secrets.
+#[tauri::command]
+fn delete_service_project(state: State<'_, AppState>, service_project_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_service_project(service_project_id))
+}
+
+/// Delete a subscription.
+#[tauri::command]
+fn delete_subscription(state: State<'_, AppState>, subscription_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_subscription(subscription_id))
+}
+
 /// Every relation touching an entity, in either direction.
 #[tauri::command]
 fn relations_for(
@@ -501,6 +634,17 @@ pub fn run() {
             organizations_for_account,
             list_identities,
             accounts_for_identity,
+            create_account_manual,
+            add_account,
+            create_service_project_manual,
+            create_subscription_manual,
+            move_account,
+            move_organization,
+            move_service_project,
+            delete_account,
+            delete_organization,
+            delete_service_project,
+            delete_subscription,
             relations_for,
             delete_secret,
             secret_provenance,

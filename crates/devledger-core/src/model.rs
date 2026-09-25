@@ -129,6 +129,8 @@ pub enum Provider {
     Aws,
     /// Vercel.
     Vercel,
+    /// Anthropic.
+    Anthropic,
     /// Anything recognised as a credential but not attributable.
     Unknown,
 }
@@ -144,6 +146,7 @@ impl Provider {
             Provider::OpenAi => "OpenAI",
             Provider::Aws => "AWS",
             Provider::Vercel => "Vercel",
+            Provider::Anthropic => "Anthropic",
             Provider::Unknown => "Unknown",
         }
     }

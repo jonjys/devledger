@@ -1,6 +1,24 @@
 // Display helpers. Nothing here ever receives a secret value.
 
-import type { Environment, SecretKind, Severity } from "./types";
+import type { Environment, Provider, SecretKind, Severity } from "./types";
+
+// Human-readable provider names. The keys are the serde snake_case tags that
+// cross IPC, so `git_hub` and `open_ai` render as "GitHub" and "OpenAI".
+const PROVIDER_LABELS: Record<Provider, string> = {
+  supabase: "Supabase",
+  postgres: "Postgres",
+  git_hub: "GitHub",
+  stripe: "Stripe",
+  open_ai: "OpenAI",
+  aws: "AWS",
+  vercel: "Vercel",
+  anthropic: "Anthropic",
+  unknown: "Unknown",
+};
+
+export function providerLabel(provider: Provider): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
 
 const SECRET_KIND_LABELS: Record<SecretKind, string> = {
   supabase_anon_key: "Supabase anon key",

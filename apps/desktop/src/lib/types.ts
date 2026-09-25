@@ -4,14 +4,19 @@
 // backend only ever sends `preview`, and plaintext arrives solely as the return
 // value of `revealSecret`.
 
+// These tags match serde's `snake_case` encoding of the Rust `Provider` enum,
+// which is what actually crosses the IPC boundary. `GitHub` becomes `git_hub`
+// and `OpenAi` becomes `open_ai`; getting these wrong is what broke adding a
+// GitHub account by hand.
 export type Provider =
   | "supabase"
   | "postgres"
-  | "github"
+  | "git_hub"
   | "stripe"
-  | "openai"
+  | "open_ai"
   | "aws"
   | "vercel"
+  | "anthropic"
   | "unknown";
 
 export type Environment = "development" | "staging" | "production" | "unknown";
@@ -241,6 +246,8 @@ export type SubscriptionStatus =
   | "canceled"
   | "free"
   | "unknown";
+
+export type BillingInterval = "monthly" | "yearly";
 
 export interface ParsedSubscription {
   plan: string;
