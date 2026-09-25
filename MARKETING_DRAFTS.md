@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-25
+Feature Built: Overview dashboard — a home screen that shows projects, identities, trials ending, and monthly spend, plus which trials are about to start charging.
+Suggested Tweet:
+"Another trial turned into a charge you forgot?
+
+DevLedger's new Overview shows trials ending and monthly spend in one glance.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
