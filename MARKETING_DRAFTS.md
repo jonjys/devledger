@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-25
+Feature Built: Environment-scoped .env copy — export Development, Staging, or Production instead of every key at once.
+Suggested Tweet:
+"Pasted a .env and shipped prod keys to localhost?
+
+DevLedger copies one environment. Dev, staging, or production.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
