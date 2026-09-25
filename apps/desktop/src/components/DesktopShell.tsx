@@ -374,7 +374,9 @@ function DesktopShellInner({ onLock }: Props) {
 
           {view === "connections" && <ConnectionsView onNotify={notify} onChanged={refresh} />}
 
-          {view === "subscriptions" && <SubscriptionsView onNotify={notify} />}
+          {view === "subscriptions" && (
+            <SubscriptionsView onNotify={notify} onChanged={refresh} />
+          )}
 
           {view === "secrets" && <SecretsView onNotify={notify} refreshKey={refreshKey} />}
 

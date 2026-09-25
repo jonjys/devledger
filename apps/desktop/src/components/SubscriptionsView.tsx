@@ -9,6 +9,7 @@ import Modal from "./Modal";
 
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
+  onChanged?: () => void;
 }
 
 function money(cents: number | null, currency: string | null): string {
@@ -34,7 +35,7 @@ const STATUS_OPTIONS: [SubscriptionStatus, string][] = [
 ];
 
 /** Subscriptions and trials, whether saved from a paste or added by hand. */
-export default function SubscriptionsView({ onNotify }: Props) {
+export default function SubscriptionsView({ onNotify, onChanged }: Props) {
   const { dev } = useMode();
   const [rows, setRows] = useState<SubscriptionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +61,7 @@ export default function SubscriptionsView({ onNotify }: Props) {
     try {
       await api.deleteSubscription(id);
       await load();
+      onChanged?.();
       onNotify(`Deleted ${plan}`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
@@ -151,6 +153,7 @@ export default function SubscriptionsView({ onNotify }: Props) {
           onSaved={async () => {
             setAdding(false);
             await load();
+            onChanged?.();
           }}
         />
       )}
