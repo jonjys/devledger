@@ -971,6 +971,67 @@ button.tiny { padding: 4px 10px; font-size: 11.5px; }
 .spend-amt.accent { color: var(--accent); }
 .spend-row.total { border-top: 1px solid var(--border-strong); margin-top: 4px; }
 
+/* ---- phone shell (iPhone and Android) ---- */
+@media (max-width: 800px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+  .app-main { padding-top: env(safe-area-inset-top); min-width: 0; }
+  .app-side {
+    order: 2;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    padding: 4px 6px calc(6px + env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+  .side-brand { display: none; }
+  .side-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .nav-group { display: flex; flex-direction: row; margin: 0; }
+  .nav-section { display: none; }
+  .nav-item {
+    flex-direction: column;
+    width: auto;
+    min-width: 68px;
+    gap: 2px;
+    padding: 6px 8px;
+    margin: 0;
+    font-size: 10px;
+  }
+  .nav-label { flex: none; font-size: 10px; text-align: center; line-height: 1.15; }
+  .nav-item.active::before { display: none; }
+  .side-foot {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 0;
+    padding-top: 4px;
+    gap: 8px;
+  }
+  .lock-btn { width: auto; padding: 6px 10px; font-size: 12px; }
+  .mode-toggle button { padding: 4px 8px; font-size: 11.5px; }
+  .pastebar { padding: 8px 12px; gap: 8px; }
+  .content { padding: 14px 12px 18px; }
+  .stat-row { grid-template-columns: 1fr 1fr; }
+  .stat { padding: 12px; }
+  .stat-num { font-size: 22px; }
+  .dash-head { flex-wrap: wrap; }
+  .proj-pane { grid-template-columns: 1fr; }
+  .catalog-grid { grid-template-columns: 1fr; }
+  .sheet-backdrop { padding: 0; align-items: end; }
+  .sheet {
+    max-height: min(92%, 100%);
+    border-radius: 16px 16px 0 0;
+    border-bottom: 0;
+  }
+  .api-row { grid-template-columns: 36px minmax(0, 1fr); }
+  .api-row code, .api-row button { grid-column: 2; }
+}
+
 /* ---- projects two-pane ---- */
 .proj-pane { display: grid; grid-template-columns: 240px 1fr; gap: 20px; align-items: start; }
 .proj-list { display: flex; flex-direction: column; gap: 3px; }

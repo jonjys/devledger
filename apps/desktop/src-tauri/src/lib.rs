@@ -645,12 +645,13 @@ fn connector_disconnect(state: State<'_, AppState>, connection_id: Uuid) -> IpcR
     state.with(|vault| vault.disconnect(connection_id))
 }
 
-/// Build and run the desktop application.
+/// Build and run the application on desktop, Android, and iOS.
 ///
 /// # Panics
 ///
 /// Panics if the platform app-data directory cannot be resolved, which means
 /// there is nowhere to put a vault.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())

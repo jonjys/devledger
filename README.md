@@ -42,6 +42,29 @@ npm run tauri build        # Windows installers land in src-tauri/target/release
 `apps/desktop/src-tauri/target/release/bundle/`. The CI workflow builds the same
 artifacts on every push and attaches them to the run.
 
+Phone builds use the same vault. The shell collapses to a bottom navigation bar
+below 800px wide, so the iPhone and Android apps are the desktop app, not a
+separate product.
+
+```bash
+# Android. Needs ANDROID_HOME, NDK_HOME and a JDK.
+./scripts/build-android-apk.sh
+# APK (arm64, installs on current phones): apps/desktop/src-tauri/gen/android/app/build/outputs/apk/
+
+# iOS, on a Mac with Xcode:
+cd apps/desktop
+npm run tauri ios init -- --ci
+npm run tauri ios build -- --ci --target aarch64
+```
+
+A version tag (`v*`) also builds the Android APK and the iOS app and attaches
+them to the GitHub release. The Android APK installs directly (allow installs
+from the browser). Apple only installs an IPA that was signed with an Apple
+Developer identity, so the iPhone file is signed when `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD` and `APPLE_PROVISIONING_PROFILE` are set on the
+repository; otherwise the release contains an unsigned IPA that still has to be
+signed before it will open on a phone.
+
 ## Layout
 
 ```

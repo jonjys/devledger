@@ -15,8 +15,8 @@
         "title": "DevLedger",
         "width": 1180,
         "height": 800,
-        "minWidth": 940,
-        "minHeight": 620,
+        "minWidth": 380,
+        "minHeight": 640,
         "resizable": true,
         "center": true,
         "theme": null
