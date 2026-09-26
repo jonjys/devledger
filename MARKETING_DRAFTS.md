@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-26
+Feature Built: Secrets vault — every key across every project in one table, with reveal, hide, and copy.
+Suggested Tweet:
+"Your API keys live in five projects. One of them is still sitting on screen.
+
+DevLedger keeps every secret in one vault. Reveal it, hide it, or copy it.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
