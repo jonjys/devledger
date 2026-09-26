@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-26
+Feature Built: Adding an account always creates a new one, and any email alias resolves to the same person instead of a duplicate.
+Suggested Tweet:
+"Second GitHub just got swallowed by the first. An alias email cloned you.
+
+DevLedger now keeps every account you add, and finds you by any address.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
