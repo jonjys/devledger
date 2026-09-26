@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-26
+Feature Built: Renewal calendar — pick a subscription end date and arm an in-app warning 1, 2, 3, or a custom number of days before it renews.
+Suggested Tweet:
+"Your trial renewed. You found out from the bank.
+
+DevLedger now has a renewal calendar. Pick the date. Get warned days before it hits.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
