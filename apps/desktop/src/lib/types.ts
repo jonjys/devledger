@@ -229,7 +229,8 @@ export type WarningCode =
   | "secret_rotated"
   | "expired_credential"
   | "unattributed_secret"
-  | "nothing_detected";
+  | "nothing_detected"
+  | "split_sections";
 
 export interface Warning {
   code: WarningCode;
@@ -256,6 +257,9 @@ export interface ParsedSubscription {
   currency: string | null;
   interval: "monthly" | "yearly" | null;
   trial_ends_at: string | null;
+  identity_email?: string | null;
+  reminder_days?: number | null;
+  warn_enabled?: boolean;
 }
 
 export type SourceKind = "smart_paste" | "env_file" | "manual";
@@ -277,6 +281,8 @@ export interface PasteAnalysis {
   proposed_relations: ProposedRelation[];
   warnings: Warning[];
   subscription: ParsedSubscription | null;
+  subscriptions?: ParsedSubscription[];
+  entity_blocks?: number[];
   provenance: Provenance;
   blocks_save: boolean;
   provider: Provider;
@@ -372,6 +378,8 @@ export interface Subscription {
   currency: string | null;
   interval: "monthly" | "yearly" | null;
   trial_ends_at: string | null;
+  reminder_days?: number | null;
+  warn_enabled?: boolean;
   created_at: string;
 }
 
@@ -403,7 +411,8 @@ export type AttentionKind =
   | "unassigned_organization"
   | "unlinked_service_project"
   | "identity_without_email"
-  | "orphan_secret";
+  | "orphan_secret"
+  | "renewal_due";
 
 export interface AttentionItem {
   kind: AttentionKind;

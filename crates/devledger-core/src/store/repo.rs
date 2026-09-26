@@ -124,6 +124,8 @@ pub enum AttentionKind {
     IdentityWithoutEmail,
     /// A secret filed against nothing in particular.
     OrphanSecret,
+    /// A trial or renewal inside the reminder window.
+    RenewalDue,
 }
 
 /// One item DevLedger cannot resolve on its own.
@@ -1523,8 +1525,8 @@ impl Store {
         self.conn().execute(
             "INSERT INTO subscriptions
                 (id, account_id, plan, status, amount_cents, currency, interval,
-                 trial_ends_at, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 trial_ends_at, created_at, reminder_days, warn_enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 id.to_string(),
                 account_id.to_string(),
@@ -1534,7 +1536,9 @@ impl Store {
                 parsed.currency,
                 parsed.interval.map(billing_interval_to_str),
                 parsed.trial_ends_at,
-                created_at
+                created_at,
+                parsed.reminder_days,
+                if parsed.warn_enabled { 1 } else { 0 }
             ],
         )?;
         self.audit(
@@ -1552,6 +1556,8 @@ impl Store {
             currency: parsed.currency.clone(),
             interval: parsed.interval,
             trial_ends_at: parsed.trial_ends_at.clone(),
+            reminder_days: parsed.reminder_days,
+            warn_enabled: parsed.warn_enabled,
             created_at: parse_rfc3339(&created_at)?,
         })
     }
@@ -1577,7 +1583,7 @@ impl Store {
     }
 
     const SUBSCRIPTION_COLUMNS: &'static str =
-        "id, account_id, plan, status, amount_cents, currency, interval, trial_ends_at, created_at";
+        "id, account_id, plan, status, amount_cents, currency, interval, trial_ends_at, created_at, reminder_days, warn_enabled";
 
     fn subscription_from_row(
         row: &Row<'_>,
@@ -1595,6 +1601,8 @@ impl Store {
                 currency: row.get(5)?,
                 interval: None,
                 trial_ends_at: row.get(7)?,
+                reminder_days: row.get(9)?,
+                warn_enabled: row.get::<_, i64>(10)? != 0,
                 created_at: OffsetDateTime::UNIX_EPOCH,
             },
             status,
@@ -1766,6 +1774,12 @@ impl Store {
             });
         }
 
+        for row in self.list_subscriptions()? {
+            if let Some(item) = renewal_due(&row.subscription) {
+                items.push(item);
+            }
+        }
+
         Ok(items)
     }
 
@@ -1846,4 +1860,43 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+}
+
+/// A subscription whose renewal or trial end is inside its reminder window.
+fn renewal_due(sub: &Subscription) -> Option<AttentionItem> {
+    if !sub.warn_enabled {
+        return None;
+    }
+    let raw = sub.trial_ends_at.as_deref()?;
+    let mut parts = raw.split('-');
+    let year: i32 = parts.next()?.parse().ok()?;
+    let month: u8 = parts.next()?.parse().ok()?;
+    let day: u8 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let end = time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+    let today = OffsetDateTime::now_utc().date();
+    let days = i64::from(end.to_julian_day() - today.to_julian_day());
+    let window = sub.reminder_days.unwrap_or(1);
+    if !(0..=window).contains(&days) {
+        return None;
+    }
+    let when = if days == 0 {
+        "today".to_string()
+    } else if days == 1 {
+        "tomorrow".to_string()
+    } else {
+        format!("in {days} days")
+    };
+    Some(AttentionItem {
+        kind: AttentionKind::RenewalDue,
+        title: format!("{} renews {when}", sub.plan),
+        detail: format!(
+            "The reminder is set to {window} day{} before {}. Change it on the subscription if you want more notice.",
+            if window == 1 { "" } else { "s" },
+            raw
+        ),
+        entity: EntityRef::new(EntityKind::Subscription, sub.id),
+    })
 }

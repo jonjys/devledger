@@ -20,19 +20,6 @@ interface Props {
   onChanged: () => void;
 }
 
-/** Providers offered when adding an account by hand. */
-const PROVIDER_CHOICES: Provider[] = [
-  "supabase",
-  "git_hub",
-  "vercel",
-  "stripe",
-  "open_ai",
-  "anthropic",
-  "aws",
-  "postgres",
-  "unknown",
-];
-
 /** A flat (id, label) option for a Move-to dropdown. */
 interface MoveOption {
   id: string;
@@ -587,11 +574,22 @@ function MoveTo({
   );
 }
 
-/** + Child on an identity: add a provider account. */
+const CHILD_KINDS: { id: string; label: string; provider: Provider; prefix: string }[] = [
+  { id: "x", label: "X account", provider: "unknown", prefix: "X" },
+  { id: "threads", label: "Threads", provider: "unknown", prefix: "Threads" },
+  { id: "instagram", label: "Instagram", provider: "unknown", prefix: "Instagram" },
+  { id: "git_hub", label: "GitHub", provider: "git_hub", prefix: "" },
+  { id: "vercel", label: "Vercel", provider: "vercel", prefix: "" },
+  { id: "custom", label: "Custom", provider: "unknown", prefix: "" },
+];
+
+/** + Child on an identity: add a provider account, with a login stored as a secret. */
 function AddAccount({ identityId, ctx }: { identityId: string; ctx: TreeCtx }) {
   const [open, setOpen] = useState(false);
-  const [provider, setProvider] = useState<Provider>("git_hub");
+  const [kind, setKind] = useState("git_hub");
   const [label, setLabel] = useState("");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
 
   if (!open) {
     return (
@@ -601,12 +599,40 @@ function AddAccount({ identityId, ctx }: { identityId: string; ctx: TreeCtx }) {
     );
   }
 
+  const chosen =
+    CHILD_KINDS.find((k) => k.id === kind) ?? CHILD_KINDS.find((k) => k.id === "git_hub");
+  if (!chosen) return null;
+  const kindChoice = chosen;
+
+  async function submit() {
+    const typed = label.trim();
+    if (!typed) return;
+    const stored = kindChoice.prefix ? `${kindChoice.prefix} · ${typed}` : typed;
+    const account = await api.addAccount(identityId, kindChoice.provider, stored, null);
+    if (login.trim() || password.trim()) {
+      const resource = await api.createServiceProjectManual(
+        account.id,
+        null,
+        kindChoice.provider,
+        stored,
+        null,
+        "unknown",
+      );
+      if (login.trim()) {
+        await api.createManualSecret(null, resource.id, "LOGIN", "unknown", login.trim());
+      }
+      if (password.trim()) {
+        await api.createManualSecret(null, resource.id, "PASSWORD", "unknown", password.trim());
+      }
+    }
+  }
+
   return (
     <span className="inline-form">
-      <select value={provider} onChange={(e) => setProvider(e.target.value as Provider)}>
-        {PROVIDER_CHOICES.map((p) => (
-          <option key={p} value={p}>
-            {providerLabel(p)}
+      <select aria-label="Account kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+        {CHILD_KINDS.map((k) => (
+          <option key={k.id} value={k.id}>
+            {k.label}
           </option>
         ))}
       </select>
@@ -617,16 +643,29 @@ function AddAccount({ identityId, ctx }: { identityId: string; ctx: TreeCtx }) {
         aria-label="Account label"
         onChange={(e) => setLabel(e.target.value)}
       />
+      <input
+        value={login}
+        placeholder="Login"
+        aria-label="Login"
+        onChange={(e) => setLogin(e.target.value)}
+      />
+      <input
+        value={password}
+        placeholder="Password"
+        aria-label="Password"
+        type="password"
+        onChange={(e) => setPassword(e.target.value)}
+      />
       <button
         type="button"
         disabled={!label.trim()}
         onClick={() =>
-          void ctx
-            .run(() => api.addAccount(identityId, provider, label.trim(), null), "Account added")
-            .then(() => {
-              setLabel("");
-              setOpen(false);
-            })
+          void ctx.run(submit, "Account added").then(() => {
+            setLabel("");
+            setLogin("");
+            setPassword("");
+            setOpen(false);
+          })
         }
       >
         Add

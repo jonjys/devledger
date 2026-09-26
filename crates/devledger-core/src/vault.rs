@@ -27,6 +27,7 @@ use crate::model::{
     Identity, Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
     ServiceProject, Subscription, SubscriptionStatus,
 };
+use crate::paste::detect::DetectedKind;
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
 use crate::paste::review::{
     AnswerChoice, ChainRole, CommitOutcome, EntityDecision, ProposedChain, ProposedEndpoint,
@@ -321,80 +322,92 @@ impl Vault {
         };
 
         let mut outcome = CommitOutcome::default();
-        let resolved = self.resolve_chain(&analysis, submission, &mut outcome)?;
+        let split = pipeline::splits_secret_sections(&analysis.entities, &analysis.entity_blocks);
+        let resolved = if split {
+            // Each section names its own mail and project. A single chain would
+            // file every key under the first email.
+            ResolvedChain::default()
+        } else {
+            self.resolve_chain(&analysis, submission, &mut outcome)?
+        };
 
         // Entity index -> the secret row it produced, so accepted relations can
         // be anchored to real ids.
         let mut secret_ids: HashMap<usize, Uuid> = HashMap::new();
 
-        for decision in &submission.decisions {
-            let index = decision.entity_index;
-            let entity = analysis
-                .entities
-                .get(index)
-                .ok_or_else(|| CoreError::Invalid(format!("no entity at index {index}")))?;
-            let Some(value) = secrets.values.get(index).and_then(|v| v.as_ref()) else {
-                continue;
-            };
-            let recommended = analysis
-                .recommendations
-                .get(index)
-                .ok_or_else(|| CoreError::Invalid(format!("no recommendation at index {index}")))?;
+        if split {
+            self.file_blocked_secrets(&analysis, &secrets, submission, &mut outcome)?;
+        }
 
-            let effective = match &decision.decision {
-                EntityDecision::Skip => {
-                    outcome.entities_skipped += 1;
+        if !split {
+            for decision in &submission.decisions {
+                let index = decision.entity_index;
+                let entity = analysis
+                    .entities
+                    .get(index)
+                    .ok_or_else(|| CoreError::Invalid(format!("no entity at index {index}")))?;
+                let Some(value) = secrets.values.get(index).and_then(|v| v.as_ref()) else {
                     continue;
-                }
-                EntityDecision::Accept => recommended.clone(),
-                EntityDecision::CreateNew => RecommendedAction::Create,
-                EntityDecision::Change { secret_id } => RecommendedAction::Update {
-                    secret_id: *secret_id,
-                },
-            };
+                };
+                let recommended = analysis.recommendations.get(index).ok_or_else(|| {
+                    CoreError::Invalid(format!("no recommendation at index {index}"))
+                })?;
 
-            let name = decision
-                .name_override
-                .clone()
-                .unwrap_or_else(|| entity.label.clone());
-            let kind = entity.secret_kind.unwrap_or(SecretKind::GenericApiKey);
+                let effective = match &decision.decision {
+                    EntityDecision::Skip => {
+                        outcome.entities_skipped += 1;
+                        continue;
+                    }
+                    EntityDecision::Accept => recommended.clone(),
+                    EntityDecision::CreateNew => RecommendedAction::Create,
+                    EntityDecision::Change { secret_id } => RecommendedAction::Update {
+                        secret_id: *secret_id,
+                    },
+                };
 
-            match effective {
-                RecommendedAction::Skip { .. } => outcome.entities_skipped += 1,
-                RecommendedAction::Update { secret_id } => {
-                    self.write_secret_value(secret_id, value)?;
-                    secret_ids.insert(index, secret_id);
-                    outcome.secrets_updated += 1;
-                }
-                RecommendedAction::Create => {
-                    // A secret goes against the provider resource when there is
-                    // one, because that is what it authenticates to. Otherwise
-                    // it is filed directly against the project.
-                    if resolved.service_project.is_none() && resolved.project.is_none() {
-                        return Err(CoreError::Invalid(
+                let name = decision
+                    .name_override
+                    .clone()
+                    .unwrap_or_else(|| entity.label.clone());
+                let kind = entity.secret_kind.unwrap_or(SecretKind::GenericApiKey);
+
+                match effective {
+                    RecommendedAction::Skip { .. } => outcome.entities_skipped += 1,
+                    RecommendedAction::Update { secret_id } => {
+                        self.write_secret_value(secret_id, value)?;
+                        secret_ids.insert(index, secret_id);
+                        outcome.secrets_updated += 1;
+                    }
+                    RecommendedAction::Create => {
+                        // A secret goes against the provider resource when there is
+                        // one, because that is what it authenticates to. Otherwise
+                        // it is filed directly against the project.
+                        if resolved.service_project.is_none() && resolved.project.is_none() {
+                            return Err(CoreError::Invalid(
                             "choose a project before saving: these credentials have nothing to \
                              attach to"
                                 .into(),
                         ));
+                        }
+                        let record = self.insert_secret(
+                            if resolved.service_project.is_some() {
+                                None
+                            } else {
+                                resolved.project
+                            },
+                            resolved.service_project,
+                            kind,
+                            &name,
+                            entity.environment,
+                            value,
+                        )?;
+                        secret_ids.insert(index, record.id);
+                        outcome.secrets_created += 1;
+                        self.attach_provenance(
+                            EntityRef::new(EntityKind::Secret, record.id),
+                            &analysis.provenance,
+                        )?;
                     }
-                    let record = self.insert_secret(
-                        if resolved.service_project.is_some() {
-                            None
-                        } else {
-                            resolved.project
-                        },
-                        resolved.service_project,
-                        kind,
-                        &name,
-                        entity.environment,
-                        value,
-                    )?;
-                    secret_ids.insert(index, record.id);
-                    outcome.secrets_created += 1;
-                    self.attach_provenance(
-                        EntityRef::new(EntityKind::Secret, record.id),
-                        &analysis.provenance,
-                    )?;
                 }
             }
         }
@@ -424,7 +437,22 @@ impl Vault {
             outcome.relations_created += 1;
         }
 
-        if let (Some(parsed), Some(account_id)) = (&analysis.subscription, resolved.account) {
+        if analysis.subscriptions.len() > 1 {
+            for parsed in &analysis.subscriptions {
+                let identity_id =
+                    self.identity_for_optional_email(parsed.identity_email.as_deref())?;
+                let label = parsed
+                    .identity_email
+                    .clone()
+                    .unwrap_or_else(|| parsed.plan.clone());
+                let account =
+                    self.add_account(identity_id, Provider::Unknown, &parsed.plan, Some(&label))?;
+                self.unlocked()?
+                    .store
+                    .create_subscription(account.id, parsed)?;
+            }
+        } else if let (Some(parsed), Some(account_id)) = (&analysis.subscription, resolved.account)
+        {
             self.unlocked()?
                 .store
                 .create_subscription(account_id, parsed)?;
@@ -441,6 +469,123 @@ impl Vault {
             ),
         )?;
         Ok(outcome)
+    }
+
+    /// File each `---` section under the email and project name written in it.
+    ///
+    /// A notes file that lists one mail, one project and one key per section
+    /// must not collapse every key onto the first mail. Named providers still
+    /// reuse one account per identity, so two Stripe keys on the same mail stay
+    /// one Stripe account with two resources.
+    fn file_blocked_secrets(
+        &mut self,
+        analysis: &PasteAnalysis,
+        secrets: &StagedSecrets,
+        submission: &ReviewSubmission,
+        outcome: &mut CommitOutcome,
+    ) -> Result<()> {
+        let max_block = analysis.entity_blocks.iter().copied().max().unwrap_or(0);
+        for block in 0..=max_block {
+            let in_block = |index: usize| analysis.entity_blocks.get(index).copied() == Some(block);
+            let email = analysis
+                .entities
+                .iter()
+                .enumerate()
+                .find_map(|(i, entity)| {
+                    (in_block(i) && entity.kind == DetectedKind::Email)
+                        .then(|| entity.value_preview.clone())
+                });
+            let project_name = analysis
+                .entities
+                .iter()
+                .enumerate()
+                .find_map(|(i, entity)| {
+                    (in_block(i) && entity.kind == DetectedKind::Label)
+                        .then(|| entity.label.clone())
+                });
+
+            let mut accepted: Vec<usize> = Vec::new();
+            for decision in &submission.decisions {
+                if !in_block(decision.entity_index) {
+                    continue;
+                }
+                let Some(entity) = analysis.entities.get(decision.entity_index) else {
+                    continue;
+                };
+                if !entity.is_secret() {
+                    continue;
+                }
+                match decision.decision {
+                    EntityDecision::Skip => outcome.entities_skipped += 1,
+                    EntityDecision::Accept
+                    | EntityDecision::CreateNew
+                    | EntityDecision::Change { .. } => {
+                        accepted.push(decision.entity_index);
+                    }
+                }
+            }
+            if accepted.is_empty() {
+                continue;
+            }
+
+            let provider = analysis.entities[accepted[0]].provider;
+            let identity_id = self.identity_for_optional_email(email.as_deref())?;
+            let account_label = email
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| provider.label().to_string());
+            let account =
+                self.add_account(identity_id, provider, &account_label, email.as_deref())?;
+            let resource_name = project_name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| provider.label().to_string());
+            let resource = self.create_service_project_manual(
+                account.id,
+                None,
+                provider,
+                &resource_name,
+                None,
+                Environment::Unknown,
+            )?;
+            outcome.service_projects_created += 1;
+            let project_id = match project_name {
+                Some(name) if !name.trim().is_empty() => Some(self.project_named(&name, outcome)?),
+                _ => None,
+            };
+            if let Some(project_id) = project_id {
+                self.link_service_project(resource.id, project_id)?;
+            }
+
+            for index in accepted {
+                let entity = &analysis.entities[index];
+                let Some(value) = secrets.values.get(index).and_then(|v| v.as_ref()) else {
+                    continue;
+                };
+                let decision = submission
+                    .decisions
+                    .iter()
+                    .find(|d| d.entity_index == index);
+                let name = decision
+                    .and_then(|d| d.name_override.clone())
+                    .unwrap_or_else(|| entity.label.clone());
+                let kind = entity.secret_kind.unwrap_or(SecretKind::GenericApiKey);
+                let record = self.insert_secret(
+                    None,
+                    Some(resource.id),
+                    kind,
+                    &name,
+                    entity.environment,
+                    value,
+                )?;
+                outcome.secrets_created += 1;
+                self.attach_provenance(
+                    EntityRef::new(EntityKind::Secret, record.id),
+                    &analysis.provenance,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Turn the proposed chain plus the user's answers into concrete rows.
@@ -1205,6 +1350,8 @@ impl Vault {
         currency: Option<&str>,
         interval: Option<BillingInterval>,
         renews_at: Option<&str>,
+        reminder_days: Option<i64>,
+        warn_enabled: bool,
     ) -> Result<Subscription> {
         let plan = plan.trim();
         if plan.is_empty() {
@@ -1231,6 +1378,12 @@ impl Vault {
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
                 .map(str::to_string),
+            identity_email: email
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+                .map(str::to_string),
+            reminder_days,
+            warn_enabled,
         };
         self.unlocked()?
             .store
