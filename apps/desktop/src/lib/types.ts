@@ -242,6 +242,8 @@ export interface Warning {
 
 export type SubscriptionStatus =
   | "active"
+  | "expiring_soon"
+  | "expired"
   | "trialing"
   | "past_due"
   | "canceled"

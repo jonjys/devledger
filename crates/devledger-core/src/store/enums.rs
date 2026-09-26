@@ -105,6 +105,8 @@ str_enum!(
 str_enum!(
     SubscriptionStatus, subscription_status_to_str, subscription_status_from_str,
     SubscriptionStatus::Active => "active",
+    SubscriptionStatus::ExpiringSoon => "expiring_soon",
+    SubscriptionStatus::Expired => "expired",
     SubscriptionStatus::Trialing => "trialing",
     SubscriptionStatus::PastDue => "past_due",
     SubscriptionStatus::Canceled => "canceled",

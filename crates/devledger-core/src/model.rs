@@ -306,6 +306,10 @@ pub struct Subscription {
 pub enum SubscriptionStatus {
     /// Paid and current.
     Active,
+    /// Renews within the next week.
+    ExpiringSoon,
+    /// The renewal date has passed.
+    Expired,
     /// In a trial period.
     Trialing,
     /// Payment failed.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "../lib/api";
 import { formatTime, providerLabel } from "../lib/format";
@@ -20,6 +20,8 @@ function money(cents: number | null, currency: string | null): string {
 
 const STATUS_TONE: Record<string, string> = {
   active: "strong",
+  expiring_soon: "heuristic",
+  expired: "unsafe",
   trialing: "heuristic",
   past_due: "unsafe",
   canceled: "weak",
@@ -29,8 +31,8 @@ const STATUS_TONE: Record<string, string> = {
 
 const STATUS_OPTIONS: [SubscriptionStatus, string][] = [
   ["active", "Active"],
-  ["trialing", "Trialing"],
-  ["past_due", "Past due"],
+  ["expiring_soon", "Expiring Soon"],
+  ["expired", "Expired"],
   ["canceled", "Canceled"],
 ];
 
@@ -197,16 +199,46 @@ function toIso(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-function formatPretty(iso: string): string {
-  const parts = parseIso(iso);
-  if (!parts) return iso;
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(parts.y, parts.m - 1, parts.d)));
+function todayParts(): { y: number; m: number; d: number } {
+  const now = new Date();
+  return { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() };
 }
+
+function dayStamp(parts: { y: number; m: number; d: number }): number {
+  return Date.UTC(parts.y, parts.m - 1, parts.d);
+}
+
+/** Whole days from the local today to an ISO date. Negative means already past. */
+function daysUntil(iso: string): number | null {
+  const parts = parseIso(iso);
+  if (!parts) return null;
+  const utc = new Date(Date.UTC(parts.y, parts.m - 1, parts.d));
+  if (
+    utc.getUTCFullYear() !== parts.y ||
+    utc.getUTCMonth() !== parts.m - 1 ||
+    utc.getUTCDate() !== parts.d
+  ) {
+    return null;
+  }
+  return Math.round((dayStamp(parts) - dayStamp(todayParts())) / 86_400_000);
+}
+
+function statusFromDate(iso: string): SubscriptionStatus {
+  const days = daysUntil(iso);
+  if (days === null || days > 7) return "active";
+  if (days < 0) return "expired";
+  return "expiring_soon";
+}
+
+function minusDays(iso: string, days: number): string | null {
+  const parts = parseIso(iso);
+  if (!parts || !Number.isFinite(days)) return null;
+  const date = new Date(Date.UTC(parts.y, parts.m - 1, parts.d));
+  date.setUTCDate(date.getUTCDate() - days);
+  return toIso(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Record a subscription by hand — no Smart Paste required. */
 function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
@@ -221,21 +253,35 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
   const [warn, setWarn] = useState(true);
   const [busy, setBusy] = useState(false);
   const [calOpen, setCalOpen] = useState(false);
-  const today = new Date();
-  const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() + 1 });
+  const today = todayParts();
+  const [view, setView] = useState({ y: today.y, m: today.m });
+  const dateWrap = useRef<HTMLDivElement>(null);
 
-  function chooseDate(iso: string) {
+  useEffect(() => {
+    if (!calOpen) return;
+    function onPointer(e: MouseEvent) {
+      if (!dateWrap.current?.contains(e.target as Node)) setCalOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      setCalOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [calOpen]);
+
+  function applyDate(iso: string) {
     setRenewsAt(iso);
     const parts = parseIso(iso);
-    if (parts) setView({ y: parts.y, m: parts.m });
-  }
-
-  function onInterval(next: BillingInterval) {
-    setInterval(next);
-  }
-
-  function onRenewInput(value: string) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) chooseDate(value);
+    if (!parts || daysUntil(iso) === null) return;
+    setView({ y: parts.y, m: parts.m });
+    setStatus(statusFromDate(iso));
   }
 
   function toggleCalendar() {
@@ -244,13 +290,13 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
     setCalOpen((open) => !open);
   }
 
-  function reminderDays(): number | null {
-    if (!warn) return null;
+  function chosenRemindDays(): number | null {
     if (remind === "custom") {
       const n = Number.parseInt(customDays, 10);
-      return Number.isFinite(n) && n > 0 ? n : 1;
+      return Number.isFinite(n) && n > 0 ? n : null;
     }
-    return Number.parseInt(remind, 10);
+    const n = Number.parseInt(remind, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
   }
 
   function parsePrice(): number | null {
@@ -261,8 +307,22 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
     return Math.round(value * 100);
   }
 
+  const cents = parsePrice();
+  const emailOk = email.trim() === "" || EMAIL_OK.test(email.trim());
+  const ahead = daysUntil(renewsAt);
+  const remindCount = chosenRemindDays();
+  const valid =
+    plan.trim().length > 0 &&
+    emailOk &&
+    cents !== null &&
+    cents > 0 &&
+    ahead !== null &&
+    ahead >= 0 &&
+    (!warn || remindCount !== null);
+  const remindOn = warn && ahead !== null && remindCount !== null ? minusDays(renewsAt, remindCount) : null;
+
   async function save() {
-    if (!plan.trim() || busy) return;
+    if (!valid || busy) return;
     setBusy(true);
     try {
       await api.createSubscriptionManual({
@@ -270,14 +330,14 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
         provider: "unknown",
         plan: plan.trim(),
         status,
-        amountCents: parsePrice(),
+        amountCents: cents,
         currency: price.includes("€") ? "EUR" : price.includes("£") ? "GBP" : "USD",
         interval,
-        renewsAt: parseIso(renewsAt) ? renewsAt : null,
-        reminderDays: reminderDays(),
+        renewsAt,
+        reminderDays: warn ? remindCount : null,
         warnEnabled: warn,
       });
-      onNotify(`Added ${plan.trim()}`);
+      onNotify("Subscription added");
       onSaved();
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
@@ -298,8 +358,8 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
         </button>
       </header>
 
-      <div className="scroll">
-        <div className="sub-grid">
+      <div className={`scroll sub-scroll${calOpen ? " cal-open" : ""}`}>
+        <div className="sub-grid sub-form">
           <div className="field">
             <label htmlFor="sub-plan">Plan name</label>
             <input
@@ -344,7 +404,7 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
             <select
               id="sub-interval"
               value={interval}
-              onChange={(e) => onInterval(e.target.value as BillingInterval)}
+              onChange={(e) => setInterval(e.target.value as BillingInterval)}
             >
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
@@ -353,13 +413,12 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
 
           <div className="field">
             <label htmlFor="sub-renews">Expiration / renewal</label>
-            <div className="icon-field">
+            <div className="icon-field date-pop" ref={dateWrap}>
               <input
                 id="sub-renews"
-                readOnly
-                placeholder="Pick a date"
-                value={renewsAt ? formatPretty(renewsAt) : ""}
-                onChange={(e) => onRenewInput(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                value={renewsAt}
+                onChange={(e) => applyDate(e.target.value)}
                 onClick={toggleCalendar}
               />
               <button
@@ -373,6 +432,18 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
                   <path d="M3 10h18M8 3v4M16 3v4" />
                 </svg>
               </button>
+              {calOpen && (
+                <RenewalCalendar
+                  view={view}
+                  selected={renewsAt}
+                  today={today}
+                  onView={setView}
+                  onPick={(iso) => {
+                    applyDate(iso);
+                    setCalOpen(false);
+                  }}
+                />
+              )}
             </div>
           </div>
 
@@ -394,29 +465,33 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
             </div>
           </div>
 
-          {calOpen && (
-            <RenewalCalendar
-              view={view}
-              selected={renewsAt}
-              onView={setView}
-              onPick={(iso) => {
-                chooseDate(iso);
-                setCalOpen(false);
-              }}
-            />
-          )}
-
-          <div className={`remind-block ${calOpen ? "" : "sub-span"}`}>
-            <h3>Remind me</h3>
+          <div className="remind-block sub-span">
             <div className="remind-row">
-              <div className="field">
-                <label htmlFor="sub-remind">Reminder time</label>
-                <select id="sub-remind" value={remind} onChange={(e) => setRemind(e.target.value)}>
-                  <option value="1">1 day before</option>
-                  <option value="2">2 days before</option>
-                  <option value="3">3 days before</option>
-                  <option value="custom">Custom</option>
-                </select>
+              <div className="remind-picks">
+                <span className="remind-label" id="sub-remind-label">
+                  Remind me
+                </span>
+                <div className="remind-btns" role="group" aria-labelledby="sub-remind-label">
+                  {(["1", "2", "3"] as const).map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      className={remind === days ? "on" : ""}
+                      aria-pressed={remind === days}
+                      onClick={() => setRemind(days)}
+                    >
+                      {days}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={remind === "custom" ? "on" : ""}
+                    aria-pressed={remind === "custom"}
+                    onClick={() => setRemind("custom")}
+                  >
+                    Custom
+                  </button>
+                </div>
               </div>
               <div className="warn-toggle">
                 <span>Turn on warning</span>
@@ -431,31 +506,34 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
               </div>
             </div>
             {remind === "custom" && (
-              <div className="field">
-                <label htmlFor="sub-custom">Custom days before</label>
+              <label className="days-field">
                 <input
                   id="sub-custom"
+                  className="days-input"
                   inputMode="numeric"
+                  aria-label="X days"
                   value={customDays}
-                  onChange={(e) => setCustomDays(e.target.value)}
+                  onChange={(e) => setCustomDays(e.target.value.replace(/[^\d]/g, ""))}
                 />
-              </div>
+                <span>days</span>
+              </label>
             )}
+            {remindOn && <p className="remind-when">Reminds on {remindOn}</p>}
           </div>
         </div>
       </div>
 
       <footer>
         <span className="spacer" />
-        <button type="button" className="sub-cancel" onClick={onCancel} disabled={busy}>
+        <button type="button" className="ghost sub-cancel" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
         <button
           type="button"
-          className="primary"
+          className={`sub-save ${warn ? "warn-on" : ""}`}
           aria-label="Save subscription"
-          onClick={save}
-          disabled={busy || !plan.trim()}
+          onClick={() => void save()}
+          disabled={busy || !valid}
         >
           {busy ? "Saving…" : "Save"}
         </button>
@@ -467,11 +545,13 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
 function RenewalCalendar({
   view,
   selected,
+  today,
   onView,
   onPick,
 }: {
   view: { y: number; m: number };
   selected: string;
+  today: { y: number; m: number; d: number };
   onView: (next: { y: number; m: number }) => void;
   onPick: (iso: string) => void;
 }) {
@@ -514,11 +594,12 @@ function RenewalCalendar({
             <button
               key={day}
               type="button"
-              className={
-                picked && picked.y === view.y && picked.m === view.m && picked.d === day
-                  ? "picked"
-                  : ""
-              }
+              className={[
+                picked && picked.y === view.y && picked.m === view.m && picked.d === day ? "picked" : "",
+                today.y === view.y && today.m === view.m && today.d === day ? "today" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               onClick={() => onPick(toIso(view.y, view.m, day))}
             >
               {day}
