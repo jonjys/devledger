@@ -19,8 +19,11 @@ only ever reads.
 | **M4** | Multi-account separation, shared resources, project links, subscriptions and attention queue | Done |
 | **M5** | Read-only Supabase connector with explicit review before import | Done |
 | **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
+| **Launch** | Overview dashboard, Indie/Dev display, skill-tree editing, secrets and attention views, installer release workflow | Done |
 
-203 tests in total: 133 Rust, 70 TypeScript, plus a screenshot-based UI smoke test.
+143 Rust tests and 89 TypeScript tests, plus a screenshot-based UI smoke test.
+
+The launch build keeps the 0.6 ledger (encrypted vault, Smart Paste, Supabase connect, visual stack) and adds the shell it ships with: a sidebar, an Overview home screen, Indie versus Dev labels, and by-hand create, move and delete for accounts, resources and subscriptions.
 
 ## Running it
 
@@ -38,6 +41,29 @@ npm run tauri build        # Windows installers land in src-tauri/target/release
 `npm run tauri build` on Windows produces both an NSIS `.exe` and an MSI in
 `apps/desktop/src-tauri/target/release/bundle/`. The CI workflow builds the same
 artifacts on every push and attaches them to the run.
+
+Phone builds use the same vault. The shell collapses to a bottom navigation bar
+below 800px wide, so the iPhone and Android apps are the desktop app, not a
+separate product.
+
+```bash
+# Android. Needs ANDROID_HOME, NDK_HOME and a JDK.
+./scripts/build-android-apk.sh
+# APK (arm64, installs on current phones): apps/desktop/src-tauri/gen/android/app/build/outputs/apk/
+
+# iOS, on a Mac with Xcode:
+cd apps/desktop
+npm run tauri ios init -- --ci
+npm run tauri ios build -- --ci --target aarch64
+```
+
+A version tag (`v*`) also builds the Android APK and the iOS app and attaches
+them to the GitHub release. The Android APK installs directly (allow installs
+from the browser). Apple only installs an IPA that was signed with an Apple
+Developer identity, so the iPhone file is signed when `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD` and `APPLE_PROVISIONING_PROFILE` are set on the
+repository; otherwise the release contains an unsigned IPA that still has to be
+signed before it will open on a phone.
 
 ## Layout
 

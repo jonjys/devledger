@@ -45,6 +45,7 @@ str_enum!(
     Provider::OpenAi => "openai",
     Provider::Aws => "aws",
     Provider::Vercel => "vercel",
+    Provider::Anthropic => "anthropic",
     Provider::Unknown => "unknown",
 );
 

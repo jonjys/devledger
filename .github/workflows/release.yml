@@ -1,0 +1,206 @@
+name: Release
+
+# Publishes downloadable installers to the GitHub Releases page.
+#
+# Trigger it by pushing a version tag, e.g.:
+#   git tag v0.6.0 && git push origin v0.6.0
+# or run it manually from the Actions tab and type a tag name.
+#
+# Windows produces the NSIS .exe and the .msi; Linux produces the .deb and the
+# AppImage (the bundle targets configured in apps/desktop/src-tauri/tauri.conf.json).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.6.0). Created if it does not exist."
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build the desktop app and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: "DevLedger ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          releaseBody: |
+            Download the installer for your platform from the assets below.
+
+            - Windows: `.exe` (NSIS installer) or `.msi`
+            - Linux: `.AppImage` (portable) or `.deb`
+            - Android: `.apk` (install directly; allow the browser to install apps)
+            - iPhone: `.ipa` (installs when the release was signed with an Apple Developer identity)
+
+            DevLedger is local-first: everything stays encrypted on your machine.
+          releaseDraft: false
+          prerelease: false
+
+  android:
+    name: Android APK
+    needs: [release]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Install the Android SDK and NDK
+        run: |
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+          unzip -q /tmp/cmdtools.zip -d /tmp
+          mv /tmp/cmdline-tools "$SDK/cmdline-tools/latest"
+          export ANDROID_HOME="$SDK"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Decode the release keystore when one is configured
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEY_BASE64" ]; then
+            echo "$ANDROID_KEY_BASE64" | base64 -d > "$RUNNER_TEMP/devledger.keystore"
+            echo "DEVLEDGER_ANDROID_KEYSTORE=$RUNNER_TEMP/devledger.keystore" >> "$GITHUB_ENV"
+            echo "DEVLEDGER_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "DEVLEDGER_ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the APK
+        run: ./scripts/build-android-apk.sh
+
+      - name: Upload the APK to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          gh release upload "$tag" apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/*.apk --clobber
+
+  ios:
+    name: iPhone IPA
+    needs: [release]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Install CocoaPods
+        run: brew install cocoapods
+
+      - name: Initialize the iOS project
+        working-directory: apps/desktop
+        run: npm run tauri ios init -- --ci --skip-targets-install
+
+      - name: Import the Apple signing identity when one is configured
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            KEYCHAIN="$RUNNER_TEMP/devledger.keychain"
+            KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            echo "$APPLE_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/certificate.p12"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            echo "$APPLE_PROVISIONING_PROFILE" | base64 -d > "$HOME/Library/MobileDevice/Provisioning Profiles/devledger.mobileprovision"
+            echo "DEVLEDGER_IOS_SIGN=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build a signed IPA
+        if: env.DEVLEDGER_IOS_SIGN == '1'
+        working-directory: apps/desktop
+        run: npm run tauri ios build -- --ci --target aarch64 --export-method release-testing
+
+      - name: Build an unsigned IPA
+        if: env.DEVLEDGER_IOS_SIGN != '1'
+        working-directory: apps/desktop
+        run: npm run tauri ios build -- --ci --target aarch64 --no-sign
+
+      - name: Upload the IPA to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          shopt -s globstar
+          gh release upload "$tag" apps/desktop/src-tauri/gen/apple/**/*.ipa --clobber

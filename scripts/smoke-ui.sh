@@ -51,10 +51,17 @@ xdotool type --delay 35 "$PASSPHRASE"; sleep 1
 xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
-xdotool mousemove --window "$WINDOW" 500 30 click 1; sleep 4
+# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window.
+xdotool mousemove --window "$WINDOW" 120 270 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-xdotool mousemove --window "$WINDOW" 830 390 click 1; sleep 3
+# The Supabase "Connect" button sits at the right of the first connector row.
+xdotool mousemove --window "$WINDOW" 1090 212 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
+xdotool key Escape; sleep 1
+# Phone-sized window. The shell must collapse the sidebar into a bottom bar.
+xdotool windowsize "$WINDOW" 390 844
+sleep 2
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/05-phone.png"
 DRIVE
 chmod +x "$DATA/drive.sh"
 
@@ -88,5 +95,12 @@ for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dia
     exit 1
   fi
 done
+
+phone_w=$(identify -format "%w" "$OUT/05-phone.png")
+phone_h=$(identify -format "%h" "$OUT/05-phone.png")
+if [ "$phone_h" -le "$phone_w" ]; then
+  echo "UI smoke FAILED: phone window is not portrait (${phone_w}x${phone_h})"
+  exit 1
+fi
 
 echo "UI smoke passed: $shots screenshots in $OUT"
