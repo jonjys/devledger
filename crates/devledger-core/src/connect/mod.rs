@@ -97,7 +97,13 @@ pub struct ConnectorDescriptor {
     pub auth: AuthKind,
     /// Which provider in the graph this connector populates.
     pub provider: Provider,
-    /// Whether the connector can only read.
+    /// Whether *DevLedger's connector* only issues read requests.
+    ///
+    /// This is a property of DevLedger's code, which the connector crate
+    /// enforces and the security check verifies. It says nothing about the
+    /// credential the user supplies: DevLedger cannot inspect a token's
+    /// permissions, so the UI must never present this as "your token is
+    /// read-only".
     pub read_only: bool,
     /// Hosts the connector is permitted to reach.
     pub allowed_hosts: Vec<String>,
@@ -116,9 +122,11 @@ pub fn available_connectors() -> Vec<ConnectorDescriptor> {
         auth: AuthKind::PersonalAccessToken {
             create_url: "https://supabase.com/dashboard/account/tokens".to_string(),
             expected_prefix: "sbp_".to_string(),
-            guidance: "Create a token with read-only permissions. DevLedger only ever \
-                       issues GET requests, and you can revoke the token from the same \
-                       page at any time."
+            guidance: "DevLedger only sends read requests, but it cannot see or check \
+                       what a token is allowed to do. If your Supabase account offers \
+                       scoped tokens, create one limited to reading; otherwise the token \
+                       carries your account's full permissions, so treat it that way. \
+                       You can revoke it from the same page at any time."
                 .to_string(),
         },
         provider: Provider::Supabase,

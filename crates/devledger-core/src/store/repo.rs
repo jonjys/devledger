@@ -1868,6 +1868,53 @@ impl Store {
         )
     }
 
+    /// Rename a secret and replace its envelope in one transaction.
+    ///
+    /// The envelope's associated data is the secret's name, so a rename has to
+    /// re-seal the value under the new name. Doing both in one transaction means
+    /// there is no moment -- not even across a crash -- where the name on the row
+    /// and the name the ciphertext was sealed under disagree.
+    pub fn rename_secret_resealed(
+        &mut self,
+        secret_id: Uuid,
+        name: &str,
+        environment: Environment,
+        notes: Option<&str>,
+        envelope: &[u8],
+    ) -> Result<()> {
+        let at = now_rfc3339()?;
+        let tx = self.conn_mut().transaction()?;
+        let changed = tx.execute(
+            "UPDATE secrets SET name = ?2, environment = ?3, notes = ?4, updated_at = ?5
+              WHERE id = ?1",
+            params![
+                secret_id.to_string(),
+                name,
+                environment_to_str(environment),
+                notes,
+                at
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("secret {secret_id}")));
+        }
+        tx.execute(
+            "UPDATE secret_values SET envelope = ?2 WHERE secret_id = ?1",
+            params![secret_id.to_string(), envelope],
+        )?;
+        tx.execute(
+            "INSERT INTO audit_log (at, action, entity_kind, entity_id, detail)
+             VALUES (?1, 'secret.rename', 'secret', ?2, ?3)",
+            params![
+                at,
+                secret_id.to_string(),
+                format!("Renamed a secret to {name}")
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Every secret filed against an account, metadata only.
     pub fn list_secrets_for_account(&self, account_id: Uuid) -> Result<Vec<VaultEntry>> {
         let sql = format!(

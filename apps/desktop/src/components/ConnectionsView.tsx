@@ -222,7 +222,8 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
           <h1>Services &amp; connections</h1>
           <div className="sub">
             Connect an account and DevLedger reads its structure directly, or add any
-            service by hand. Read-only, and nothing is saved until you review it.
+            service by hand. DevLedger only ever reads from a provider, and nothing is saved
+            until you review it.
           </div>
         </div>
       </div>
@@ -233,7 +234,17 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
           <section key={connector.id} className="connector">
             <div className="connector-head">
               <span className="connector-name">{connector.display_name}</span>
-              {connector.read_only && <span className="tag explicit">read-only</span>}
+              {connector.read_only && (
+                // This describes what DevLedger does, not what the token can do.
+                // DevLedger has no way to inspect a token's permissions, so it
+                // must not imply the token itself is limited.
+                <span
+                  className="tag explicit"
+                  title="DevLedger only sends read requests. It cannot see what your token is allowed to do — limit that when you create the token."
+                >
+                  DevLedger only reads
+                </span>
+              )}
               <span className="spacer" />
               <button type="button" onClick={() => setModal({ kind: "connector", connector })}>
                 {existing.length === 0 ? "Connect" : "+ Connect another account"}
@@ -430,11 +441,26 @@ function ServiceModal({
         );
         onConnected(outcome.report);
       } else {
-        // No live connector: file it as a manual account. The key is not stored
-        // — DevLedger cannot verify it, so it is never persisted here.
-        await api.createAccountForEmail(null, provider, label.trim(), null);
+        // No live connector for this service. The form requires a key, so it
+        // must not be thrown away: it used to be, while the toast said the
+        // account was added, which left people believing their key was stored.
+        // It is sealed onto the new account like any hand-entered credential.
+        // DevLedger cannot check it against the provider, and says so.
+        const account = await api.createAccountForEmail(null, provider, label.trim(), null);
+        await api.storeSecret(
+          {
+            owner: { project_id: null, service_project_id: null, account_id: account.id },
+            kind: "generic_api_key",
+            name: `${displayName} API key`,
+            environment: "unknown",
+            notes: null,
+          },
+          token.trim(),
+        );
         setToken("");
-        onNotify(`Added ${displayName} account ${label.trim()}`);
+        onNotify(
+          `Added ${displayName} account ${label.trim()} · key stored encrypted, not verified`,
+        );
         onSavedManually();
       }
     } catch (e: unknown) {

@@ -11,7 +11,7 @@ export function supabaseConnector(
       sort: "personal_access_token",
       create_url: "https://supabase.com/dashboard/account/tokens",
       expected_prefix: "sbp_",
-      guidance: "Create a token with read-only permissions.",
+      guidance: "DevLedger only sends read requests, but it cannot check what a token is allowed to do.",
     },
     provider: "supabase",
     read_only: true,

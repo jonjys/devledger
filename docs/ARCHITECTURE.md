@@ -191,13 +191,26 @@ Migrations are an ordered list applied in a transaction, with `schema_version`
 recording progress. Opening a vault written by a newer build fails with a clear
 message rather than corrupting it.
 
+The runner switches foreign-key enforcement off while it migrates and runs
+`PRAGMA foreign_key_check` afterwards. With enforcement on, SQLite's `DROP
+TABLE` cascades into child tables, and rebuilding `secrets` that way is how the
+0.3 → 0.4 upgrade destroyed every row of `secret_values`. Migration tests build a
+database as an older version left it and upgrade it for real
+(`tests/m6_migrations.rs`).
+
+Schema v4 makes hand entry a first-class way in: `identity_emails` gives one
+person several addresses, accounts carry their login details, a secret can
+belong to an account (a login password) as well as to a project or resource,
+and the same variable name may exist once per environment.
+
 ## Lock lifecycle
 
 A `Vault` is either locked (a path and nothing else) or unlocked (an open
 `Store` plus two subkeys plus the staging map). `lock()` drops the whole
 `Unlocked` struct, which zeroizes the subkeys, closes the SQLCipher connection
 and clears every staged paste. There is no frontend session: "unlocked" is
-whatever Rust reports, so a backend-side lock returns the user to the gate
+whatever Rust reports. Rust also locks the vault by itself after 15 minutes
+without a command, and tells the UI, so a backend-side lock returns the user to the gate
 immediately.
 
 ## Why these boundaries

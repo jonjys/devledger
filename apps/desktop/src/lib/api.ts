@@ -9,7 +9,14 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   Account,
+  AccountDetails,
   BillingInterval,
+  DeletionImpact,
+  EnvConflict,
+  IdentityEmail,
+  LedgerIdentity,
+  NewSecret,
+  ResourceEdit,
   ConnectionSummary,
   ConnectOutcome,
   ConnectorDescriptor,
@@ -61,11 +68,19 @@ function isIpcError(value: unknown): value is IpcError {
   );
 }
 
+/** Fired when any call finds the vault locked, so the app can return to the gate. */
+export const VAULT_LOCKED_EVENT = "devledger:vault-locked";
+
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(command, args);
   } catch (raw) {
     if (isIpcError(raw)) {
+      if (raw.code === "vault_locked") {
+        // The vault can lock without the UI asking -- the idle timer runs in
+        // Rust. Whatever screen made this call, the right response is the gate.
+        window.dispatchEvent(new Event(VAULT_LOCKED_EVENT));
+      }
       throw new ApiError(raw.code, raw.message);
     }
     throw new ApiError("unknown", String(raw));
@@ -154,11 +169,17 @@ export const accountsForIdentity = (identityId: string) =>
 export const createIdentityManual = (label: string, email: string | null) =>
   call<Identity>("create_identity_manual", { label, email });
 
+/**
+ * Create an account under an identity. `provider` may be any known provider or
+ * `other:<name>` for a service DevLedger has no built-in knowledge of, and the
+ * optional `details` record how to sign in.
+ */
 export const createAccountManual = (
   identityId: string,
   provider: Provider,
   label: string,
-) => call<Account>("create_account_manual", { identityId, provider, label });
+  details: AccountDetails | null = null,
+) => call<Account>("create_account_manual", { identityId, provider, label, details });
 
 export const createServiceProjectManual = (
   accountId: string,
@@ -293,6 +314,74 @@ export const copySecret = (secretId: string) =>
 export const copyEnv = (projectId: string, environment: Environment | null) =>
   call<number>("copy_env", { projectId, environment });
 
+
+// --- the ledger: people, their addresses, and everything they hold --------
+
+/** Everyone, each with the whole chain from address down to project. */
+export const ledgerOverview = () => call<LedgerIdentity[]>("ledger_overview");
+
+export const updateIdentity = (identityId: string, label: string) =>
+  call<void>("update_identity", { identityId, label });
+
+/** Delete a person and every account filed under them. */
+export const deleteIdentity = (identityId: string) =>
+  call<void>("delete_identity", { identityId });
+
+export const identityEmails = (identityId: string) =>
+  call<IdentityEmail[]>("identity_emails", { identityId });
+
+export const addIdentityEmail = (identityId: string, address: string, makePrimary: boolean) =>
+  call<IdentityEmail>("add_identity_email", { identityId, address, makePrimary });
+
+export const setPrimaryEmail = (identityId: string, emailId: string) =>
+  call<void>("set_primary_email", { identityId, emailId });
+
+export const removeIdentityEmail = (identityId: string, emailId: string) =>
+  call<void>("remove_identity_email", { identityId, emailId });
+
+export const updateAccount = (accountId: string, label: string, details: AccountDetails) =>
+  call<void>("update_account", { accountId, label, details });
+
+/** Secrets filed against an account itself -- its login password, say. Metadata only. */
+export const accountSecrets = (accountId: string) =>
+  call<VaultEntry[]>("account_secrets", { accountId });
+
+export const updateResource = (resourceId: string, edit: ResourceEdit) =>
+  call<void>("update_resource", { resourceId, edit });
+
+/**
+ * Store a password, API key or variable entered by hand.
+ *
+ * The value crosses to Rust once and is sealed there; this returns metadata
+ * only. It is the one call besides `connectorConnect` that sends a credential
+ * *to* the backend, and like it, nothing ever sends one back except
+ * `revealSecret`.
+ */
+export const storeSecret = (entry: NewSecret, value: string) =>
+  call<SecretRecord>("store_secret", { entry, value });
+
+export const updateSecretMeta = (
+  secretId: string,
+  name: string,
+  environment: Environment,
+  notes: string | null,
+) => call<void>("update_secret_meta", { secretId, name, environment, notes });
+
+/** Rotate a secret's value, keeping its name and history. */
+export const replaceSecretValue = (secretId: string, value: string) =>
+  call<void>("replace_secret_value", { secretId, value });
+
+/** Which environments a project's secrets use. */
+export const projectEnvironments = (projectId: string) =>
+  call<Environment[]>("project_environments", { projectId });
+
+/** Names a .env export would refuse, and where each definition comes from. */
+export const envConflicts = (projectId: string, environment: Environment | null) =>
+  call<EnvConflict[]>("env_conflicts", { projectId, environment });
+
+/** What deleting a project would take with it, asked before the fact. */
+export const projectDeletionImpact = (projectId: string) =>
+  call<DeletionImpact>("project_deletion_impact", { projectId });
 
 // --- Connect & Discover ----------------------------------------------------
 //

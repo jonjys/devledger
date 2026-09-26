@@ -1,9 +1,21 @@
 import { useEffect, useState } from "react";
 
 import * as api from "../lib/api";
-import { formatTime, plural, providerLabel, secretKindLabel } from "../lib/format";
+import {
+  environmentName,
+  formatTime,
+  plural,
+  providerLabel,
+  secretKindLabel,
+} from "../lib/format";
 import { useMode } from "../lib/mode";
-import type { Environment, ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
+import type {
+  EnvConflict,
+  Environment,
+  ProjectSummary,
+  ServiceProject,
+  VaultEntry,
+} from "../lib/types";
 
 interface Props {
   summary: ProjectSummary;
@@ -26,6 +38,8 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [exportEnvironment, setExportEnvironment] = useState<Environment | "all">("all");
+  const [conflicts, setConflicts] = useState<EnvConflict[]>([]);
+  const [addingVariable, setAddingVariable] = useState(false);
 
   const projectId = summary.project.id;
 
@@ -48,6 +62,24 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
       live = false;
     };
   }, [projectId, onNotify]);
+
+  // Ask before the user presses Copy whether the chosen export would be refused,
+  // so a clash is something they see and fix rather than an error they hit.
+  // Decided from blind indexes in Rust: nothing is decrypted to answer it.
+  useEffect(() => {
+    let live = true;
+    api
+      .envConflicts(projectId, exportEnvironment === "all" ? null : exportEnvironment)
+      .then((found) => {
+        if (live) setConflicts(found);
+      })
+      .catch(() => {
+        if (live) setConflicts([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [projectId, exportEnvironment, entries]);
 
   async function reload() {
     setEntries(await api.listSecrets(projectId));
@@ -88,6 +120,10 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
   }
 
   async function remove(secretId: string, name: string) {
+    // Deleting a secret destroys its sealed value; there is no undo.
+    if (!window.confirm(`Delete ${name}? The stored value is destroyed and cannot be recovered.`)) {
+      return;
+    }
     try {
       await api.deleteSecret(secretId);
       setRevealed(({ [secretId]: _dropped, ...rest }) => rest);
@@ -99,7 +135,23 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
   }
 
   async function removeProject() {
-    if (!window.confirm(`Delete project "${summary.project.name}"? Its resources are kept.`)) {
+    // The old prompt said only "its resources are kept", which is true and
+    // leaves out that secrets filed directly on the project are destroyed.
+    // Ask Rust for the actual count and say it.
+    let message = `Delete project "${summary.project.name}"?`;
+    try {
+      const impact = await api.projectDeletionImpact(projectId);
+      message +=
+        impact.secrets_deleted > 0
+          ? ` ${plural(impact.secrets_deleted, "secret")} filed on this project will be destroyed and cannot be recovered.`
+          : " No secrets are filed directly on it.";
+      if (impact.resources_unlinked > 0) {
+        message += ` ${plural(impact.resources_unlinked, "linked resource")} and their own secrets are kept.`;
+      }
+    } catch {
+      message += " Secrets filed directly on it will be destroyed.";
+    }
+    if (!window.confirm(message)) {
       return;
     }
     try {
@@ -145,14 +197,62 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
             <option value="production">Production</option>
             <option value="unknown">Unassigned</option>
           </select>
-          <button type="button" onClick={copyAll} disabled={entries.length === 0}>
+          <button
+            type="button"
+            onClick={copyAll}
+            disabled={entries.length === 0 || conflicts.length > 0}
+            title={
+              conflicts.length > 0
+                ? "Some variables are defined more than once with different values"
+                : undefined
+            }
+          >
             Copy .env
+          </button>
+          <button type="button" onClick={() => setAddingVariable((v) => !v)}>
+            {addingVariable ? "Cancel" : "+ Variable"}
           </button>
           <button type="button" className="danger" onClick={removeProject}>
             Delete project
           </button>
         </div>
       </div>
+
+      {conflicts.length > 0 && (
+        <div className="warn" role="alert">
+          <strong>Copy .env is blocked.</strong> A .env file keeps only one value per name, so
+          exporting{" "}
+          {exportEnvironment === "all" ? "every environment at once" : "this environment"} would
+          silently drop one of these:
+          <ul>
+            {conflicts.map((c) => (
+              <li key={c.name}>
+                <span className="mono">{c.name}</span> —{" "}
+                {c.definitions
+                  .map(
+                    (d) =>
+                      `${environmentName(d.environment)}${d.source ? ` via ${d.source}` : ""}`,
+                  )
+                  .join(", ")}
+              </li>
+            ))}
+          </ul>
+          Choose a single environment above, or rename one of them.
+        </div>
+      )}
+
+      {addingVariable && (
+        <AddVariableForm
+          projectId={projectId}
+          defaultEnvironment={exportEnvironment === "all" ? "development" : exportEnvironment}
+          onNotify={onNotify}
+          onSaved={async () => {
+            setAddingVariable(false);
+            await reload();
+            onChanged();
+          }}
+        />
+      )}
 
       {loading ? (
         <div className="empty">Loading…</div>
@@ -167,6 +267,7 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
             <tr>
               <th>Name</th>
               <th>Kind</th>
+              <th>Environment</th>
               <th>Value</th>
               <th>Updated</th>
               <th />
@@ -184,7 +285,14 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
                         {entry.client_unsafe && <span className="tag unsafe">server only</span>}
                       </>
                     ) : (
-                      <div className="nm">{secretKindLabel(entry.secret.kind)}</div>
+                      <>
+                        <div className="nm">{secretKindLabel(entry.secret.kind)}</div>
+                        {/* The name is what a .env file and a conflict warning
+                            refer to, so it stays visible in every mode. */}
+                        <div className="mono muted" style={{ fontSize: 11.5 }}>
+                          {entry.secret.name}
+                        </div>
+                      </>
                     )}
                   </td>
                   <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>
@@ -194,6 +302,11 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
                         via {entry.service_project_name}
                       </div>
                     )}
+                  </td>
+                  <td style={{ fontSize: 12.5 }}>
+                    <span className={`env env-${entry.secret.environment}`}>
+                      {environmentName(entry.secret.environment)}
+                    </span>
                   </td>
                   <td>
                     {plaintext !== undefined ? (
@@ -229,5 +342,94 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
         </table>
       )}
     </div>
+  );
+}
+
+/**
+ * Add a variable to this project by hand.
+ *
+ * The value is sent to Rust once and sealed there; nothing comes back but the
+ * row's metadata, and the typed value is cleared from state as soon as it is
+ * stored.
+ */
+function AddVariableForm({
+  projectId,
+  defaultEnvironment,
+  onNotify,
+  onSaved,
+}: {
+  projectId: string;
+  defaultEnvironment: Environment;
+  onNotify: (message: string, bad?: boolean) => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [environment, setEnvironment] = useState<Environment>(defaultEnvironment);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (busy || !name.trim() || !value) return;
+    setBusy(true);
+    try {
+      await api.storeSecret(
+        {
+          owner: { project_id: projectId, service_project_id: null, account_id: null },
+          kind: "env_var",
+          name: name.trim(),
+          environment,
+          notes: null,
+        },
+        value,
+      );
+      setValue("");
+      onNotify(`Stored ${name.trim()} for ${environmentName(environment)}`);
+      await onSaved();
+    } catch (e: unknown) {
+      onNotify(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      className="inline-form vault-add"
+      aria-label="New variable"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <input
+        autoFocus
+        aria-label="Variable name"
+        placeholder="DATABASE_URL"
+        className="mono"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <input
+        type="password"
+        autoComplete="off"
+        aria-label="Variable value"
+        placeholder="value"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <select
+        aria-label="Variable environment"
+        value={environment}
+        onChange={(e) => setEnvironment(e.target.value as Environment)}
+      >
+        <option value="development">Development</option>
+        <option value="staging">Staging</option>
+        <option value="production">Production</option>
+        <option value="unknown">Unassigned</option>
+      </select>
+      <button type="submit" className="primary" disabled={busy || !name.trim() || !value}>
+        Store encrypted
+      </button>
+    </form>
   );
 }

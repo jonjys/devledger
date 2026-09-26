@@ -1597,8 +1597,13 @@ impl Vault {
     }
 
     /// Edit a secret's name, environment or note, leaving its value alone.
+    ///
+    /// A rename is not metadata-only: the value is sealed with the name as
+    /// associated data, so it is decrypted under the old name and re-sealed
+    /// under the new one. Changing only the environment or note leaves the
+    /// ciphertext untouched.
     pub fn update_secret_meta(
-        &self,
+        &mut self,
         secret_id: Uuid,
         name: &str,
         environment: Environment,
@@ -1608,11 +1613,32 @@ impl Vault {
         if name.is_empty() {
             return Err(CoreError::Invalid("a secret needs a name".into()));
         }
-        self.unlocked()?.store.update_secret_meta(
+        let notes = manual::clean(notes);
+        let current = self
+            .unlocked()?
+            .store
+            .secret(secret_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("secret {secret_id}")))?;
+
+        if current.name == name {
+            return self.unlocked()?.store.update_secret_meta(
+                secret_id,
+                name,
+                environment,
+                notes.as_deref(),
+            );
+        }
+
+        let inner = self.unlocked()?;
+        let envelope = inner.store.secret_envelope(secret_id)?;
+        let plaintext = aead::open(&inner.aead_key, current.name.as_bytes(), &envelope)?;
+        let resealed = aead::seal(&inner.aead_key, name.as_bytes(), plaintext.expose())?;
+        self.unlocked_mut()?.store.rename_secret_resealed(
             secret_id,
             name,
             environment,
-            manual::clean(notes).as_deref(),
+            notes.as_deref(),
+            &resealed,
         )
     }
 

@@ -20,8 +20,10 @@ only ever reads.
 | **M5** | Read-only Supabase connector with explicit review before import | Done |
 | **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
 | **Launch** | Overview dashboard, Indie/Dev display, skill-tree editing, secrets and attention views, installer release workflow | Done |
+| **0.8** | Hand entry for everything: several addresses per person, any service by name, login details, account passwords, per-environment variables, the Ledger view. Migration data-loss fix, connector routing fix, idle lock | Done |
 
-143 Rust tests and 89 TypeScript tests, plus a screenshot-based UI smoke test.
+185 Rust tests and 110 TypeScript tests, plus a screenshot-based UI smoke test
+that drives the release binary through onboarding and into the Ledger.
 
 The launch build keeps the 0.6 ledger (encrypted vault, Smart Paste, Supabase connect, visual stack) and adds the shell it ships with: a sidebar, an Overview home screen, Indie versus Dev labels, and by-hand create, move and delete for accounts, resources and subscriptions.
 
@@ -92,10 +94,13 @@ own `role` claim decides whether something is an anon key or a service_role
 key, so a credential filed under a misleading variable name is still identified
 correctly. There is no model and no guessing.
 
-**Two ways in.** Paste something and DevLedger works out what it is, or connect
-a provider account and DevLedger reads its structure directly. Connecting is
-read-only, happens only when you press a button, and nothing reaches your map
-until you review what was found. Several accounts with the same provider stay
+**Three ways in.** Enter it by hand -- any person, address, service, login,
+password or variable, with no token and no network. Paste something and
+DevLedger works out what it is. Or connect a provider account and DevLedger
+reads its structure directly. DevLedger only ever sends read requests; it
+cannot see what a token you give it is allowed to do, so create tokens with the
+narrowest scope the provider offers. Connecting happens only when you press a
+button, and nothing reaches your map until you review what was found. Several accounts with the same provider stay
 separate — connecting a second Supabase account never overwrites the first.
 
 **It asks rather than assuming.** Paste a few lines naming your project, your

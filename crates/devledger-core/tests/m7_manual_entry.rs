@@ -863,3 +863,79 @@ fn a_paste_signed_with_an_alias_lands_on_the_same_person() {
         "and the pasted account is filed under them"
     );
 }
+
+// --------------------------------------------------- renaming keeps the value
+
+#[test]
+fn renaming_a_secret_keeps_its_value_readable() {
+    // Each envelope is sealed with the secret's name as associated data, so a
+    // rename that only touched the metadata row would leave a ciphertext that
+    // no longer opens: the entry would look fine and be permanently unreadable.
+    let (_dir, mut vault) = common::unlocked_vault();
+    let project = vault.create_project("Storefront", None).expect("project");
+    let record = vault
+        .store_secret(
+            &NewSecret {
+                owner: SecretOwner {
+                    project_id: Some(project.id),
+                    ..SecretOwner::default()
+                },
+                kind: SecretKind::EnvVar,
+                name: "DB_URL".into(),
+                environment: Environment::Development,
+                notes: None,
+            },
+            &SecretString::new("postgres://localhost/dev"),
+        )
+        .expect("store");
+
+    vault
+        .update_secret_meta(
+            record.id,
+            "DATABASE_URL",
+            Environment::Production,
+            Some("moved"),
+        )
+        .expect("rename");
+
+    assert_eq!(
+        vault
+            .reveal_secret(record.id)
+            .expect("still opens")
+            .expose(),
+        "postgres://localhost/dev"
+    );
+    let listed = vault.list_secrets(project.id).expect("list");
+    assert_eq!(listed[0].secret.name, "DATABASE_URL");
+    assert_eq!(listed[0].secret.environment, Environment::Production);
+    assert_eq!(listed[0].secret.notes.as_deref(), Some("moved"));
+}
+
+#[test]
+fn changing_only_the_environment_does_not_touch_the_ciphertext() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    let project = vault.create_project("Storefront", None).expect("project");
+    let record = vault
+        .store_secret(
+            &NewSecret {
+                owner: SecretOwner {
+                    project_id: Some(project.id),
+                    ..SecretOwner::default()
+                },
+                kind: SecretKind::EnvVar,
+                name: "API_URL".into(),
+                environment: Environment::Unknown,
+                notes: None,
+            },
+            &SecretString::new("https://example.com"),
+        )
+        .expect("store");
+
+    vault
+        .update_secret_meta(record.id, "API_URL", Environment::Staging, None)
+        .expect("re-file");
+    assert_eq!(
+        vault.reveal_secret(record.id).expect("opens").expose(),
+        "https://example.com"
+    );
+}

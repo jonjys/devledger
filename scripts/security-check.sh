@@ -101,6 +101,39 @@ else
   ok "the capability description is accurate"
 fi
 
+check "Connector calls are routed by connector id"
+# The IPC layer used to call the Supabase client directly from both
+# connector_connect and connector_refresh, ignoring the connector id it was
+# given. With a second connector that sends one provider's credential to
+# another. Every call now goes through the dispatch in devledger-connect.
+if grep -nE 'devledger_connect::[a-z_]+::(verify|discover)\(' apps/desktop/src-tauri/src/lib.rs | grep -q .; then
+  bad "the IPC layer calls a provider client directly instead of dispatching by id"
+else
+  ok "connector calls go through verify_with / discover_with"
+fi
+
+check "The UI does not claim a token is read-only"
+# DevLedger can only guarantee that it sends read requests. It cannot inspect
+# what a pasted token is allowed to do, so a bare "read-only" label on a
+# connection would be a claim about the credential that nothing verifies.
+# Matches both `<span>read-only</span>` and JSX text on a line of its own.
+if grep -rnE '(>\s*read-only\s*<|^\s*read-only\s*$)' apps/desktop/src --include=*.tsx \
+     | grep -v '\.test\.' | grep -q .; then
+  bad "a 'read-only' label implies the token itself is limited"
+else
+  ok "read-only claims describe DevLedger, not the token"
+fi
+
+check "Migrations run with foreign-key enforcement off"
+# With enforcement on, DROP TABLE cascades into child tables. That is how the
+# v1 -> v2 upgrade destroyed every stored secret value.
+if grep -q 'PRAGMA foreign_keys = OFF' crates/devledger-core/src/store/mod.rs \
+   && grep -q 'pragma_foreign_key_check' crates/devledger-core/src/store/mod.rs; then
+  ok "migrations disable cascades and verify integrity afterwards"
+else
+  bad "the migration runner no longer guards against cascading drops"
+fi
+
 check "Secret containers cannot be serialized"
 if grep -nE '^\s*#\[derive\(.*Serialize' crates/devledger-core/src/secret.rs >/dev/null 2>&1; then
   bad "a Serialize derive appears in secret.rs"

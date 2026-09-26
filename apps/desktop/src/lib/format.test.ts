@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { environmentLabel, plural, secretKindLabel, severityRank } from "./format";
+import {
+  environmentLabel,
+  environmentName,
+  isCustomProvider,
+  plural,
+  providerFromInput,
+  providerLabel,
+  secretKindLabel,
+  severityRank,
+} from "./format";
 
 describe("formatting helpers", () => {
   it("labels every secret kind", () => {
@@ -23,5 +32,31 @@ describe("formatting helpers", () => {
     expect(plural(1, "secret")).toBe("1 secret");
     expect(plural(3, "secret")).toBe("3 secrets");
     expect(plural(2, "entity", "entities")).toBe("2 entities");
+  });
+
+  it("names an unassigned environment instead of leaving a blank", () => {
+    expect(environmentName("unknown")).toBe("Unassigned");
+    expect(environmentName("staging")).toBe("Staging");
+  });
+});
+
+describe("providers", () => {
+  it("labels known providers, including the spelling an older build sent", () => {
+    expect(providerLabel("github")).toBe("GitHub");
+    expect(providerLabel("git_hub")).toBe("GitHub");
+    expect(providerLabel("openai")).toBe("OpenAI");
+  });
+
+  it("labels a custom service by the name the user gave it", () => {
+    expect(providerLabel("other:Loopia")).toBe("Loopia");
+    expect(isCustomProvider("other:Loopia")).toBe(true);
+    expect(isCustomProvider("supabase")).toBe(false);
+  });
+
+  it("turns what the user typed into the same tag the backend would", () => {
+    expect(providerFromInput("Supabase")).toBe("supabase");
+    expect(providerFromInput("  GITHUB ")).toBe("github");
+    expect(providerFromInput("My NAS")).toBe("other:My NAS");
+    expect(providerFromInput("")).toBe("unknown");
   });
 });

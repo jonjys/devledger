@@ -48,7 +48,10 @@ describe("Connections screen", () => {
     expect((await screen.findAllByText("Supabase")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
     expect(screen.getByText("No accounts connected yet.")).toBeInTheDocument();
-    expect(screen.getByText("read-only")).toBeInTheDocument();
+    // The badge describes DevLedger, not the token: DevLedger cannot inspect a
+    // token's permissions, so it must never claim the token is read-only.
+    expect(screen.getByText("DevLedger only reads")).toBeInTheDocument();
+    expect(screen.queryByText("read-only")).toBeNull();
   });
 
   it("lists each connected account separately with its own counts", async () => {

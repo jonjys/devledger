@@ -16,7 +16,7 @@
 //!    capability; provider requests stay in the Rust connector boundary.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
@@ -40,7 +40,7 @@ use devledger_core::vault::{
 };
 use devledger_core::{CoreError, Vault};
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use uuid::Uuid;
 
@@ -82,15 +82,62 @@ type IpcResult<T> = std::result::Result<T, IpcError>;
 /// The vault, shared across commands.
 pub struct AppState {
     vault: Mutex<Vault>,
+    /// When the UI last asked for anything.
+    ///
+    /// The frontend never polls, so every command is the result of something
+    /// the user did. That makes "time since the last command" an honest measure
+    /// of whether anyone is at the keyboard.
+    last_activity: Mutex<Instant>,
 }
 
+/// How long the vault stays open with nobody using it.
+pub const IDLE_LOCK_AFTER: Duration = Duration::from_secs(15 * 60);
+
+/// How often the idle check runs. Bounds how late an idle lock can be.
+const IDLE_CHECK_EVERY: Duration = Duration::from_secs(30);
+
 impl AppState {
+    fn new(vault: Vault) -> Self {
+        AppState {
+            vault: Mutex::new(vault),
+            last_activity: Mutex::new(Instant::now()),
+        }
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut Vault) -> Result<T, CoreError>) -> IpcResult<T> {
+        if let Ok(mut at) = self.last_activity.lock() {
+            *at = Instant::now();
+        }
         let mut guard = self.vault.lock().map_err(|_| IpcError {
             code: "poisoned",
             message: "vault state was left inconsistent by an earlier failure".into(),
         })?;
         f(&mut guard).map_err(IpcError::from)
+    }
+
+    /// Lock the vault if nothing has used it for `limit`. Returns whether this
+    /// call is what locked it.
+    ///
+    /// The timer lives here rather than in the webview so that a frontend bug,
+    /// or a compromised frontend, cannot keep the vault open by simply not
+    /// running its timer. Locking drops the keys from memory, exactly like the
+    /// Lock button.
+    fn lock_if_idle(&self, now: Instant, limit: Duration) -> bool {
+        let idle = match self.last_activity.lock() {
+            Ok(at) => now.saturating_duration_since(*at),
+            Err(_) => return false,
+        };
+        if idle < limit {
+            return false;
+        }
+        let Ok(mut vault) = self.vault.lock() else {
+            return false;
+        };
+        if !vault.is_unlocked() {
+            return false;
+        }
+        vault.lock();
+        true
     }
 }
 
@@ -840,8 +887,19 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("the platform must provide an app data directory");
-            app.manage(AppState {
-                vault: Mutex::new(Vault::new(default_vault_dir(&app_data))),
+            app.manage(AppState::new(Vault::new(default_vault_dir(&app_data))));
+
+            // Idle lock. When it fires, the clipboard is cleared as the Lock
+            // button does, and the UI is told at once so that a revealed value
+            // does not stay on screen until the next click.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(IDLE_CHECK_EVERY);
+                let state = handle.state::<AppState>();
+                if state.lock_if_idle(Instant::now(), IDLE_LOCK_AFTER) {
+                    let _ = handle.clipboard().clear();
+                    let _ = handle.emit("vault-locked", "idle");
+                }
             });
             Ok(())
         })
@@ -917,4 +975,53 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevLedger");
+}
+
+#[cfg(test)]
+mod idle_lock_tests {
+    use super::*;
+    use devledger_core::crypto::kdf::KdfParams;
+
+    fn unlocked_state() -> (std::path::PathBuf, AppState) {
+        let dir = std::env::temp_dir().join(format!("devledger-idle-{}", Uuid::new_v4()));
+        let mut vault = Vault::new(&dir);
+        vault
+            .initialize_with_params(
+                &SecretString::new("correct-horse-battery-staple"),
+                KdfParams::weak_for_tests().expect("params"),
+            )
+            .expect("initialize");
+        (dir, AppState::new(vault))
+    }
+
+    #[test]
+    fn a_vault_in_use_stays_open() {
+        let (dir, state) = unlocked_state();
+        let soon = Instant::now() + Duration::from_secs(60);
+        assert!(!state.lock_if_idle(soon, IDLE_LOCK_AFTER));
+        assert!(state.vault.lock().unwrap().is_unlocked());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_idle_vault_locks_and_drops_its_keys() {
+        let (dir, state) = unlocked_state();
+        let later = Instant::now() + IDLE_LOCK_AFTER + Duration::from_secs(1);
+        assert!(state.lock_if_idle(later, IDLE_LOCK_AFTER));
+        assert!(!state.vault.lock().unwrap().is_unlocked());
+        // A second check has nothing left to lock.
+        assert!(!state.lock_if_idle(later, IDLE_LOCK_AFTER));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn any_command_resets_the_idle_clock() {
+        let (dir, state) = unlocked_state();
+        let start = Instant::now();
+        // Something happens: the clock restarts from here.
+        let _ = state.with(|vault| Ok(vault.status()));
+        let almost = start + IDLE_LOCK_AFTER - Duration::from_secs(5);
+        assert!(!state.lock_if_idle(almost, IDLE_LOCK_AFTER));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

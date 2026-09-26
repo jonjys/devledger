@@ -97,6 +97,11 @@ export function environmentLabel(environment: Environment): string {
   }
 }
 
+/** Like `environmentLabel`, but never empty: an unassigned value says so. */
+export function environmentName(environment: Environment): string {
+  return environmentLabel(environment) || "Unassigned";
+}
+
 export function severityRank(severity: Severity): number {
   return severity === "critical" ? 2 : severity === "warning" ? 1 : 0;
 }

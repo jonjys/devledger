@@ -12,6 +12,7 @@ import MapView from "./MapView";
 import StackGraphView from "./StackGraphView";
 import NewProjectForm from "./NewProjectForm";
 import OverviewView from "./OverviewView";
+import LedgerView from "./LedgerView";
 import ProjectVault from "./ProjectVault";
 import ReviewSheet from "./ReviewSheet";
 import SecretsView from "./SecretsView";
@@ -20,6 +21,7 @@ import SubscriptionsView from "./SubscriptionsView";
 
 type View =
   | "overview"
+  | "ledger"
   | "projects"
   | "identities"
   | "stack"
@@ -44,6 +46,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: "Workspace",
     items: [
       { id: "overview", label: "Overview", icon: "overview" },
+      { id: "ledger", label: "Ledger", icon: "ledger" },
       { id: "projects", label: "Projects", icon: "projects" },
       { id: "identities", label: "Identities", icon: "identities" },
       { id: "stack", label: "Stack", icon: "stack" },
@@ -81,6 +84,17 @@ function Icon({ name }: { name: IconName }) {
           <rect x="14" y="3" width="7" height="7" rx="1" />
           <rect x="3" y="14" width="7" height="7" rx="1" />
           <rect x="14" y="14" width="7" height="7" rx="1" />
+        </svg>
+      );
+    case "ledger":
+      return (
+        <svg {...common}>
+          <circle cx="6" cy="6" r="2.2" />
+          <path d="M8.2 6H13" />
+          <rect x="13" y="3.5" width="8" height="5" rx="1" />
+          <path d="M17 8.5v4" />
+          <rect x="13" y="12.5" width="8" height="5" rx="1" />
+          <path d="M17 17.5V21" />
         </svg>
       );
     case "projects":
@@ -375,6 +389,10 @@ function DesktopShellInner({ onLock }: Props) {
                 </div>
               </div>
             </div>
+          )}
+
+          {view === "ledger" && (
+            <LedgerView onNotify={notify} onChanged={refresh} refreshKey={refreshKey} />
           )}
 
           {view === "identities" && (

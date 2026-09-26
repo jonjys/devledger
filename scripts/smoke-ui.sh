@@ -43,21 +43,47 @@ for _ in $(seq 1 60); do
 done
 [ -n "$WINDOW" ] || { echo "DevLedger did not open a visible window"; exit 1; }
 xdotool windowactivate --sync "$WINDOW" 2>/dev/null || xdotool windowfocus "$WINDOW"
-sleep 2
+
+# A visible window is not a painted page. Under software rendering WebKit can
+# show an all-black surface for several seconds, and typing into it then loses
+# the first keystrokes -- which is how a 36-character passphrase arrived as 27.
+# Wait until the window actually has content before touching it.
+for _ in $(seq 1 60); do
+  import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
+  painted=$(identify -format "%[fx:int(standard_deviation*255)]" "$OUT/01-onboarding.png")
+  [ "$painted" -gt 5 ] && break
+  sleep 1
+done
+sleep 1
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
+
+# Click into the passphrase field rather than trusting autofocus to have landed.
+xdotool mousemove --window "$WINDOW" 590 363 click 1; sleep 0.5
 xdotool type --delay 35 "$PASSPHRASE"
 xdotool key Tab; sleep 1
 xdotool type --delay 35 "$PASSPHRASE"; sleep 1
 xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
-# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window.
-xdotool mousemove --window "$WINDOW" 120 270 click 1; sleep 4
+# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window,
+# so adding a sidebar entry above Connections moves it down one 40px row: the
+# Ledger tab did exactly that, and this click silently landed on Stack instead.
+# Look at 03-connections.png after any change to the sidebar.
+xdotool mousemove --window "$WINDOW" 120 308 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
 # The Supabase "Connect" button sits at the right of the first connector row.
 xdotool mousemove --window "$WINDOW" 1090 212 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 xdotool key Escape; sleep 1
+# Ledger: the email-to-project chain. Empty on a fresh vault.
+xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 3
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
+# Add a person by address: UI -> IPC -> SQLCipher -> ledger_overview and back.
+xdotool mousemove --window "$WINDOW" 1103 106 click 1; sleep 1
+xdotool key Tab
+xdotool type --delay 35 "smoke@example.com"
+xdotool key Return; sleep 3
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-person.png"
 # Phone-sized window. The shell must collapse the sidebar into a bottom bar.
 xdotool windowsize "$WINDOW" 390 844
 sleep 2

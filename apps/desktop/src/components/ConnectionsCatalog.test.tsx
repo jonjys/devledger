@@ -86,4 +86,46 @@ describe("Service catalog", () => {
     );
     expect(onChanged).toHaveBeenCalled();
   });
+
+  it("stores a key typed for a service with no connector instead of discarding it", async () => {
+    // The API tab requires a key before it will submit. It used to create the
+    // account and then drop the key while reporting success, so people believed
+    // it was stored. It is now sealed onto the new account.
+    const user = userEvent.setup();
+    mocked.createAccountForEmail.mockResolvedValue({
+      id: "account-9",
+      identity_id: "identity-1",
+      provider: "stripe",
+      external_ref: null,
+      label: "Billing",
+      login_email: null,
+      username: null,
+      url: null,
+      notes: null,
+      created_at: "2026-09-16T10:00:00Z",
+    });
+    mocked.storeSecret.mockResolvedValue({} as never);
+    const { onNotify } = renderView();
+
+    await screen.findByRole("heading", { name: "Add a service" });
+    await user.click(within(catalogCard("Stripe")).getByRole("button", { name: "+ Add" }));
+    const dialog = screen.getByRole("dialog", { name: "Add Stripe" });
+    await user.type(within(dialog).getByLabelText("Label this account"), "Billing");
+    await user.type(within(dialog).getByLabelText("API key / token"), "sk_live_example");
+    await user.click(within(dialog).getByRole("button", { name: /save|add|connect/i }));
+
+    await waitFor(() =>
+      expect(mocked.storeSecret).toHaveBeenCalledWith(
+        {
+          owner: { project_id: null, service_project_id: null, account_id: "account-9" },
+          kind: "generic_api_key",
+          name: "Stripe API key",
+          environment: "unknown",
+          notes: null,
+        },
+        "sk_live_example",
+      ),
+    );
+    expect(onNotify).toHaveBeenCalledWith(expect.stringContaining("not verified"));
+  });
 });
