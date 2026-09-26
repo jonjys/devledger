@@ -395,6 +395,8 @@ fn create_subscription_manual(
     currency: Option<String>,
     interval: Option<BillingInterval>,
     renews_at: Option<String>,
+    reminder_days: Option<i64>,
+    warn_enabled: Option<bool>,
 ) -> IpcResult<Subscription> {
     state.with(|vault| {
         vault.create_subscription_manual(
@@ -406,6 +408,8 @@ fn create_subscription_manual(
             currency.as_deref(),
             interval,
             renews_at.as_deref(),
+            reminder_days,
+            warn_enabled.unwrap_or(true),
         )
     })
 }

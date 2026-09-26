@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import * as api from "../lib/api";
 import { plural } from "../lib/format";
+import { useMode } from "../lib/mode";
 import type {
   AttentionItem,
   IdentityNode,
@@ -13,8 +14,22 @@ import QuickAddDialog, { type AddKind } from "./QuickAddDialog";
 
 type ViewMode = "stack" | "identity" | "project" | "apis" | "attention";
 
+interface Spot {
+  x: number;
+  y: number;
+}
+
+const LayoutCtx = createContext<{
+  editing: boolean;
+  spots: Record<string, Spot>;
+  move: (id: string, spot: Spot) => void;
+  persist: () => void;
+}>({ editing: false, spots: {}, move: () => {}, persist: () => {} });
+
 interface Props {
   projects: ProjectSummary[];
+  query: string;
+  onQueryChange: (query: string) => void;
   onNotify: (message: string, bad?: boolean) => void;
   onChanged: () => void;
 }
@@ -26,14 +41,24 @@ type SelectedNode =
   | { kind: "resource"; title: string; subtitle: string; resource: ServiceProjectSummary }
   | { kind: "project"; title: string; subtitle: string; projectId: string };
 
-export default function StackGraphView({ projects, onNotify, onChanged }: Props) {
+export default function StackGraphView({ projects, query, onQueryChange, onNotify, onChanged }: Props) {
+  const { dev } = useMode();
   const [graph, setGraph] = useState<IdentityNode[]>([]);
   const [attention, setAttention] = useState<AttentionItem[]>([]);
   const [resources, setResources] = useState<ServiceProjectSummary[]>([]);
   const [apiEntries, setApiEntries] = useState<Record<string, VaultEntry[]>>({});
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<ViewMode>("stack");
-  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [spots, setSpots] = useState<Record<string, Spot>>(() => {
+    try {
+      const raw = localStorage.getItem("devledger.stackLayout");
+      return raw ? (JSON.parse(raw) as Record<string, Spot>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const spotsRef = useRef(spots);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<SelectedNode | null>(null);
   const [addKind, setAddKind] = useState<AddKind | null>(null);
@@ -66,6 +91,18 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
   useEffect(() => {
     void load();
   }, [load]);
+
+  spotsRef.current = spots;
+  function moveSpot(id: string, spot: Spot) {
+    setSpots((prev) => {
+      const next = { ...prev, [id]: spot };
+      spotsRef.current = next;
+      return next;
+    });
+  }
+  function persistSpots() {
+    localStorage.setItem("devledger.stackLayout", JSON.stringify(spotsRef.current));
+  }
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleGraph = useMemo(() => {
@@ -117,7 +154,7 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
 
   return (
     <div className="stack-page">
-      <div className="stack-toolbar">
+      <div className="stack-toolbar column">
         <div>
           <h1>My Stack</h1>
           <p>Your identities, services, projects and resources — one graph.</p>
@@ -129,6 +166,15 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
             <button type="button" onClick={() => setAddKind("resource")}>+ Resource</button>
             <button type="button" onClick={() => setAddKind("secret")}>+ API / Secret</button>
           </div>
+          {dev && (
+            <button
+              type="button"
+              className={editing ? "primary" : ""}
+              onClick={() => setEditing((on) => !on)}
+            >
+              {editing ? "Done editing layout" : "Edit your layout"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -154,7 +200,7 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
         <input
           className="stack-search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search email, service, project, ref…"
           aria-label="Search stack"
         />
@@ -188,7 +234,8 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
           )}
         </div>
       ) : (
-        <div className={`stack-canvas ${mode === "identity" ? "identity-focus" : ""}`}>
+        <LayoutCtx.Provider value={{ editing, spots, move: moveSpot, persist: persistSpots }}>
+        <div className={`stack-canvas ${mode === "identity" ? "identity-focus" : ""} ${editing ? "layout-editing" : ""}`}>
           <div className="lane-heads" aria-hidden="true">
             <span>IDENTITIES</span>
             <span>SERVICES / ACCOUNTS</span>
@@ -198,13 +245,18 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
 
           {visibleGraph.map((identity) => {
             const identityId = identity.identity.id;
-            const isCollapsed = collapsed.has(identityId);
+            const isCollapsed = !normalizedQuery && collapsed.has(identityId);
+            const matches = (...parts: Array<string | null | undefined>) =>
+              normalizedQuery.length > 0 &&
+              parts.filter(Boolean).join(" ").toLowerCase().includes(normalizedQuery);
             return (
               <section className="skill-tree-row" key={identityId}>
                 <div className="tree-identity-col">
-                  <GraphNode
+                    <GraphNode
+                    nodeId={identityId}
                     tone="identity"
                     eyebrow="Identity"
+                    hit={matches(identity.identity.email, identity.identity.label)}
                     title={identity.identity.email ?? identity.identity.label}
                     meta={identity.identity.email ? identity.identity.label : "email unknown"}
                     warning={!identity.identity.email}
@@ -229,8 +281,10 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
                         <div className="account-branch" key={account.account.id}>
                           <div className="tree-account-col">
                             <GraphNode
+                              nodeId={account.account.id}
                               tone="service"
                               eyebrow={account.account.provider === "unknown" ? "Custom service" : account.account.provider}
+                              hit={matches(account.account.label, account.account.provider, account.account.external_ref)}
                               title={account.account.label}
                               meta={
                                 account.organizations.length
@@ -264,6 +318,12 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
                                 key={resource.service_project.id}
                                 resource={resource}
                                 orgName={orgName}
+                                hit={matches(
+                                  resource.service_project.name,
+                                  resource.service_project.provider_ref,
+                                  orgName,
+                                )}
+                                query={normalizedQuery}
                                 onSelect={(r) =>
                                   setSelected({
                                     kind: "resource",
@@ -297,6 +357,7 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
             );
           })}
         </div>
+        </LayoutCtx.Provider>
       )}
 
       {selected && <NodeInspector node={selected} onClose={() => setSelected(null)} />}
@@ -318,19 +379,25 @@ export default function StackGraphView({ projects, onNotify, onChanged }: Props)
 function ResourceBranch({
   resource,
   orgName,
+  hit,
+  query,
   onSelect,
   onProject,
 }: {
   resource: ServiceProjectSummary;
   orgName: string | null;
+  hit?: boolean;
+  query: string;
   onSelect: (resource: ServiceProjectSummary) => void;
   onProject: (project: { id: string; name: string }) => void;
 }) {
   return (
     <div className="resource-branch">
       <GraphNode
+        nodeId={resource.service_project.id}
         tone={orgName ? "resource" : "warning"}
         eyebrow={orgName ?? "Unassigned"}
+        hit={hit}
         title={resource.service_project.name}
         meta={resource.service_project.provider_ref ?? resource.service_project.provider}
         warning={!orgName}
@@ -341,8 +408,10 @@ function ResourceBranch({
           resource.used_by.map((project) => (
             <GraphNode
               key={project.id}
+              nodeId={project.id}
               tone="project"
               eyebrow="Project"
+              hit={query.length > 0 && project.name.toLowerCase().includes(query)}
               title={project.name}
               meta={plural(resource.secret_count, "secret")}
               onClick={() => onProject(project)}
@@ -357,26 +426,59 @@ function ResourceBranch({
 }
 
 function GraphNode({
+  nodeId,
   tone,
   eyebrow,
   title,
   meta,
   warning,
+  hit,
   collapsed,
   onToggle,
   onClick,
 }: {
+  nodeId?: string;
   tone: "identity" | "service" | "resource" | "project" | "warning";
   eyebrow: string;
   title: string;
   meta?: string;
   warning?: boolean;
+  hit?: boolean;
   collapsed?: boolean;
   onToggle?: () => void;
   onClick: () => void;
 }) {
+  const layout = useContext(LayoutCtx);
+  const spot = nodeId ? layout.spots[nodeId] : undefined;
+  const origin = useRef<Spot>({ x: 0, y: 0 });
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!layout.editing || !nodeId) return;
+    event.preventDefault();
+    origin.current = layout.spots[nodeId] ?? { x: 0, y: 0 };
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const id = nodeId;
+    function drag(ev: PointerEvent) {
+      layout.move(id, {
+        x: origin.current.x + ev.clientX - startX,
+        y: origin.current.y + ev.clientY - startY,
+      });
+    }
+    function up() {
+      window.removeEventListener("pointermove", drag);
+      layout.persist();
+    }
+    window.addEventListener("pointermove", drag);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+
   return (
-    <div className={`graph-node ${tone}${warning ? " has-warning" : ""}`}>
+    <div
+      className={`graph-node ${tone}${warning ? " has-warning" : ""}${spot ? " placed" : ""}${hit ? " hit" : ""}`}
+      style={spot ? { transform: `translate(${spot.x}px, ${spot.y}px)` } : undefined}
+      onPointerDown={onPointerDown}
+    >
       <button type="button" className="graph-node-main" onClick={onClick}>
         <span className="node-eyebrow">{eyebrow}</span>
         <strong>{title}</strong>
@@ -524,7 +626,7 @@ function NodeInspector({ node, onClose }: { node: SelectedNode; onClose: () => v
           <div><span>Used by</span><strong>{node.resource.used_by.map((p) => p.name).join(", ") || "Unlinked"}</strong></div>
         </div>
       )}
-      <div className="note">The graph is semantic. Visual position never changes a relationship by accident.</div>
+      <div className="note">Dragging only changes where a node sits. The link to its mail, account and project stays.</div>
     </aside>
   );
 }

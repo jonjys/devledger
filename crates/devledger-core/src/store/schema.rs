@@ -4,10 +4,10 @@
 //! transaction, and `schema_version` records how far the database has got.
 
 /// The schema version this build expects.
-pub const CURRENT_VERSION: i64 = 3;
+pub const CURRENT_VERSION: i64 = 4;
 
 /// Ordered migration steps. Index `n` upgrades the database to version `n + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 const V1: &str = r#"
 CREATE TABLE identities (
@@ -295,4 +295,10 @@ CREATE TABLE discoveries (
     payload       TEXT NOT NULL,
     fetched_at    TEXT NOT NULL
 );
+"#;
+
+/// v4 records when a subscription should show up in Needs attention.
+const V4: &str = r#"
+ALTER TABLE subscriptions ADD COLUMN reminder_days INTEGER;
+ALTER TABLE subscriptions ADD COLUMN warn_enabled INTEGER NOT NULL DEFAULT 1;
 "#;

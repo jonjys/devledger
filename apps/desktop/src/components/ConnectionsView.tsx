@@ -16,6 +16,7 @@ import type {
   ConnectionSummary,
   ConnectorDescriptor,
   IdentityNode,
+  ProjectSummary,
   Provider,
   ReconcileItem,
   ReconcileReport,
@@ -127,6 +128,12 @@ const CATALOG: CatalogEntry[] = [
     name: "Resend",
     summary: "Sending domains and API keys.",
     keyPlaceholder: "re_…",
+  },
+  {
+    provider: "unknown",
+    name: "Custom service",
+    summary: "X, Threads, Instagram, or anything else you log into by hand.",
+    keyPlaceholder: "token, if you have one",
   },
 ];
 
@@ -402,8 +409,28 @@ function ServiceModal({
   // Manual tab state.
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
+  const [identities, setIdentities] = useState<IdentityNode[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [identityId, setIdentityId] = useState("");
+  const [projectId, setProjectId] = useState("");
 
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (target.kind !== "catalog") return;
+    void (async () => {
+      try {
+        const [graph, projectRows] = await Promise.all([
+          api.identityGraph(),
+          api.listProjects(),
+        ]);
+        if (Array.isArray(graph)) setIdentities(graph);
+        if (Array.isArray(projectRows)) setProjects(projectRows);
+      } catch {
+        // The account can still be saved without the dropdowns filled.
+      }
+    })();
+  }, [target]);
   const [error, setError] = useState<string | null>(null);
 
   const createUrl =
@@ -432,7 +459,13 @@ function ServiceModal({
       } else {
         // No live connector: file it as a manual account. The key is not stored
         // — DevLedger cannot verify it, so it is never persisted here.
-        await api.createAccountForEmail(null, provider, label.trim(), null);
+        const account = await api.createAccountForEmail(
+          chosenEmail(null),
+          provider,
+          label.trim(),
+          null,
+        );
+        await linkToProject(account.id, label.trim());
         setToken("");
         onNotify(`Added ${displayName} account ${label.trim()}`);
         onSavedManually();
@@ -450,12 +483,13 @@ function ServiceModal({
     setBusy(true);
     setError(null);
     try {
-      await api.createAccountForEmail(
-        email.trim() || null,
+      const account = await api.createAccountForEmail(
+        chosenEmail(email.trim() || null),
         provider,
         finalLabel,
         note.trim() || null,
       );
+      await linkToProject(account.id, finalLabel);
       onNotify(`Saved ${displayName} account`);
       onSavedManually();
     } catch (e: unknown) {
@@ -463,6 +497,25 @@ function ServiceModal({
     } finally {
       setBusy(false);
     }
+  }
+
+  function chosenEmail(fallback: string | null): string | null {
+    const picked = identities.find((row) => row.identity.id === identityId);
+    return picked?.identity.email ?? fallback;
+  }
+
+  async function linkToProject(accountId: string, accountLabel: string) {
+    if (!projectId) return;
+    const project = projects.find((row) => row.project.id === projectId);
+    const resource = await api.createServiceProjectManual(
+      accountId,
+      null,
+      provider,
+      project?.project.name ?? accountLabel,
+      null,
+      "unknown",
+    );
+    await api.linkServiceProject(resource.id, projectId);
   }
 
   return (
@@ -504,6 +557,41 @@ function ServiceModal({
           <div className="error" role="alert">
             {error}
           </div>
+        )}
+
+        {target.kind === "catalog" && (
+          <>
+            <div className="field">
+              <label htmlFor="svc-identity">Connect to identity</label>
+              <select
+                id="svc-identity"
+                value={identityId}
+                onChange={(e) => setIdentityId(e.target.value)}
+              >
+                <option value="">Choose an email…</option>
+                {identities.map((row) => (
+                  <option key={row.identity.id} value={row.identity.id}>
+                    {row.identity.email ?? row.identity.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="svc-project">Connect to project</label>
+              <select
+                id="svc-project"
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+              >
+                <option value="">Choose a project…</option>
+                {projects.map((row) => (
+                  <option key={row.project.id} value={row.project.id}>
+                    {row.project.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
         )}
 
         {tab === "api" ? (

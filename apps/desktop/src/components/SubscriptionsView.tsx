@@ -70,17 +70,16 @@ export default function SubscriptionsView({ onNotify, onChanged }: Props) {
 
   return (
     <div>
-      <div className="vault-head">
+      <div className="vault-head column">
         <div>
           <h1>Subscriptions &amp; trials</h1>
           <div className="sub">What you are paying for, and on which account.</div>
         </div>
-        <span className="spacer" />
-        <div className="acts">
+        {rows.length > 0 && (
           <button type="button" className="primary" onClick={() => setAdding(true)}>
             + Add Subscription
           </button>
-        </div>
+        )}
       </div>
 
       {loading ? (
@@ -89,9 +88,11 @@ export default function SubscriptionsView({ onNotify, onChanged }: Props) {
         <div className="empty">
           <p style={{ margin: 0, fontWeight: 600 }}>No subscriptions recorded</p>
           <p style={{ marginBottom: 0 }}>
-            Paste a billing page, or press <strong>+ Add Subscription</strong> to record one
-            by hand.
+            Paste a billing page above, or record one by hand.
           </p>
+          <button type="button" className="primary add-card" onClick={() => setAdding(true)}>
+            + Add Subscription
+          </button>
         </div>
       ) : (
         <table className="secrets">
@@ -173,9 +174,39 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
   const [email, setEmail] = useState("");
   const [price, setPrice] = useState("");
   const [interval, setInterval] = useState<BillingInterval>("monthly");
+  const [startsAt, setStartsAt] = useState("");
   const [renewsAt, setRenewsAt] = useState("");
   const [status, setStatus] = useState<SubscriptionStatus>("active");
+  const [remind, setRemind] = useState("1");
+  const [customDays, setCustomDays] = useState("7");
+  const [warn, setWarn] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  function shiftMonths(iso: string, months: number): string {
+    const [y, m, d] = iso.split("-").map(Number);
+    if (!y || !m || !d) return iso;
+    const date = new Date(Date.UTC(y, m - 1 + months, d));
+    return date.toISOString().slice(0, 10);
+  }
+
+  function onInterval(next: BillingInterval) {
+    setInterval(next);
+    if (startsAt) setRenewsAt(shiftMonths(startsAt, next === "monthly" ? 1 : 12));
+  }
+
+  function onStart(value: string) {
+    setStartsAt(value);
+    if (value) setRenewsAt(shiftMonths(value, interval === "monthly" ? 1 : 12));
+  }
+
+  function reminderDays(): number | null {
+    if (!warn) return null;
+    if (remind === "custom") {
+      const n = Number.parseInt(customDays, 10);
+      return Number.isFinite(n) && n > 0 ? n : 1;
+    }
+    return Number.parseInt(remind, 10);
+  }
 
   function parsePrice(): number | null {
     const cleaned = price.replace(/[^0-9.]/g, "");
@@ -198,6 +229,8 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
         currency: price.includes("€") ? "EUR" : price.includes("£") ? "GBP" : "USD",
         interval,
         renewsAt: renewsAt.trim() || null,
+        reminderDays: reminderDays(),
+        warnEnabled: warn,
       });
       onNotify(`Added ${plan.trim()}`);
       onSaved();
@@ -252,7 +285,7 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
             <select
               id="sub-interval"
               value={interval}
-              onChange={(e) => setInterval(e.target.value as BillingInterval)}
+              onChange={(e) => onInterval(e.target.value as BillingInterval)}
             >
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
@@ -262,14 +295,60 @@ function AddSubscription({ onCancel, onSaved, onNotify }: AddProps) {
 
         <div className="field-row">
           <div className="field">
+            <label htmlFor="sub-start">Billing start</label>
+            <input
+              id="sub-start"
+              type="date"
+              value={startsAt}
+              onChange={(e) => onStart(e.target.value)}
+            />
+          </div>
+          <div className="field">
             <label htmlFor="sub-renews">Expiration / renewal</label>
             <input
               id="sub-renews"
-              placeholder="12/26"
+              type="date"
               value={renewsAt}
               onChange={(e) => setRenewsAt(e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label htmlFor="sub-remind">Remind me</label>
+            <select id="sub-remind" value={remind} onChange={(e) => setRemind(e.target.value)}>
+              <option value="1">1 day before</option>
+              <option value="2">2 days before</option>
+              <option value="3">3 days before</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="sub-warn">Turn on warning</label>
+            <select
+              id="sub-warn"
+              value={warn ? "on" : "off"}
+              onChange={(e) => setWarn(e.target.value === "on")}
+            >
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+        </div>
+        {remind === "custom" && (
+          <div className="field">
+            <label htmlFor="sub-custom">Custom days before</label>
+            <input
+              id="sub-custom"
+              inputMode="numeric"
+              value={customDays}
+              onChange={(e) => setCustomDays(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div className="field-row">
           <div className="field">
             <label htmlFor="sub-status">Status</label>
             <select

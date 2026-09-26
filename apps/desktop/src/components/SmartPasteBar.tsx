@@ -30,22 +30,24 @@ export default function SmartPasteBar({ onAnalyze, busy }: Props) {
 
   return (
     <div className="pastebar">
-      <span className="pastebar-icon" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-      </span>
-      <textarea
-        className="pastebar-input"
-        aria-label="Smart Paste"
-        rows={1}
-        title="Nothing is saved until you review it. Ctrl/Cmd + Enter to analyse."
-        placeholder="Paste anything — env vars, emails, URLs, receipts, API keys…"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
+      <div className="pastebar-row">
+        <span className="pastebar-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+        </span>
+        <textarea
+          className="pastebar-input"
+          aria-label="Smart Paste"
+          rows={2}
+          title="Nothing is saved until you review it. Ctrl/Cmd + Enter to analyse."
+          placeholder="Paste anything — env vars, emails, URLs, receipts, API keys…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
       <button
         type="button"
         className="outline analyze"

@@ -216,24 +216,30 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
             </section>
           )}
 
-          {analysis.subscription && (
+          {(analysis.subscriptions?.length || analysis.subscription) && (
             <section className="section">
               <h3>Subscription</h3>
-              <div className="entity">
-                <div className="head">
-                  <span className="label">{analysis.subscription.plan}</span>
-                  <span className="value">{analysis.subscription.status}</span>
-                  {analysis.subscription.amount_cents !== null && (
-                    <span className="value">
-                      {(analysis.subscription.amount_cents / 100).toFixed(2)}{" "}
-                      {analysis.subscription.currency}
-                      {analysis.subscription.interval
-                        ? ` / ${analysis.subscription.interval === "monthly" ? "month" : "year"}`
-                        : ""}
-                    </span>
-                  )}
+              {(analysis.subscriptions?.length
+                ? analysis.subscriptions
+                : analysis.subscription
+                  ? [analysis.subscription]
+                  : []
+              ).map((sub, index) => (
+                <div className="entity" key={`${sub.plan}-${sub.identity_email ?? index}`}>
+                  <div className="head">
+                    <span className="label">{sub.plan}</span>
+                    <span className="value">{sub.status}</span>
+                    {sub.identity_email && <span className="value">{sub.identity_email}</span>}
+                    {sub.amount_cents !== null && (
+                      <span className="value">
+                        {(sub.amount_cents / 100).toFixed(2)} {sub.currency}
+                        {sub.interval ? ` / ${sub.interval === "monthly" ? "month" : "year"}` : ""}
+                      </span>
+                    )}
+                    {sub.trial_ends_at && <span className="value">ends {sub.trial_ends_at}</span>}
+                  </div>
                 </div>
-              </div>
+              ))}
             </section>
           )}
 

@@ -226,6 +226,8 @@ export const createSubscriptionManual = (input: {
   currency: string | null;
   interval: BillingInterval | null;
   renewsAt: string | null;
+  reminderDays: number | null;
+  warnEnabled: boolean;
 }) => call<Subscription>("create_subscription_manual", input);
 
 /** Move an account under a different identity. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import * as api from "../lib/api";
 import { plural, providerLabel } from "../lib/format";
@@ -16,6 +16,7 @@ import type { AuditEntry, IdentityNode, ProjectSummary, SubscriptionSummary } fr
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
   onNavigate: (view: string) => void;
+  onSearch: (query: string) => void;
   onChanged: () => void;
   refreshKey: number;
 }
@@ -34,12 +35,19 @@ const TODAY = () =>
   });
 
 /** The landing dashboard: a glanceable summary of the whole ledger. */
-export default function OverviewView({ onNotify, onNavigate, onChanged, refreshKey }: Props) {
+export default function OverviewView({
+  onNotify,
+  onNavigate,
+  onSearch,
+  onChanged,
+  refreshKey,
+}: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [identities, setIdentities] = useState<IdentityNode[]>([]);
   const [subs, setSubs] = useState<SubscriptionSummary[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,6 +101,26 @@ export default function OverviewView({ onNotify, onNavigate, onChanged, refreshK
         <h1>Overview</h1>
         <div className="dash-date">{TODAY()}</div>
       </div>
+
+      <form
+        className="overview-search"
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          const trimmed = query.trim();
+          if (!trimmed) return;
+          onSearch(trimmed);
+        }}
+      >
+        <input
+          aria-label="Search the stack"
+          placeholder="Search DeployDoctor, an email, a service…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit" className="primary">
+          Search
+        </button>
+      </form>
 
       <div className="stat-row">
         <button type="button" className="stat" onClick={() => onNavigate("projects")}>

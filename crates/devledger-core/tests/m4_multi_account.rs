@@ -10,7 +10,7 @@ mod common;
 
 use common::accept_all;
 
-use devledger_core::model::{EntityKind, EntityRef, Provider, RelationKind};
+use devledger_core::model::{EntityKind, EntityRef, Provider, RelationKind, SubscriptionStatus};
 use devledger_core::paste::{AnswerChoice, QuestionAnswer, Q_ORGANIZATION, Q_PROJECT};
 use devledger_core::redact::SourceKind;
 use devledger_core::store::AttentionKind;
@@ -470,4 +470,104 @@ fn the_chain_relations_are_all_recorded() {
         from_org.iter().any(|r| r.kind == RelationKind::Contains),
         "organization contains the resource"
     );
+}
+
+#[test]
+fn a_notes_file_keeps_each_stripe_key_with_its_mail_and_project() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    paste_and_accept(
+        &mut vault,
+        "\
+fkornelind@gmail.com\n\
+DeployDoctor\n\
+STRIPE_SECRET_KEY=sk_live_0123456789abcdefghij\n\
+---\n\
+fkornelind@hotmail.com\n\
+MakeItReal\n\
+STRIPE_SECRET_KEY=sk_test_abcdefghijklmnopqrst\n",
+    );
+
+    let projects = vault.list_projects().expect("projects");
+    let deploy = projects
+        .iter()
+        .find(|p| p.project.name == "DeployDoctor")
+        .expect("DeployDoctor");
+    let make = projects
+        .iter()
+        .find(|p| p.project.name == "MakeItReal")
+        .expect("MakeItReal");
+
+    let deploy_secrets = vault
+        .list_secrets(deploy.project.id)
+        .expect("deploy secrets");
+    let make_secrets = vault.list_secrets(make.project.id).expect("make secrets");
+    assert_eq!(deploy_secrets.len(), 1);
+    assert_eq!(make_secrets.len(), 1);
+    assert!(
+        deploy_secrets[0].secret.preview.starts_with("sk_l"),
+        "live key preview was {}",
+        deploy_secrets[0].secret.preview
+    );
+    assert!(
+        make_secrets[0].secret.preview.starts_with("sk_t"),
+        "test key preview was {}",
+        make_secrets[0].secret.preview
+    );
+
+    let graph = vault.identity_graph().expect("graph");
+    let gmail = graph
+        .iter()
+        .find(|n| n.identity.email.as_deref() == Some("fkornelind@gmail.com"))
+        .expect("gmail identity");
+    let hotmail = graph
+        .iter()
+        .find(|n| n.identity.email.as_deref() == Some("fkornelind@hotmail.com"))
+        .expect("hotmail identity");
+    assert_eq!(gmail.accounts.len(), 1);
+    assert_eq!(gmail.accounts[0].account.provider, Provider::Stripe);
+    assert_eq!(hotmail.accounts.len(), 1);
+    assert_eq!(hotmail.accounts[0].account.provider, Provider::Stripe);
+}
+
+#[test]
+fn loose_billing_notes_become_one_subscription_per_email() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    paste_and_accept(
+        &mut vault,
+        "\
+fkornelind@nyttolabs.com - cursor \n\
+grok ffkornelind@gmail.com \n\
+Billing & Invoices / 25 sep. 2026 paid 25,00 USD\n\
+---\n\
+fkornelind@hotmail.com - cursor \n\
+24 sep. 2026 Cursor Usage for cycle starting September 18, 2026 paid 25,00 USD\n\
+---\n\
+TRIAL KONTO grok bot warpaiactivity1@gmail.com 7 dagar från och med 09-25 dvs 1 okt\n",
+    );
+
+    let rows = vault.list_subscriptions().expect("subscriptions");
+    assert_eq!(rows.len(), 3);
+    let emails: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row.identity_email.as_deref())
+        .collect();
+    assert!(emails.contains(&"fkornelind@nyttolabs.com"));
+    assert!(emails.contains(&"fkornelind@hotmail.com"));
+    assert!(emails.contains(&"warpaiactivity1@gmail.com"));
+
+    let trial = rows
+        .iter()
+        .find(|row| row.subscription.status == SubscriptionStatus::Trialing)
+        .expect("trial");
+    assert!(
+        trial
+            .subscription
+            .trial_ends_at
+            .as_deref()
+            .is_some_and(|date| date.ends_with("-10-01")),
+        "trial ends 1 Oct, got {:?}",
+        trial.subscription.trial_ends_at
+    );
+    assert_eq!(trial.subscription.reminder_days, Some(1));
+    assert!(trial.subscription.warn_enabled);
 }

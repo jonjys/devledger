@@ -8,7 +8,9 @@
 mod common;
 
 use devledger_core::model::{BillingInterval, Environment, Provider, SubscriptionStatus};
+use devledger_core::store::AttentionKind;
 use devledger_core::Vault;
+use time::{Duration, OffsetDateTime};
 
 fn identity_email_ids(vault: &Vault) -> Vec<Option<String>> {
     vault
@@ -124,6 +126,8 @@ fn a_manual_subscription_is_recorded_and_can_be_deleted() {
             Some("USD"),
             Some(BillingInterval::Monthly),
             Some("12/26"),
+            Some(1),
+            true,
         )
         .expect("create subscription");
 
@@ -253,4 +257,86 @@ fn deleting_a_resource_leaves_the_account_intact() {
     let graph = vault.identity_graph().expect("graph");
     assert_eq!(graph.len(), 1, "the account and identity survive");
     assert_eq!(graph[0].accounts.len(), 1);
+}
+
+#[test]
+fn a_reminder_fires_inside_its_window_and_stays_quiet_outside_it() {
+    let (_dir, vault) = common::unlocked_vault();
+    let today = OffsetDateTime::now_utc().date();
+    let iso = |days: i64| {
+        let date = today.checked_add(Duration::days(days)).expect("date");
+        format!(
+            "{:04}-{:02}-{:02}",
+            date.year(),
+            u8::from(date.month()),
+            date.day()
+        )
+    };
+
+    let record = |email, plan, status, when: String, days, warn| {
+        vault
+            .create_subscription_manual(
+                Some(email),
+                Provider::Unknown,
+                plan,
+                status,
+                Some(2500),
+                Some("USD"),
+                Some(BillingInterval::Monthly),
+                Some(&when),
+                Some(days),
+                warn,
+            )
+            .expect("subscription");
+    };
+    record(
+        "soon@example.com",
+        "Cursor",
+        SubscriptionStatus::Active,
+        iso(1),
+        1,
+        true,
+    );
+    record(
+        "later@example.com",
+        "Quiet",
+        SubscriptionStatus::Active,
+        iso(5),
+        1,
+        true,
+    );
+    record(
+        "off@example.com",
+        "Muted",
+        SubscriptionStatus::Trialing,
+        iso(1),
+        3,
+        false,
+    );
+    record(
+        "three@example.com",
+        "Trial",
+        SubscriptionStatus::Trialing,
+        iso(3),
+        3,
+        true,
+    );
+
+    let titles: Vec<String> = vault
+        .needs_attention()
+        .expect("attention")
+        .into_iter()
+        .filter(|item| item.kind == AttentionKind::RenewalDue)
+        .map(|item| item.title)
+        .collect();
+    assert!(
+        titles.iter().any(|title| title.contains("Cursor")),
+        "one day before should warn, got {titles:?}"
+    );
+    assert!(
+        titles.iter().any(|title| title.contains("Trial")),
+        "three days before should warn when the window is 3, got {titles:?}"
+    );
+    assert!(!titles.iter().any(|title| title.contains("Quiet")));
+    assert!(!titles.iter().any(|title| title.contains("Muted")));
 }

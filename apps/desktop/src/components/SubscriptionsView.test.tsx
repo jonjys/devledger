@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +58,9 @@ describe("Subscriptions screen", () => {
     await user.type(within(dialog).getByLabelText("Plan name"), "Pro Plan");
     await user.type(within(dialog).getByLabelText("Identity / email"), "test@gmail.com");
     await user.type(within(dialog).getByLabelText("Price"), "$12");
-    await user.type(within(dialog).getByLabelText("Expiration / renewal"), "12/26");
+    fireEvent.change(within(dialog).getByLabelText("Expiration / renewal"), {
+      target: { value: "2026-12-26" },
+    });
     await user.click(within(dialog).getByRole("button", { name: "Save subscription" }));
 
     await waitFor(() => expect(mocked.createSubscriptionManual).toHaveBeenCalled());
@@ -70,7 +72,9 @@ describe("Subscriptions screen", () => {
       amountCents: 1200,
       currency: "USD",
       interval: "monthly",
-      renewsAt: "12/26",
+      renewsAt: "2026-12-26",
+      reminderDays: 1,
+      warnEnabled: true,
     });
   });
 
