@@ -421,6 +421,49 @@ fn subscription_parsing_handles_free_and_past_due() {
 }
 
 #[test]
+fn loose_notes_split_into_one_subscription_per_block() {
+    let text = "\
+fkornelind@nyttolabs.com - cursor \n\
+grok ffkornelind@gmail.com \n\
+Billing & Invoices / 25 sep. 2026 paid 25,00 USD\n\
+---\n\
+fkornelind@hotmail.com - cursor \n\
+24 sep. 2026 Cursor Usage for cycle starting September 18, 2026 paid 25,00 USD\n\
+---\n\
+TRIAL KONTO grok bot warpaiactivity1@gmail.com 7 dagar från och med 09-25 dvs 1 okt\n";
+    let blocks = subscription::parse_blocks(text);
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(blocks[0].plan, "Cursor");
+    assert_eq!(
+        blocks[0].identity_email.as_deref(),
+        Some("fkornelind@nyttolabs.com")
+    );
+    assert_eq!(blocks[0].amount_cents, Some(2500));
+    assert_eq!(blocks[0].currency.as_deref(), Some("USD"));
+    assert_eq!(blocks[0].trial_ends_at.as_deref(), Some("2026-10-25"));
+    assert_eq!(
+        blocks[1].identity_email.as_deref(),
+        Some("fkornelind@hotmail.com")
+    );
+    assert_eq!(blocks[1].trial_ends_at.as_deref(), Some("2026-10-18"));
+    assert_eq!(blocks[2].plan, "Grok");
+    assert_eq!(blocks[2].status, SubscriptionStatus::Trialing);
+    assert_eq!(
+        blocks[2].identity_email.as_deref(),
+        Some("warpaiactivity1@gmail.com")
+    );
+    assert!(
+        blocks[2]
+            .trial_ends_at
+            .as_deref()
+            .is_some_and(|d| d.ends_with("-10-01")),
+        "trial ends 1 Oct, got {:?}",
+        blocks[2].trial_ends_at
+    );
+    assert_eq!(blocks[2].reminder_days, Some(1));
+}
+
+#[test]
 fn emails_are_detected_as_identities() {
     let found = detect::detect_all("signed in as dev@example.com");
     let entity = &found.first().expect("email detected").entity;

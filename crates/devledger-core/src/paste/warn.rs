@@ -37,6 +37,8 @@ pub enum WarningCode {
     UnattributedSecret,
     /// The paste contained no recognisable entity.
     NothingDetected,
+    /// The paste was split on `---` lines, one account section each.
+    SplitSections,
 }
 
 /// A single finding attached to an analysis.

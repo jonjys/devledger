@@ -266,6 +266,10 @@ pub struct SecretRecord {
     pub updated_at: OffsetDateTime,
 }
 
+fn default_warn_enabled() -> bool {
+    true
+}
+
 /// A provider subscription attached to an account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Subscription {
@@ -283,8 +287,14 @@ pub struct Subscription {
     pub currency: Option<String>,
     /// Billing interval, when parsed.
     pub interval: Option<BillingInterval>,
-    /// When a trial ends, if the excerpt stated an ISO date.
+    /// When a trial ends or the next renewal falls.
     pub trial_ends_at: Option<String>,
+    /// Days before `trial_ends_at` to raise Needs attention.
+    #[serde(default)]
+    pub reminder_days: Option<i64>,
+    /// Whether that reminder is armed.
+    #[serde(default = "default_warn_enabled")]
+    pub warn_enabled: bool,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -296,6 +306,10 @@ pub struct Subscription {
 pub enum SubscriptionStatus {
     /// Paid and current.
     Active,
+    /// Renews within the next week.
+    ExpiringSoon,
+    /// The renewal date has passed.
+    Expired,
     /// In a trial period.
     Trialing,
     /// Payment failed.

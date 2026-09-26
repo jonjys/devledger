@@ -188,6 +188,7 @@ function DesktopShellInner({ onLock }: Props) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; bad: boolean } | null>(null);
   const [view, setView] = useState<View>("overview");
+  const [stackQuery, setStackQuery] = useState("");
   const [attentionCount, setAttentionCount] = useState(0);
   const [trialsCount, setTrialsCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -319,6 +320,10 @@ function DesktopShellInner({ onLock }: Props) {
             <OverviewView
               onNotify={notify}
               onNavigate={(v) => setView(v as View)}
+              onSearch={(q) => {
+                setStackQuery(q);
+                setView("stack");
+              }}
               onChanged={refresh}
               refreshKey={refreshKey}
             />
@@ -326,9 +331,8 @@ function DesktopShellInner({ onLock }: Props) {
 
           {view === "projects" && (
             <div className="dash">
-              <div className="dash-head">
+              <div className="dash-head column">
                 <h1>Projects</h1>
-                <span className="spacer" />
                 <NewProjectForm
                   onCreated={(id) => {
                     void refresh();
@@ -387,7 +391,13 @@ function DesktopShellInner({ onLock }: Props) {
           )}
 
           {view === "stack" && (
-            <StackGraphView projects={projects} onNotify={notify} onChanged={refresh} />
+            <StackGraphView
+              projects={projects}
+              query={stackQuery}
+              onQueryChange={setStackQuery}
+              onNotify={notify}
+              onChanged={refresh}
+            />
           )}
 
           {view === "connections" && <ConnectionsView onNotify={notify} onChanged={refresh} />}

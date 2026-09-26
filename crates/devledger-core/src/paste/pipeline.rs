@@ -128,7 +128,19 @@ pub struct PasteAnalysis {
     /// Findings to show above the entity list.
     pub warnings: Vec<Warning>,
     /// Billing information, when the paste contained any.
+    ///
+    /// The first block. `subscriptions` holds every block when the paste was
+    /// split on `---` lines.
     pub subscription: Option<ParsedSubscription>,
+    /// Every billing block in the paste, in source order.
+    pub subscriptions: Vec<ParsedSubscription>,
+    /// Which `---` section each entity came from. Parallel to `entities`.
+    ///
+    /// A paste with no separator is all section 0. When two or more sections
+    /// contain a credential, saving files each section under its own email and
+    /// project name instead of merging them into the first one.
+    #[serde(default)]
+    pub entity_blocks: Vec<u32>,
     /// Redacted record of where this came from.
     pub provenance: Provenance,
     /// Whether a critical warning blocks the default Save action.
@@ -213,8 +225,28 @@ pub fn analyze(
         ));
     }
 
-    let questions = build_questions(&detections, &chain, provider, lookup)?;
+    let mut questions = build_questions(&detections, &chain, provider, lookup)?;
     let proposed_relations = propose_relations(&detections, &chain, provider);
+    let entity_blocks: Vec<u32> = detections
+        .iter()
+        .map(|d| subscription::block_index(text, d.span.0))
+        .collect();
+    if split_secret_sections(&detections, &entity_blocks) {
+        // One "which project?" answer cannot be right for every section.
+        questions.retain(|q| {
+            !matches!(
+                q.kind,
+                QuestionKind::WhichProject | QuestionKind::WhichOrganization
+            )
+        });
+        warnings.push(Warning::new(
+            WarningCode::SplitSections,
+            Severity::Info,
+            "Split into sections",
+            "Each --- section is saved under the email and project name written in that section.",
+            vec![],
+        ));
+    }
 
     warnings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.title.cmp(&b.title)));
     let blocks_save = warnings.iter().any(Warning::blocks_save);
@@ -224,6 +256,7 @@ pub fn analyze(
         spans,
     };
 
+    let subscriptions = subscription::parse_blocks(text);
     let analysis = PasteAnalysis {
         analysis_id: Uuid::new_v4(),
         entities,
@@ -233,12 +266,35 @@ pub fn analyze(
         questions,
         proposed_relations,
         warnings,
-        subscription: subscription::parse(text),
+        subscription: subscriptions.first().cloned(),
+        subscriptions,
+        entity_blocks,
         provenance,
         blocks_save,
         provider,
     };
     Ok((analysis, staged))
+}
+
+/// True when two or more `---` sections each contain a credential.
+pub fn splits_secret_sections(entities: &[DetectedEntity], blocks: &[u32]) -> bool {
+    let mut seen = Vec::new();
+    for (entity, block) in entities.iter().zip(blocks) {
+        if entity.is_secret() && !seen.contains(block) {
+            seen.push(*block);
+        }
+    }
+    seen.len() > 1
+}
+
+fn split_secret_sections(detections: &[Detection], blocks: &[u32]) -> bool {
+    let mut seen = Vec::new();
+    for (detection, block) in detections.iter().zip(blocks) {
+        if detection.entity.is_secret() && !seen.contains(block) {
+            seen.push(*block);
+        }
+    }
+    seen.len() > 1
 }
 
 /// Which provider the paste is mostly about.
