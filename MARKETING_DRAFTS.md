@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-26
+Feature Built: The Ledger — one screen from each person and the addresses they sign in with, through their accounts, to the projects those accounts feed. Editable in place with no token.
+Suggested Tweet:
+"Three inboxes. Zero idea which one owns the project.
+
+The Ledger maps person → email → account → project. One screen. Edit by hand. No API token.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
