@@ -8,43 +8,39 @@
 
 mod common;
 
-use devledger_core::manual::{NewAccount, NewResource, NewSecret, ResourceEdit};
+use devledger_core::manual::{NewSecret, ResourceEdit};
 use devledger_core::model::{Environment, Provider, SecretKind};
 use devledger_core::secret::SecretString;
-use devledger_core::store::{AttentionKind, SecretOwner};
+use devledger_core::store::{AccountDetails, AttentionKind, SecretOwner};
 use devledger_core::{CoreError, Vault};
 
 /// A person with one address, and an account with `service`.
 fn person(vault: &Vault, email: &str, service: &str, label: &str) -> (uuid::Uuid, uuid::Uuid) {
     let identity = vault
-        .create_identity(email, Some(email))
+        .create_identity_manual(email, Some(email))
         .expect("create identity");
     let account = vault
-        .create_account(&NewAccount {
-            identity_id: identity.id,
-            service: service.into(),
-            label: label.into(),
-            login_email: Some(email.into()),
-            username: None,
-            url: None,
-            notes: None,
-        })
+        .create_account_with_details(
+            identity.id,
+            Provider::from_user_input(service),
+            label,
+            &AccountDetails {
+                login_email: Some(email.into()),
+                ..AccountDetails::default()
+            },
+        )
         .expect("create account");
     (identity.id, account.id)
 }
 
 fn resource(vault: &Vault, account_id: uuid::Uuid, name: &str, env: Environment) -> uuid::Uuid {
+    let provider = vault
+        .account(account_id)
+        .expect("lookup")
+        .expect("account exists")
+        .provider;
     vault
-        .create_resource(&NewResource {
-            account_id,
-            organization_id: None,
-            name: name.into(),
-            provider_ref: None,
-            region: None,
-            environment: env,
-            url: None,
-            notes: None,
-        })
+        .create_service_project_manual(account_id, None, provider, name, None, env)
         .expect("create resource")
         .id
 }
@@ -55,7 +51,7 @@ fn resource(vault: &Vault, account_id: uuid::Uuid, name: &str, env: Environment)
 fn an_identity_can_hold_several_email_addresses() {
     let (_dir, vault) = common::unlocked_vault();
     let identity = vault
-        .create_identity("Me", Some("work@example.com"))
+        .create_identity_manual("Me", Some("work@example.com"))
         .expect("create");
 
     vault
@@ -79,7 +75,7 @@ fn an_identity_can_hold_several_email_addresses() {
 fn the_primary_address_can_be_changed_and_the_identity_follows() {
     let (_dir, vault) = common::unlocked_vault();
     let identity = vault
-        .create_identity("Me", Some("work@example.com"))
+        .create_identity_manual("Me", Some("work@example.com"))
         .expect("create");
     let second = vault
         .add_identity_email(identity.id, "personal@example.com", false)
@@ -108,9 +104,11 @@ fn the_same_address_cannot_belong_to_two_identities() {
     // nothing ever reconciles them again.
     let (_dir, vault) = common::unlocked_vault();
     vault
-        .create_identity("First", Some("shared@example.com"))
+        .create_identity_manual("First", Some("shared@example.com"))
         .expect("first");
-    let second = vault.create_identity("Second", None).expect("second");
+    let second = vault
+        .create_identity_manual("Second", None)
+        .expect("second");
 
     let err = vault
         .add_identity_email(second.id, "shared@example.com", false)
@@ -125,9 +123,11 @@ fn the_same_address_cannot_belong_to_two_identities() {
 fn addresses_are_matched_regardless_of_how_they_were_typed() {
     let (_dir, vault) = common::unlocked_vault();
     vault
-        .create_identity("First", Some("Dev@Example.COM"))
+        .create_identity_manual("First", Some("Dev@Example.COM"))
         .expect("first");
-    let second = vault.create_identity("Second", None).expect("second");
+    let second = vault
+        .create_identity_manual("Second", None)
+        .expect("second");
 
     let err = vault
         .add_identity_email(second.id, "  dev@example.com  ", false)
@@ -141,19 +141,21 @@ fn addresses_are_matched_regardless_of_how_they_were_typed() {
 fn any_service_can_be_recorded_even_one_devledger_has_never_heard_of() {
     let (_dir, vault) = common::unlocked_vault();
     let identity = vault
-        .create_identity("Me", Some("me@example.com"))
+        .create_identity_manual("Me", Some("me@example.com"))
         .expect("identity");
 
     let account = vault
-        .create_account(&NewAccount {
-            identity_id: identity.id,
-            service: "Loopia".into(),
-            label: "Domain registrar".into(),
-            login_email: Some("billing@example.com".into()),
-            username: Some("acme-admin".into()),
-            url: Some("https://customerzone.loopia.se".into()),
-            notes: Some("Two-factor by SMS".into()),
-        })
+        .create_account_with_details(
+            identity.id,
+            Provider::from_user_input("Loopia"),
+            "Domain registrar",
+            &AccountDetails {
+                login_email: Some("billing@example.com".into()),
+                username: Some("acme-admin".into()),
+                url: Some("https://customerzone.loopia.se".into()),
+                notes: Some("Two-factor by SMS".into()),
+            },
+        )
         .expect("create");
 
     assert_eq!(account.provider, Provider::Other("Loopia".into()));
@@ -172,18 +174,18 @@ fn a_custom_service_survives_a_lock_and_unlock() {
     // through SQLCipher is the test that matters.
     let (dir, mut vault) = common::unlocked_vault();
     let identity = vault
-        .create_identity("Me", Some("me@example.com"))
+        .create_identity_manual("Me", Some("me@example.com"))
         .expect("identity");
     vault
-        .create_account(&NewAccount {
-            identity_id: identity.id,
-            service: "My NAS".into(),
-            label: "Home server".into(),
-            login_email: None,
-            username: Some("root".into()),
-            url: None,
-            notes: None,
-        })
+        .create_account_with_details(
+            identity.id,
+            Provider::from_user_input("My NAS"),
+            "Home server",
+            &AccountDetails {
+                username: Some("root".into()),
+                ..AccountDetails::default()
+            },
+        )
         .expect("create");
     vault.lock();
 
@@ -290,7 +292,6 @@ fn one_project_can_use_resources_from_two_accounts_at_the_same_provider() {
             &NewSecret {
                 owner: SecretOwner {
                     service_project_id: Some(api),
-                    project_id: Some(project.id),
                     ..SecretOwner::default()
                 },
                 kind: SecretKind::SupabaseServiceRoleKey,
@@ -306,7 +307,6 @@ fn one_project_can_use_resources_from_two_accounts_at_the_same_provider() {
             &NewSecret {
                 owner: SecretOwner {
                     service_project_id: Some(stats_db),
-                    project_id: Some(project.id),
                     ..SecretOwner::default()
                 },
                 kind: SecretKind::SupabaseServiceRoleKey,
@@ -413,19 +413,16 @@ fn the_overview_shows_the_chain_from_each_address_down_to_the_projects() {
 fn two_accounts_at_one_provider_under_one_identity_are_flagged_not_merged() {
     let (_dir, vault) = common::unlocked_vault();
     let identity = vault
-        .create_identity("Me", Some("me@example.com"))
+        .create_identity_manual("Me", Some("me@example.com"))
         .expect("identity");
     for label in ["Supabase (main)", "Supabase (client work)"] {
         vault
-            .create_account(&NewAccount {
-                identity_id: identity.id,
-                service: "Supabase".into(),
-                label: label.into(),
-                login_email: None,
-                username: None,
-                url: None,
-                notes: None,
-            })
+            .create_account_with_details(
+                identity.id,
+                Provider::from_user_input("Supabase"),
+                label,
+                &AccountDetails::default(),
+            )
             .expect("create");
     }
 
@@ -508,7 +505,7 @@ fn exporting_every_environment_at_once_is_refused_rather_than_silently_merged() 
             .expect("store");
     }
 
-    let err = vault.export_env(project.id, None).unwrap_err();
+    let err = vault.export_env(project.id).unwrap_err();
     let message = match &err {
         CoreError::Invalid(m) => m.clone(),
         other => panic!("expected a refusal, got {other:?}"),
@@ -517,15 +514,58 @@ fn exporting_every_environment_at_once_is_refused_rather_than_silently_merged() 
         message.contains("DATABASE_URL"),
         "names the variable: {message}"
     );
-    assert!(message.contains("development") && message.contains("production"));
     assert!(
         !message.contains("postgres://"),
         "and never quotes a value: {message}"
     );
 
+    // The UI learns *where* the clash is from env_conflicts, before the user
+    // ever presses Copy, and without decrypting anything to find out.
     let conflicts = vault.env_conflicts(project.id, None).expect("conflicts");
     assert_eq!(conflicts.len(), 1);
-    assert_eq!(conflicts[0].definitions.len(), 2);
+    let environments: Vec<_> = conflicts[0]
+        .definitions
+        .iter()
+        .map(|d| d.environment)
+        .collect();
+    assert!(environments.contains(&Environment::Development));
+    assert!(environments.contains(&Environment::Production));
+}
+
+#[test]
+fn a_name_repeated_with_the_same_value_is_not_a_conflict() {
+    // The export accepts a name repeated with an identical value -- two linked
+    // resources that share one anon key, say. The conflict check has to agree
+    // with the export, or the UI would warn about a file that exports fine.
+    let (_dir, mut vault) = common::unlocked_vault();
+    let project = vault.create_project("Storefront", None).expect("project");
+    for env in [Environment::Development, Environment::Production] {
+        vault
+            .store_secret(
+                &NewSecret {
+                    owner: SecretOwner {
+                        project_id: Some(project.id),
+                        ..SecretOwner::default()
+                    },
+                    kind: SecretKind::EnvVar,
+                    name: "PUBLIC_SITE_NAME".into(),
+                    environment: env,
+                    notes: None,
+                },
+                &SecretString::new("Storefront"),
+            )
+            .expect("store");
+    }
+
+    assert!(
+        vault
+            .env_conflicts(project.id, None)
+            .expect("conflicts")
+            .is_empty(),
+        "identical values are not a conflict"
+    );
+    let rendered = vault.export_env(project.id).expect("the export agrees");
+    assert_eq!(rendered.expose().trim(), "PUBLIC_SITE_NAME=Storefront");
 }
 
 #[test]
@@ -567,7 +607,7 @@ fn exporting_one_environment_gives_exactly_that_environment() {
     }
 
     let dev = vault
-        .export_env(project.id, Some(Environment::Development))
+        .export_env_for_environment(project.id, Some(Environment::Development))
         .expect("development export");
     assert_eq!(dev.expose().trim(), "DATABASE_URL=postgres://localhost/dev");
     assert!(
@@ -576,7 +616,7 @@ fn exporting_one_environment_gives_exactly_that_environment() {
     );
 
     let prod = vault
-        .export_env(project.id, Some(Environment::Production))
+        .export_env_for_environment(project.id, Some(Environment::Production))
         .expect("production export");
     assert!(prod.expose().contains("postgres://prod.example.com/app"));
     assert!(prod.expose().contains("sk_live_example"));
@@ -694,5 +734,132 @@ fn deleting_an_account_takes_its_own_secrets_and_leaves_other_accounts_alone() {
         vault.account_secrets(account_b).expect("other").len(),
         1,
         "the other account is untouched"
+    );
+}
+
+// ------------------------------------------------ explicit adds always create
+
+#[test]
+fn adding_a_second_account_at_the_same_provider_creates_it() {
+    // The map's "Add account" and the service catalog both call add_account.
+    // It used to return the identity's existing account for that provider
+    // instead of creating one, so a second Supabase account typed in by hand
+    // was silently folded into the first and the UI still said "Account added".
+    let (_dir, vault) = common::unlocked_vault();
+    let identity = vault
+        .create_identity_manual("Me", Some("me@example.com"))
+        .expect("identity");
+
+    let first = vault
+        .add_account(identity.id, Provider::Supabase, "Supabase (main)", None)
+        .expect("first");
+    let second = vault
+        .add_account(identity.id, Provider::Supabase, "Supabase (client)", None)
+        .expect("second");
+
+    assert_ne!(
+        first.id, second.id,
+        "the second add must create a new account"
+    );
+    assert_eq!(second.label, "Supabase (client)");
+    assert_eq!(
+        vault
+            .accounts_for_identity(identity.id)
+            .expect("list")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn a_subscription_is_never_filed_under_a_guessed_account() {
+    // Entering a subscription by email and provider has to find the account it
+    // bills. With one account that is unambiguous; with two it is not, and the
+    // entry must say so rather than pick one or create a third.
+    let (_dir, vault) = common::unlocked_vault();
+    let identity = vault
+        .create_identity_manual("Me", Some("me@example.com"))
+        .expect("identity");
+    for label in ["Supabase (main)", "Supabase (client)"] {
+        vault
+            .add_account(identity.id, Provider::Supabase, label, None)
+            .expect("account");
+    }
+
+    let err = vault
+        .create_subscription_manual(
+            Some("me@example.com"),
+            Provider::Supabase,
+            "Pro",
+            devledger_core::model::SubscriptionStatus::Active,
+            Some(2500),
+            Some("USD"),
+            Some(devledger_core::model::BillingInterval::Monthly),
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::Invalid(m) if m.contains("Supabase (main)") && m.contains("Supabase (client)")),
+        "names both candidates so the user can choose: {err:?}"
+    );
+    assert_eq!(
+        vault
+            .accounts_for_identity(identity.id)
+            .expect("list")
+            .len(),
+        2,
+        "and no third account was created as a side effect"
+    );
+}
+
+// ------------------------------------------- a second address is the same person
+
+#[test]
+fn entering_an_alias_address_finds_the_person_rather_than_creating_one() {
+    let (_dir, vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("Me", Some("work@example.com"))
+        .expect("identity");
+    vault
+        .add_identity_email(me.id, "dev-b@example.com", false)
+        .expect("alias");
+
+    let again = vault
+        .create_identity_manual("Someone", Some("DEV-B@example.com"))
+        .expect("lookup by alias");
+    assert_eq!(again.id, me.id, "the alias belongs to an existing person");
+    assert_eq!(vault.list_identities().expect("list").len(), 1);
+}
+
+#[test]
+fn a_paste_signed_with_an_alias_lands_on_the_same_person() {
+    // Before, only the primary address was matched, so a paste carrying the
+    // second address created a new identity and split one person in two.
+    let (_dir, mut vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("Me", Some("work@example.com"))
+        .expect("identity");
+    vault
+        .add_identity_email(me.id, "dev-b@example.com", false)
+        .expect("alias");
+
+    let analysis = vault
+        .analyze_paste(
+            common::SUPABASE_SECOND_ACCOUNT,
+            devledger_core::redact::SourceKind::SmartPaste,
+        )
+        .expect("analyze");
+    vault
+        .commit_review(&common::accept_all(&analysis))
+        .expect("commit");
+
+    let identities = vault.list_identities().expect("list");
+    assert_eq!(identities.len(), 1, "no second person was created");
+    assert!(
+        !vault
+            .accounts_for_identity(me.id)
+            .expect("accounts")
+            .is_empty(),
+        "and the pasted account is filed under them"
     );
 }

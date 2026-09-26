@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   Account,
+  BillingInterval,
   ConnectionSummary,
   ConnectOutcome,
   ConnectorDescriptor,
@@ -22,6 +23,9 @@ import type {
   IdentityNode,
   IpcError,
   Organization,
+  Environment,
+  Provider,
+  SecretRecord,
   PasteAnalysis,
   Project,
   ProjectSummary,
@@ -30,6 +34,8 @@ import type {
   ReviewSubmission,
   ServiceProject,
   ServiceProjectSummary,
+  Subscription,
+  SubscriptionStatus,
   SubscriptionSummary,
   VaultEntry,
   VaultStatus,
@@ -145,8 +151,118 @@ export const listIdentities = () => call<Identity[]>("list_identities");
 export const accountsForIdentity = (identityId: string) =>
   call<Account[]>("accounts_for_identity", { identityId });
 
+export const createIdentityManual = (label: string, email: string | null) =>
+  call<Identity>("create_identity_manual", { label, email });
+
+export const createAccountManual = (
+  identityId: string,
+  provider: Provider,
+  label: string,
+) => call<Account>("create_account_manual", { identityId, provider, label });
+
+export const createServiceProjectManual = (
+  accountId: string,
+  organizationId: string | null,
+  provider: Provider,
+  name: string,
+  providerRef: string | null,
+  environment: Environment,
+) =>
+  call<ServiceProject>("create_service_project_manual", {
+    accountId,
+    organizationId,
+    provider,
+    name,
+    providerRef,
+    environment,
+  });
+
+export const createManualSecret = (
+  projectId: string | null,
+  serviceProjectId: string | null,
+  name: string,
+  environment: Environment,
+  value: string,
+) =>
+  call<SecretRecord>("create_manual_secret", {
+    projectId,
+    serviceProjectId,
+    name,
+    environment,
+    value,
+  });
+
 export const relationsFor = (kind: EntityKind, id: string) =>
   call<Relation[]>("relations_for", { kind, id });
+
+// --- manual entry, re-parenting and deletion -------------------------------
+//
+// The by-hand counterparts to Smart Paste and Connect. None of these touch the
+// network; they write the same graph the automatic paths do.
+
+/** Record a provider account by hand, resolving the identity from an email. */
+export const createAccountForEmail = (
+  email: string | null,
+  provider: Provider,
+  label: string,
+  note: string | null,
+) => call<Account>("create_account_for_email", { email, provider, label, note });
+
+/** Add a provider account under a known identity. */
+export const addAccount = (
+  identityId: string,
+  provider: Provider,
+  label: string,
+  note: string | null,
+) => call<Account>("add_account", { identityId, provider, label, note });
+
+/** Record a subscription by hand, without a paste. */
+export const createSubscriptionManual = (input: {
+  email: string | null;
+  provider: Provider;
+  plan: string;
+  status: SubscriptionStatus;
+  amountCents: number | null;
+  currency: string | null;
+  interval: BillingInterval | null;
+  renewsAt: string | null;
+}) => call<Subscription>("create_subscription_manual", input);
+
+/** Move an account under a different identity. */
+export const moveAccount = (accountId: string, identityId: string) =>
+  call<void>("move_account", { accountId, identityId });
+
+/** Move an organization under a different account. */
+export const moveOrganization = (organizationId: string, accountId: string) =>
+  call<void>("move_organization", { organizationId, accountId });
+
+/** Move a resource under a different account, clearing its organization. */
+export const moveServiceProject = (
+  serviceProjectId: string,
+  accountId: string,
+  organizationId: string | null,
+) =>
+  call<void>("move_service_project", {
+    serviceProjectId,
+    accountId,
+    organizationId,
+  });
+
+/** Delete an account and everything under it. */
+export const deleteAccount = (accountId: string) =>
+  call<void>("delete_account", { accountId });
+
+/** Delete an organization. Its resources survive, unassigned. */
+export const deleteOrganization = (organizationId: string) =>
+  call<void>("delete_organization", { organizationId });
+
+/** Delete a provider resource and its secrets. */
+export const deleteServiceProject = (serviceProjectId: string) =>
+  call<void>("delete_service_project", { serviceProjectId });
+
+/** Delete a subscription. */
+export const deleteSubscription = (subscriptionId: string) =>
+  call<void>("delete_subscription", { subscriptionId });
 
 export const deleteSecret = (secretId: string) =>
   call<void>("delete_secret", { secretId });
@@ -174,8 +290,8 @@ export const copySecret = (secretId: string) =>
   call<void>("copy_secret", { secretId });
 
 /** Copy a project as a `.env` file. Returns how many variables were written. */
-export const copyEnv = (projectId: string) =>
-  call<number>("copy_env", { projectId });
+export const copyEnv = (projectId: string, environment: Environment | null) =>
+  call<number>("copy_env", { projectId, environment });
 
 
 // --- Connect & Discover ----------------------------------------------------

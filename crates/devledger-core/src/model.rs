@@ -182,6 +182,8 @@ pub enum Provider {
     Aws,
     /// Vercel.
     Vercel,
+    /// Anthropic.
+    Anthropic,
     /// A service DevLedger has no built-in knowledge of, named by the user.
     Other(String),
     /// Anything recognised as a credential but not attributable.
@@ -202,6 +204,7 @@ impl Provider {
             Provider::OpenAi => "OpenAI",
             Provider::Aws => "AWS",
             Provider::Vercel => "Vercel",
+            Provider::Anthropic => "Anthropic",
             Provider::Other(name) => name,
             Provider::Unknown => "Unknown",
         }
@@ -217,6 +220,7 @@ impl Provider {
             Provider::OpenAi => "openai".to_string(),
             Provider::Aws => "aws".to_string(),
             Provider::Vercel => "vercel".to_string(),
+            Provider::Anthropic => "anthropic".to_string(),
             Provider::Other(name) => format!("{OTHER_PREFIX}{name}"),
             Provider::Unknown => "unknown".to_string(),
         }
@@ -224,24 +228,18 @@ impl Provider {
 
     /// Parse the string form. Never fails: anything unrecognised is a service
     /// DevLedger does not know, which is a fact about DevLedger, not an error.
+    ///
+    /// Tolerant on purpose. The database only ever holds the lowercase keys
+    /// [`Self::as_key`] writes, but values also arrive over IPC, and a UI that
+    /// sends "Supabase" or an older build's `git_hub` must still land on the
+    /// provider DevLedger knows rather than on a look-alike custom service.
     pub fn from_key(text: &str) -> Provider {
-        match text {
-            "supabase" => Provider::Supabase,
-            "postgres" => Provider::Postgres,
-            "github" => Provider::GitHub,
-            "stripe" => Provider::Stripe,
-            "openai" => Provider::OpenAi,
-            "aws" => Provider::Aws,
-            "vercel" => Provider::Vercel,
-            "unknown" => Provider::Unknown,
-            other => {
-                let name = other.strip_prefix(OTHER_PREFIX).unwrap_or(other).trim();
-                if name.is_empty() {
-                    Provider::Unknown
-                } else {
-                    Provider::Other(name.to_string())
-                }
-            }
+        match text.strip_prefix(OTHER_PREFIX) {
+            Some(name) => match name.trim() {
+                "" => Provider::Unknown,
+                named => Provider::Other(named.to_string()),
+            },
+            None => Provider::from_user_input(text),
         }
     }
 
@@ -258,11 +256,13 @@ impl Provider {
         match trimmed.to_ascii_lowercase().as_str() {
             "supabase" => Provider::Supabase,
             "postgres" | "postgresql" => Provider::Postgres,
-            "github" => Provider::GitHub,
+            "github" | "git_hub" => Provider::GitHub,
             "stripe" => Provider::Stripe,
-            "openai" => Provider::OpenAi,
+            "openai" | "open_ai" => Provider::OpenAi,
             "aws" | "amazon web services" => Provider::Aws,
             "vercel" => Provider::Vercel,
+            "anthropic" => Provider::Anthropic,
+            "unknown" => Provider::Unknown,
             _ => Provider::Other(trimmed.to_string()),
         }
     }
@@ -644,4 +644,63 @@ pub struct Relation {
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::Provider;
+
+    #[test]
+    fn every_known_provider_round_trips_through_its_key() {
+        for p in [
+            Provider::Supabase,
+            Provider::Postgres,
+            Provider::GitHub,
+            Provider::Stripe,
+            Provider::OpenAi,
+            Provider::Aws,
+            Provider::Vercel,
+            Provider::Anthropic,
+            Provider::Unknown,
+            Provider::Other("Loopia".into()),
+            Provider::Other("My NAS".into()),
+        ] {
+            assert_eq!(Provider::from_key(&p.as_key()), p, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn the_on_disk_keys_are_unchanged() {
+        // Existing vaults store these exact strings. Changing one would turn
+        // every existing account with that provider into a custom service.
+        assert_eq!(Provider::GitHub.as_key(), "github");
+        assert_eq!(Provider::OpenAi.as_key(), "openai");
+        assert_eq!(Provider::Supabase.as_key(), "supabase");
+    }
+
+    #[test]
+    fn a_known_name_typed_in_any_case_is_the_known_provider() {
+        assert_eq!(Provider::from_key("Supabase"), Provider::Supabase);
+        assert_eq!(Provider::from_key("GitHub"), Provider::GitHub);
+        assert_eq!(Provider::from_key("git_hub"), Provider::GitHub);
+        assert_eq!(Provider::from_key("open_ai"), Provider::OpenAi);
+    }
+
+    #[test]
+    fn a_custom_service_named_like_a_known_one_stays_custom_when_marked() {
+        // `other:` is explicit; it is never reinterpreted.
+        assert_eq!(
+            Provider::from_key("other:supabase"),
+            Provider::Other("supabase".into())
+        );
+        assert_eq!(Provider::from_key("other:"), Provider::Unknown);
+    }
+
+    #[test]
+    fn serde_uses_the_same_string_as_storage() {
+        let json = serde_json::to_string(&Provider::Other("Loopia".into())).unwrap();
+        assert_eq!(json, "\"other:Loopia\"");
+        let back: Provider = serde_json::from_str("\"github\"").unwrap();
+        assert_eq!(back, Provider::GitHub);
+    }
 }

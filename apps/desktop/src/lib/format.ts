@@ -1,6 +1,69 @@
 // Display helpers. Nothing here ever receives a secret value.
 
-import type { Environment, SecretKind, Severity } from "./types";
+import type { Environment, KnownProvider, Provider, SecretKind, Severity } from "./types";
+
+// Human-readable provider names, keyed by the canonical tag that crosses IPC.
+const PROVIDER_LABELS: Record<KnownProvider, string> = {
+  supabase: "Supabase",
+  postgres: "Postgres",
+  github: "GitHub",
+  stripe: "Stripe",
+  openai: "OpenAI",
+  aws: "AWS",
+  vercel: "Vercel",
+  anthropic: "Anthropic",
+  unknown: "Unknown",
+};
+
+// Spellings an older build sent. Still accepted so nothing renders as a raw tag.
+const LEGACY_PROVIDER_TAGS: Record<string, KnownProvider> = {
+  git_hub: "github",
+  open_ai: "openai",
+};
+
+const OTHER_PREFIX = "other:";
+
+/** Display name for a provider, including a service the user named themselves. */
+export function providerLabel(provider: Provider | string): string {
+  if (provider.startsWith(OTHER_PREFIX)) {
+    return provider.slice(OTHER_PREFIX.length) || "Unknown";
+  }
+  const known = (LEGACY_PROVIDER_TAGS[provider] ?? provider) as KnownProvider;
+  return PROVIDER_LABELS[known] ?? provider;
+}
+
+/** Whether this is a service DevLedger has no built-in knowledge of. */
+export function isCustomProvider(provider: Provider | string): boolean {
+  return provider.startsWith(OTHER_PREFIX);
+}
+
+/**
+ * The provider tag for what a user typed as a service name.
+ *
+ * Mirrors the backend's `Provider::from_user_input`: a name DevLedger knows, in
+ * any case, becomes that provider, so typing "Supabase" by hand and connecting
+ * through the connector land on the same thing. Anything else is `other:<name>`.
+ */
+export function providerFromInput(text: string): Provider {
+  const trimmed = text.trim();
+  if (!trimmed) return "unknown";
+  const lowered = trimmed.toLowerCase();
+  const aliases: Record<string, KnownProvider> = {
+    supabase: "supabase",
+    postgres: "postgres",
+    postgresql: "postgres",
+    github: "github",
+    git_hub: "github",
+    stripe: "stripe",
+    openai: "openai",
+    open_ai: "openai",
+    aws: "aws",
+    "amazon web services": "aws",
+    vercel: "vercel",
+    anthropic: "anthropic",
+  };
+  return aliases[lowered] ?? `other:${trimmed}`;
+}
 
 const SECRET_KIND_LABELS: Record<SecretKind, string> = {
   supabase_anon_key: "Supabase anon key",
@@ -14,6 +77,7 @@ const SECRET_KIND_LABELS: Record<SecretKind, string> = {
   aws_secret_access_key: "AWS secret access key",
   generic_api_key: "API key",
   password: "Password",
+  env_var: "Environment variable",
 };
 
 export function secretKindLabel(kind: SecretKind | null): string {

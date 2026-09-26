@@ -4,7 +4,17 @@
 // backend only ever sends `preview`, and plaintext arrives solely as the return
 // value of `revealSecret`.
 
-export type Provider =
+// The provider tag that crosses IPC is the same string DevLedger stores on
+// disk: `github`, `openai`, and so on. A service DevLedger has no built-in
+// knowledge of travels as `other:<name>`, so a registrar or a bank is a
+// first-class provider rather than being squeezed into "unknown".
+//
+// An earlier build derived this tag from serde's snake_case, which spelled
+// GitHub `git_hub` -- different from what the database held, and the cause of a
+// bug where adding a GitHub account by hand failed. There is now one spelling.
+// The backend still accepts the old one inbound, so nothing that sends it
+// breaks, but it only ever sends the canonical key.
+export type KnownProvider =
   | "supabase"
   | "postgres"
   | "github"
@@ -12,7 +22,11 @@ export type Provider =
   | "openai"
   | "aws"
   | "vercel"
+  | "anthropic"
   | "unknown";
+
+/** A known provider, or `other:<name>` for any service the user names. */
+export type Provider = KnownProvider | `other:${string}`;
 
 export type Environment = "development" | "staging" | "production" | "unknown";
 
@@ -27,7 +41,8 @@ export type SecretKind =
   | "aws_access_key_id"
   | "aws_secret_access_key"
   | "generic_api_key"
-  | "password";
+  | "password"
+  | "env_var";
 
 export type EvidenceLevel = "explicit" | "strong" | "heuristic" | "weak";
 
@@ -242,6 +257,8 @@ export type SubscriptionStatus =
   | "free"
   | "unknown";
 
+export type BillingInterval = "monthly" | "yearly";
+
 export interface ParsedSubscription {
   plan: string;
   status: SubscriptionStatus;
@@ -287,6 +304,8 @@ export interface CommitOutcome {
   left_unassigned: number;
   relations_created: number;
   touched_project_ids: string[];
+  /** Judgement calls made while saving, e.g. which of two accounts was used. */
+  notes: string[];
 }
 
 /** A DevLedger project: the thing you work on, e.g. "Curl-to-Buy". */
@@ -307,6 +326,8 @@ export interface ServiceProject {
   name: string;
   region: string | null;
   environment: Environment;
+  url: string | null;
+  notes: string | null;
   created_at: string;
 }
 
@@ -345,6 +366,29 @@ export interface Account {
   provider: Provider;
   external_ref: string | null;
   label: string;
+  /** The address this account signs in with, when it differs from the identity's. */
+  login_email: string | null;
+  username: string | null;
+  url: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+/** The editable half of an account. */
+export interface AccountDetails {
+  login_email: string | null;
+  username: string | null;
+  url: string | null;
+  notes: string | null;
+}
+
+/** One email address belonging to an identity. */
+export interface IdentityEmail {
+  id: string;
+  identity_id: string;
+  address: string;
+  blind_index: string;
+  is_primary: boolean;
   created_at: string;
 }
 
@@ -396,7 +440,9 @@ export type AttentionKind =
   | "unassigned_organization"
   | "unlinked_service_project"
   | "identity_without_email"
-  | "orphan_secret";
+  | "orphan_secret"
+  | "secret_value_missing"
+  | "ambiguous_provider_account";
 
 export interface AttentionItem {
   kind: AttentionKind;
@@ -418,13 +464,73 @@ export interface SecretRecord {
   id: string;
   project_id: string | null;
   service_project_id: string | null;
+  account_id: string | null;
   kind: SecretKind;
   name: string;
   preview: string;
   value_blind_index: string;
   environment: Environment;
+  notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** What a secret belongs to. Exactly one field is set. */
+export interface SecretOwner {
+  project_id: string | null;
+  service_project_id: string | null;
+  account_id: string | null;
+}
+
+/**
+ * A new secret, as a form supplies it.
+ *
+ * The value is deliberately not a field: it is passed as its own argument, so
+ * a credential never rides along inside a record the rest of the UI handles.
+ */
+export interface NewSecret {
+  owner: SecretOwner;
+  kind: SecretKind;
+  name: string;
+  environment: Environment;
+  notes: string | null;
+}
+
+/** The editable fields of an existing provider resource. */
+export interface ResourceEdit {
+  name: string;
+  provider_ref: string | null;
+  region: string | null;
+  environment: Environment;
+  url: string | null;
+  notes: string | null;
+}
+
+/** One variable name a project defines more than once with differing values. */
+export interface EnvConflict {
+  name: string;
+  definitions: EnvDefinition[];
+}
+
+export interface EnvDefinition {
+  secret_id: string;
+  environment: Environment;
+  source: string | null;
+}
+
+/** What deleting a project would take with it. */
+export interface DeletionImpact {
+  secrets_deleted: number;
+  resources_unlinked: number;
+}
+
+/** One person with the whole chain beneath them, address down to project. */
+export interface LedgerIdentity {
+  identity: Identity;
+  emails: IdentityEmail[];
+  accounts: AccountNode[];
+  projects: ProjectRefLabel[];
+  secret_count: number;
 }
 
 export interface VaultEntry {

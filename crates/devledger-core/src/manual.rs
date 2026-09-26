@@ -23,58 +23,10 @@
 //!   name" anywhere in this module.
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
-use crate::model::{Environment, Provider, SecretKind};
-use crate::store::{AccountDetails, SecretOwner};
-
-/// What a manual entry says about a new account.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NewAccount {
-    /// The identity that holds it.
-    pub identity_id: Uuid,
-    /// The service, as the user typed it.
-    ///
-    /// Free text on purpose. "Supabase" resolves to the provider DevLedger
-    /// knows; "Loopia" or "my NAS" becomes [`Provider::Other`] and works
-    /// exactly the same way everywhere else.
-    pub service: String,
-    /// What to call this account in the map.
-    pub label: String,
-    /// The address it signs in with.
-    pub login_email: Option<String>,
-    /// The username it signs in with.
-    pub username: Option<String>,
-    /// Where to sign in.
-    pub url: Option<String>,
-    /// Free-text note.
-    pub notes: Option<String>,
-}
-
-/// What a manual entry says about a new provider resource.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NewResource {
-    /// The account it lives under.
-    pub account_id: Uuid,
-    /// The organization it belongs to, when the user knows.
-    ///
-    /// Left as `None` rather than guessed. An unassigned resource is surfaced
-    /// under Needs attention, which is honest; a made-up organization is not.
-    pub organization_id: Option<Uuid>,
-    /// Display name.
-    pub name: String,
-    /// Provider-side reference, when there is one.
-    pub provider_ref: Option<String>,
-    /// Region, when it matters.
-    pub region: Option<String>,
-    /// Which environment this resource represents.
-    pub environment: Environment,
-    /// Where it lives.
-    pub url: Option<String>,
-    /// Free-text note.
-    pub notes: Option<String>,
-}
+use crate::model::{Environment, SecretKind};
+use crate::store::SecretOwner;
 
 /// The editable fields of an existing provider resource.
 ///
@@ -116,61 +68,35 @@ pub struct NewSecret {
     pub notes: Option<String>,
 }
 
-impl NewAccount {
-    /// The provider this entry resolves to.
-    pub fn provider(&self) -> Provider {
-        Provider::from_user_input(&self.service)
-    }
-
-    /// The account details, trimmed, with blanks treated as absent.
-    pub fn details(&self) -> AccountDetails {
-        AccountDetails {
-            login_email: clean(self.login_email.as_deref()),
-            username: clean(self.username.as_deref()),
-            url: clean(self.url.as_deref()),
-            notes: clean(self.notes.as_deref()),
-        }
-    }
-
-    /// Reject an entry that would create a nameless account.
-    pub fn validate(&self) -> Result<()> {
-        if self.label.trim().is_empty() {
-            return Err(CoreError::Invalid("an account needs a label".into()));
-        }
-        if self.service.trim().is_empty() {
-            return Err(CoreError::Invalid(
-                "name the service this account is with".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl NewResource {
-    /// Reject an entry that would create a nameless resource.
-    pub fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty() {
-            return Err(CoreError::Invalid("a resource needs a name".into()));
-        }
-        Ok(())
-    }
-}
-
 impl NewSecret {
-    /// Reject an entry that has no name or belongs to nothing.
+    /// Reject an entry that has no name, or that belongs to nothing or to
+    /// more than one thing.
+    ///
+    /// Exactly one owner, as the rest of the manual API already required: a
+    /// secret filed under a project *and* a resource shows up twice in the
+    /// ways people look for it, and deleting either owner would then delete it
+    /// out from under the other.
     pub fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() {
             return Err(CoreError::Invalid("a secret needs a name".into()));
         }
-        if self.owner.project_id.is_none()
-            && self.owner.service_project_id.is_none()
-            && self.owner.account_id.is_none()
-        {
-            return Err(CoreError::Invalid(
+        let owners = [
+            self.owner.project_id.is_some(),
+            self.owner.service_project_id.is_some(),
+            self.owner.account_id.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count();
+        match owners {
+            0 => Err(CoreError::Invalid(
                 "choose what this belongs to: a project, a resource or an account".into(),
-            ));
+            )),
+            1 => Ok(()),
+            _ => Err(CoreError::Invalid(
+                "a secret belongs to exactly one project, resource or account".into(),
+            )),
         }
-        Ok(())
     }
 }
 
@@ -215,25 +141,33 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_service_keeps_the_name_the_user_typed() {
-        let entry = NewAccount {
-            identity_id: Uuid::nil(),
-            service: "Loopia".into(),
-            label: "Domains".into(),
-            login_email: None,
-            username: None,
-            url: None,
+    fn a_secret_belongs_to_exactly_one_thing() {
+        use uuid::Uuid;
+        let with = |owner: SecretOwner| NewSecret {
+            owner,
+            kind: SecretKind::Password,
+            name: "Login".into(),
+            environment: Environment::Unknown,
             notes: None,
         };
-        assert_eq!(entry.provider(), Provider::Other("Loopia".into()));
-        assert_eq!(entry.provider().label(), "Loopia");
-    }
-
-    #[test]
-    fn a_known_service_resolves_however_it_is_typed() {
-        for spelling in ["Supabase", "supabase", "  SUPABASE  "] {
-            assert_eq!(Provider::from_user_input(spelling), Provider::Supabase);
-        }
+        let id = Some(Uuid::nil());
+        assert!(with(SecretOwner::default()).validate().is_err(), "nothing");
+        assert!(with(SecretOwner {
+            account_id: id,
+            ..SecretOwner::default()
+        })
+        .validate()
+        .is_ok());
+        assert!(
+            with(SecretOwner {
+                project_id: id,
+                service_project_id: id,
+                account_id: None
+            })
+            .validate()
+            .is_err(),
+            "two owners"
+        );
     }
 
     #[test]

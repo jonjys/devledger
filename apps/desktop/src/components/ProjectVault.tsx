@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 
 import * as api from "../lib/api";
-import { formatTime, plural, secretKindLabel } from "../lib/format";
-import type { ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
+import { formatTime, plural, providerLabel, secretKindLabel } from "../lib/format";
+import { useMode } from "../lib/mode";
+import type { Environment, ProjectSummary, ServiceProject, VaultEntry } from "../lib/types";
 
 interface Props {
   summary: ProjectSummary;
   onNotify: (message: string, bad?: boolean) => void;
+  onChanged: () => void;
 }
 
 /**
@@ -17,11 +19,13 @@ interface Props {
  * one path that pulls plaintext into the frontend, and it is per-row, explicit,
  * and cleared when the row is collapsed again.
  */
-export default function ProjectVault({ summary, onNotify }: Props) {
+export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
+  const { dev } = useMode();
   const [entries, setEntries] = useState<VaultEntry[]>([]);
   const [resources, setResources] = useState<ServiceProject[]>([]);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [exportEnvironment, setExportEnvironment] = useState<Environment | "all">("all");
 
   const projectId = summary.project.id;
 
@@ -65,7 +69,7 @@ export default function ProjectVault({ summary, onNotify }: Props) {
   async function copyOne(secretId: string, name: string) {
     try {
       await api.copySecret(secretId);
-      onNotify(`Copied ${name}`);
+      onNotify(`Copied ${name} · clipboard clears in 30 seconds`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -73,8 +77,11 @@ export default function ProjectVault({ summary, onNotify }: Props) {
 
   async function copyAll() {
     try {
-      const count = await api.copyEnv(projectId);
-      onNotify(`Copied ${plural(count, "variable")} as .env`);
+      const count = await api.copyEnv(
+        projectId,
+        exportEnvironment === "all" ? null : exportEnvironment,
+      );
+      onNotify(`Copied ${plural(count, "variable")} as .env · clipboard clears in 30 seconds`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -91,6 +98,19 @@ export default function ProjectVault({ summary, onNotify }: Props) {
     }
   }
 
+  async function removeProject() {
+    if (!window.confirm(`Delete project "${summary.project.name}"? Its resources are kept.`)) {
+      return;
+    }
+    try {
+      await api.deleteProject(projectId);
+      onNotify(`Deleted ${summary.project.name}`);
+      onChanged();
+    } catch (e: unknown) {
+      onNotify(e instanceof Error ? e.message : String(e), true);
+    }
+  }
+
   return (
     <div>
       <div className="vault-head">
@@ -102,14 +122,34 @@ export default function ProjectVault({ summary, onNotify }: Props) {
             {resources.length === 0
               ? "no linked resources"
               : resources
-                  .map((r) => `${r.provider}${r.provider_ref ? ` ${r.provider_ref}` : ""}`)
+                  .map((r) =>
+                    dev
+                      ? `${providerLabel(r.provider)}${r.provider_ref ? ` ${r.provider_ref}` : ""}`
+                      : providerLabel(r.provider),
+                  )
                   .join(", ")}
           </div>
         </div>
         <span className="spacer" />
         <div className="acts">
+          <select
+            aria-label="Environment to export"
+            value={exportEnvironment}
+            onChange={(event) =>
+              setExportEnvironment(event.target.value as Environment | "all")
+            }
+          >
+            <option value="all">All environments</option>
+            <option value="development">Development</option>
+            <option value="staging">Staging</option>
+            <option value="production">Production</option>
+            <option value="unknown">Unassigned</option>
+          </select>
           <button type="button" onClick={copyAll} disabled={entries.length === 0}>
             Copy .env
+          </button>
+          <button type="button" className="danger" onClick={removeProject}>
+            Delete project
           </button>
         </div>
       </div>
@@ -138,11 +178,17 @@ export default function ProjectVault({ summary, onNotify }: Props) {
               return (
                 <tr key={entry.secret.id}>
                   <td>
-                    <div className="nm">{entry.secret.name}</div>
-                    {entry.client_unsafe && <span className="tag unsafe">server only</span>}
+                    {dev ? (
+                      <>
+                        <div className="nm">{entry.secret.name}</div>
+                        {entry.client_unsafe && <span className="tag unsafe">server only</span>}
+                      </>
+                    ) : (
+                      <div className="nm">{secretKindLabel(entry.secret.kind)}</div>
+                    )}
                   </td>
                   <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>
-                    {secretKindLabel(entry.secret.kind)}
+                    {dev ? secretKindLabel(entry.secret.kind) : providerLabel(entry.provider)}
                     {entry.service_project_name && (
                       <div style={{ color: "var(--text-faint)", fontSize: 11.5 }}>
                         via {entry.service_project_name}
@@ -153,7 +199,7 @@ export default function ProjectVault({ summary, onNotify }: Props) {
                     {plaintext !== undefined ? (
                       <span className="revealed">{plaintext}</span>
                     ) : (
-                      <span className="pv">{entry.secret.preview}</span>
+                      <span className="pv">{dev ? entry.secret.preview : "••••••••"}</span>
                     )}
                   </td>
                   <td style={{ color: "var(--text-faint)", fontSize: 12 }}>

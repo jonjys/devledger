@@ -155,7 +155,7 @@ fn locking_removes_the_ability_to_read_anything() {
         CoreError::VaultLocked
     ));
     assert!(matches!(
-        vault.export_env(project_id, None).unwrap_err(),
+        vault.export_env(project_id).unwrap_err(),
         CoreError::VaultLocked
     ));
 }
@@ -482,7 +482,7 @@ fn env_export_is_produced_backend_side_and_is_valid() {
     let outcome = vault.commit_review(&accept_all(&analysis)).expect("commit");
 
     let env = vault
-        .export_env(outcome.touched_project_ids[0], None)
+        .export_env(outcome.touched_project_ids[0])
         .expect("export");
     let text = env.expose();
 

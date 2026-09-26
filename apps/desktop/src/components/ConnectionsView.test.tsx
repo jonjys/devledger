@@ -45,7 +45,7 @@ beforeEach(() => {
 describe("Connections screen", () => {
   it("offers Connect when nothing is connected yet", async () => {
     renderView();
-    expect(await screen.findByText("Supabase")).toBeInTheDocument();
+    expect((await screen.findAllByText("Supabase")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
     expect(screen.getByText("No accounts connected yet.")).toBeInTheDocument();
     expect(screen.getByText("read-only")).toBeInTheDocument();

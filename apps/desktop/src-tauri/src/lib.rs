@@ -11,19 +11,21 @@
 //!    for it. [`copy_secret`] and [`copy_env`] exist so the common cases --
 //!    pasting a key somewhere, seeding a `.env` -- never put the value in the
 //!    frontend at all: Rust writes it straight to the OS clipboard.
-//! 2. **Nothing reaches the network.** No HTTP client is linked, no shell or
-//!    filesystem plugin is enabled, and the capability file grants only window
-//!    controls plus clipboard writes.
+//! 2. **Network access is explicit.** Only connector commands call a provider,
+//!    after a user action. The webview has no HTTP, shell or filesystem
+//!    capability; provider requests stay in the Rust connector boundary.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
 use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
-use devledger_core::manual::{NewAccount, NewResource, NewSecret, ResourceEdit};
+use devledger_core::manual::{NewSecret, ResourceEdit};
 use devledger_core::model::{
-    Account, EntityKind, EntityRef, Environment, Identity, IdentityEmail, Organization, Project,
-    Relation, SecretRecord, ServiceProject,
+    Account, BillingInterval, EntityKind, EntityRef, Environment, Identity, IdentityEmail,
+    Organization, Project, Provider, Relation, SecretRecord, ServiceProject, Subscription,
+    SubscriptionStatus,
 };
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
@@ -120,11 +122,14 @@ fn vault_unlock(state: State<'_, AppState>, passphrase: String) -> IpcResult<Vau
 
 /// Close the vault, dropping every key.
 #[tauri::command]
-fn vault_lock(state: State<'_, AppState>) -> IpcResult<VaultStatus> {
-    state.with(|vault| {
+fn vault_lock(app: tauri::AppHandle, state: State<'_, AppState>) -> IpcResult<VaultStatus> {
+    let status = state.with(|vault| {
         vault.lock();
         Ok(vault.status())
-    })
+    })?;
+    // Locking must drop secrets from both process memory and the OS clipboard.
+    let _ = app.clipboard().clear();
+    Ok(status)
 }
 
 // ---------------------------------------------------------------- smart paste
@@ -290,6 +295,186 @@ fn accounts_for_identity(state: State<'_, AppState>, identity_id: Uuid) -> IpcRe
     state.with(|vault| vault.accounts_for_identity(identity_id))
 }
 
+#[tauri::command]
+fn create_identity_manual(
+    state: State<'_, AppState>,
+    label: String,
+    email: Option<String>,
+) -> IpcResult<Identity> {
+    state.with(|vault| vault.create_identity_manual(&label, email.as_deref()))
+}
+
+#[tauri::command]
+fn create_account_manual(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    provider: Provider,
+    label: String,
+    details: Option<AccountDetails>,
+) -> IpcResult<Account> {
+    // `details` is optional so callers that only name the account keep working;
+    // Tauri passes None for an argument the frontend leaves out.
+    state.with(|vault| {
+        vault.create_account_with_details(
+            identity_id,
+            provider,
+            &label,
+            &details.unwrap_or_default(),
+        )
+    })
+}
+
+/// Record a provider account by hand, resolving the identity from an email.
+///
+/// The manual counterpart to Connect: nothing touches the network and no
+/// credential is stored. `provider` deserialises from its snake_case tag, so
+/// GitHub arrives as `git_hub` and OpenAI as `open_ai`.
+#[tauri::command]
+fn create_account_for_email(
+    state: State<'_, AppState>,
+    email: Option<String>,
+    provider: Provider,
+    label: String,
+    note: Option<String>,
+) -> IpcResult<Account> {
+    state.with(|vault| {
+        vault.create_account_for_email(email.as_deref(), provider, &label, note.as_deref())
+    })
+}
+
+/// Add a provider account under a known identity, reusing one that already exists.
+#[tauri::command]
+fn add_account(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    provider: Provider,
+    label: String,
+    note: Option<String>,
+) -> IpcResult<Account> {
+    state.with(|vault| vault.add_account(identity_id, provider, &label, note.as_deref()))
+}
+
+#[tauri::command]
+fn create_service_project_manual(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+    organization_id: Option<Uuid>,
+    provider: Provider,
+    name: String,
+    provider_ref: Option<String>,
+    environment: Environment,
+) -> IpcResult<ServiceProject> {
+    state.with(|vault| {
+        vault.create_service_project_manual(
+            account_id,
+            organization_id,
+            provider,
+            &name,
+            provider_ref.as_deref(),
+            environment,
+        )
+    })
+}
+
+#[tauri::command]
+fn create_manual_secret(
+    state: State<'_, AppState>,
+    project_id: Option<Uuid>,
+    service_project_id: Option<Uuid>,
+    name: String,
+    environment: Environment,
+    value: String,
+) -> IpcResult<SecretRecord> {
+    state.with(|vault| {
+        vault.create_manual_secret(
+            project_id,
+            service_project_id,
+            &name,
+            environment,
+            &SecretString::new(value),
+        )
+    })
+}
+
+/// Record a subscription by hand, without a paste.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn create_subscription_manual(
+    state: State<'_, AppState>,
+    email: Option<String>,
+    provider: Provider,
+    plan: String,
+    status: SubscriptionStatus,
+    amount_cents: Option<i64>,
+    currency: Option<String>,
+    interval: Option<BillingInterval>,
+    renews_at: Option<String>,
+) -> IpcResult<Subscription> {
+    state.with(|vault| {
+        vault.create_subscription_manual(
+            email.as_deref(),
+            provider,
+            &plan,
+            status,
+            amount_cents,
+            currency.as_deref(),
+            interval,
+            renews_at.as_deref(),
+        )
+    })
+}
+
+/// Move an account under a different identity.
+#[tauri::command]
+fn move_account(state: State<'_, AppState>, account_id: Uuid, identity_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.move_account(account_id, identity_id))
+}
+
+/// Move an organization under a different account.
+#[tauri::command]
+fn move_organization(
+    state: State<'_, AppState>,
+    organization_id: Uuid,
+    account_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.move_organization(organization_id, account_id))
+}
+
+/// Move a resource under a different account, clearing its organization.
+#[tauri::command]
+fn move_service_project(
+    state: State<'_, AppState>,
+    service_project_id: Uuid,
+    account_id: Uuid,
+    organization_id: Option<Uuid>,
+) -> IpcResult<()> {
+    state.with(|vault| vault.move_service_project(service_project_id, account_id, organization_id))
+}
+
+/// Delete an account and everything under it.
+#[tauri::command]
+fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_account(account_id))
+}
+
+/// Delete an organization. Its resources survive, unassigned.
+#[tauri::command]
+fn delete_organization(state: State<'_, AppState>, organization_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_organization(organization_id))
+}
+
+/// Delete a provider resource and its secrets.
+#[tauri::command]
+fn delete_service_project(state: State<'_, AppState>, service_project_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_service_project(service_project_id))
+}
+
+/// Delete a subscription.
+#[tauri::command]
+fn delete_subscription(state: State<'_, AppState>, subscription_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_subscription(subscription_id))
+}
+
 /// Every relation touching an entity, in either direction.
 #[tauri::command]
 fn relations_for(
@@ -329,6 +514,28 @@ fn reveal_secret(state: State<'_, AppState>, secret_id: Uuid) -> IpcResult<Strin
     state.with(|vault| Ok(vault.reveal_secret(secret_id)?.expose().to_string()))
 }
 
+/// Write sensitive text and remove it after 30 seconds if it is still current.
+fn write_sensitive_clipboard(app: &tauri::AppHandle, value: &SecretString) -> IpcResult<()> {
+    let expected = value.clone();
+    app.clipboard()
+        .write_text(expected.expose().to_owned())
+        .map_err(|e| IpcError {
+            code: "clipboard",
+            message: format!("could not write to the clipboard: {e}"),
+        })?;
+
+    // Clear only if our value is still there. This avoids erasing something
+    // the user copied after the credential.
+    let cleanup_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        if cleanup_app.clipboard().read_text().ok().as_deref() == Some(expected.expose()) {
+            let _ = cleanup_app.clipboard().clear();
+        }
+    });
+    Ok(())
+}
+
 /// Copy a secret to the clipboard without it passing through the frontend.
 #[tauri::command]
 fn copy_secret(
@@ -337,12 +544,7 @@ fn copy_secret(
     secret_id: Uuid,
 ) -> IpcResult<()> {
     let value = state.with(|vault| vault.reveal_secret(secret_id))?;
-    app.clipboard()
-        .write_text(value.expose().to_string())
-        .map_err(|e| IpcError {
-            code: "clipboard",
-            message: format!("could not write to the clipboard: {e}"),
-        })
+    write_sensitive_clipboard(&app, &value)
 }
 
 /// Copy a whole project as a `.env` file, rendered in Rust.
@@ -356,14 +558,9 @@ fn copy_env(
     project_id: Uuid,
     environment: Option<Environment>,
 ) -> IpcResult<usize> {
-    let rendered = state.with(|vault| vault.export_env(project_id, environment))?;
+    let rendered = state.with(|vault| vault.export_env_for_environment(project_id, environment))?;
     let count = rendered.expose().lines().filter(|l| !l.is_empty()).count();
-    app.clipboard()
-        .write_text(rendered.expose().to_string())
-        .map_err(|e| IpcError {
-            code: "clipboard",
-            message: format!("could not write to the clipboard: {e}"),
-        })?;
+    write_sensitive_clipboard(&app, &rendered)?;
     Ok(count)
 }
 
@@ -372,16 +569,6 @@ fn copy_env(
 // The commands that make DevLedger usable without a single token. None of them
 // touch the network, and the one that carries a credential takes it as an
 // argument and never gives it back.
-
-/// Create an identity, optionally with its first email address.
-#[tauri::command]
-fn create_identity(
-    state: State<'_, AppState>,
-    label: String,
-    email: Option<String>,
-) -> IpcResult<Identity> {
-    state.with(|vault| vault.create_identity(&label, email.as_deref()))
-}
 
 /// Rename an identity.
 #[tauri::command]
@@ -432,12 +619,6 @@ fn remove_identity_email(
     state.with(|vault| vault.remove_identity_email(identity_id, email_id))
 }
 
-/// Create an account with any service the user can name.
-#[tauri::command]
-fn create_account(state: State<'_, AppState>, entry: NewAccount) -> IpcResult<Account> {
-    state.with(|vault| vault.create_account(&entry))
-}
-
 /// Edit an account's label and login details.
 #[tauri::command]
 fn update_account(
@@ -449,22 +630,10 @@ fn update_account(
     state.with(|vault| vault.update_account(account_id, &label, &details))
 }
 
-/// Delete an account and everything filed under it.
-#[tauri::command]
-fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()> {
-    state.with(|vault| vault.delete_account(account_id))
-}
-
 /// Every secret filed against an account, metadata only.
 #[tauri::command]
 fn account_secrets(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<Vec<VaultEntry>> {
     state.with(|vault| vault.account_secrets(account_id))
-}
-
-/// Create a provider resource by hand.
-#[tauri::command]
-fn create_resource(state: State<'_, AppState>, entry: NewResource) -> IpcResult<ServiceProject> {
-    state.with(|vault| vault.create_resource(&entry))
 }
 
 /// Edit a provider resource.
@@ -475,12 +644,6 @@ fn update_resource(
     edit: ResourceEdit,
 ) -> IpcResult<()> {
     state.with(|vault| vault.update_resource(resource_id, &edit))
-}
-
-/// Delete a provider resource and the secrets filed against it.
-#[tauri::command]
-fn delete_resource(state: State<'_, AppState>, resource_id: Uuid) -> IpcResult<()> {
-    state.with(|vault| vault.delete_resource(resource_id))
 }
 
 /// Store a secret entered by hand.
@@ -662,12 +825,13 @@ fn connector_disconnect(state: State<'_, AppState>, connection_id: Uuid) -> IpcR
     state.with(|vault| vault.disconnect(connection_id))
 }
 
-/// Build and run the desktop application.
+/// Build and run the application on desktop, Android, and iOS.
 ///
 /// # Panics
 ///
 /// Panics if the platform app-data directory cannot be resolved, which means
 /// there is nowhere to put a vault.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -706,6 +870,20 @@ pub fn run() {
             organizations_for_account,
             list_identities,
             accounts_for_identity,
+            create_identity_manual,
+            create_account_manual,
+            create_account_for_email,
+            add_account,
+            create_service_project_manual,
+            create_manual_secret,
+            create_subscription_manual,
+            move_account,
+            move_organization,
+            move_service_project,
+            delete_account,
+            delete_organization,
+            delete_service_project,
+            delete_subscription,
             relations_for,
             delete_secret,
             secret_provenance,
@@ -720,20 +898,15 @@ pub fn run() {
             connector_report,
             connector_import,
             connector_disconnect,
-            create_identity,
             update_identity,
             delete_identity,
             identity_emails,
             add_identity_email,
             set_primary_email,
             remove_identity_email,
-            create_account,
             update_account,
-            delete_account,
             account_secrets,
-            create_resource,
             update_resource,
-            delete_resource,
             store_secret,
             update_secret_meta,
             replace_secret_value,

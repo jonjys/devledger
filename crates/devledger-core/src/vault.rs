@@ -10,7 +10,7 @@
 //! review sheet is open. It is keyed by analysis id, never serialized, and
 //! cleared on lock.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,22 +24,29 @@ use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
 use crate::manual;
 use crate::model::{
-    Account, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity, IdentityEmail,
-    Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
-    ServiceProject,
+    Account, BillingInterval, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel,
+    Identity, IdentityEmail, Organization, Project, Provider, Relation, RelationKind, SecretKind,
+    SecretRecord, ServiceProject, Subscription, SubscriptionStatus,
 };
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
 use crate::paste::review::{
     AnswerChoice, ChainRole, CommitOutcome, EntityDecision, ProposedChain, ProposedEndpoint,
     RecommendedAction, ReviewSubmission,
 };
+use crate::paste::ParsedSubscription;
 use crate::paste::{Q_IDENTITY, Q_ORGANIZATION, Q_PROJECT};
 use crate::redact::{Provenance, SourceKind};
 use crate::secret::{mask_preview, SecretBytes, SecretString};
 use crate::store::{
     AccountDetails, AttentionItem, AuditEntry, IdentityNode, ProjectRefLabel, ProjectSummary,
-    ServiceProjectSummary, Store, SubscriptionSummary, VaultEntry,
+    SecretOwner, ServiceProjectSummary, Store, SubscriptionSummary, VaultEntry,
 };
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('_' | 'A'..='Z' | 'a'..='z'))
+        && chars.all(|c| matches!(c, '_' | 'A'..='Z' | 'a'..='z' | '0'..='9'))
+}
 
 /// Name of the cleartext sidecar holding KDF parameters.
 pub const META_FILE: &str = "vault.json";
@@ -832,57 +839,68 @@ impl Vault {
     /// Produced entirely in Rust so the UI can put it on the clipboard without
     /// ever holding the values in JavaScript. Includes every secret the project
     /// can reach, across all the provider resources it uses.
-    pub fn export_env(
+    pub fn export_env(&self, project_id: Uuid) -> Result<SecretString> {
+        self.export_env_for_environment(project_id, None)
+    }
+
+    /// Render only one deployment environment. When no environment is given,
+    /// duplicate names are allowed only when their decrypted values match.
+    pub fn export_env_for_environment(
         &self,
         project_id: Uuid,
         environment: Option<Environment>,
     ) -> Result<SecretString> {
         let inner = self.unlocked()?;
-        let entries: Vec<_> = inner
+        let entries = inner
             .store
             .list_secrets_for_project(project_id)?
             .into_iter()
-            .filter(|e| environment.is_none_or(|want| e.secret.environment == want))
-            .collect();
-
-        // A `.env` file is a flat namespace and every parser resolves a repeated
-        // key by taking the last one. Exporting a project that reaches both a
-        // staging and a production resource would therefore write
-        // DATABASE_URL twice and silently hand over whichever happened to sort
-        // last -- a production credential delivered under the impression it was
-        // the development one. Refusing is the only safe answer: the user picks
-        // an environment, or renames one of the two.
-        let conflicts = conflicting_names(&entries);
-        if !conflicts.is_empty() {
-            return Err(CoreError::Invalid(describe_conflicts(&conflicts)));
-        }
-
-        let mut out = String::new();
+            .filter(|entry| environment.is_none_or(|env| entry.secret.environment == env))
+            .collect::<Vec<_>>();
+        let mut variables = BTreeMap::<String, SecretString>::new();
         for entry in &entries {
+            if !valid_env_name(&entry.secret.name) {
+                return Err(CoreError::Invalid(format!(
+                    "{} is not a valid environment variable name",
+                    entry.secret.name
+                )));
+            }
             let value = self.reveal_secret(entry.secret.id)?;
+            if value.expose().contains(['\n', '\r']) {
+                return Err(CoreError::Invalid(format!(
+                    "{} contains a line break and cannot be exported safely",
+                    entry.secret.name
+                )));
+            }
+            if let Some(previous) = variables.get(&entry.secret.name) {
+                if previous.expose() != value.expose() {
+                    return Err(CoreError::Invalid(format!(
+                        "{} has conflicting values; choose one environment or correct the relationship",
+                        entry.secret.name
+                    )));
+                }
+            } else {
+                variables.insert(entry.secret.name.clone(), value);
+            }
+        }
+        let mut out = String::new();
+        for (name, value) in &variables {
             let needs_quotes = value
                 .expose()
                 .chars()
                 .any(|c| c.is_whitespace() || c == '#' || c == '"');
             if needs_quotes {
                 let escaped = value.expose().replace('\\', "\\\\").replace('"', "\\\"");
-                out.push_str(&format!("{}=\"{}\"\n", entry.secret.name, escaped));
+                out.push_str(&format!("{name}=\"{escaped}\"\n"));
             } else {
-                out.push_str(&format!("{}={}\n", entry.secret.name, value.expose()));
+                out.push_str(&format!("{name}={}\n", value.expose()));
             }
         }
         inner.store.audit(
             "project.export_env",
             Some("project"),
             Some(project_id),
-            &format!(
-                "Exported {} secrets as .env ({})",
-                entries.len(),
-                match environment {
-                    Some(env) => environment_label(env),
-                    None => "all environments",
-                }
-            ),
+            &format!("Exported {} variables as .env", variables.len()),
         )?;
         Ok(SecretString::new(out))
     }
@@ -1074,6 +1092,360 @@ impl Vault {
         self.unlocked()?.store.accounts_for_identity(identity_id)
     }
 
+    /// Create an identity explicitly from the visual stack editor.
+    ///
+    /// Email identities keep the same blind-index duplicate protection as Smart Paste.
+    pub fn create_identity_manual(&self, label: &str, email: Option<&str>) -> Result<Identity> {
+        let trimmed_label = label.trim();
+        let normalized_email = match email.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(raw) => Some(manual::normalize_email(raw)?),
+            None => None,
+        };
+        if trimmed_label.is_empty() && normalized_email.is_none() {
+            return Err(CoreError::Invalid(
+                "an identity needs a label or email".into(),
+            ));
+        }
+        let inner = self.unlocked()?;
+        if let Some(email) = normalized_email.as_deref() {
+            let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, email)?;
+            if let Some(id) = inner.store.identity_id_by_email_index(&bi)? {
+                return inner
+                    .store
+                    .identity(id)?
+                    .ok_or_else(|| CoreError::NotFound(format!("identity {id}")));
+            }
+            let display = if trimmed_label.is_empty() {
+                email
+            } else {
+                trimmed_label
+            };
+            return inner.store.create_identity(display, Some(email), Some(&bi));
+        }
+        inner.store.create_identity(trimmed_label, None, None)
+    }
+
+    // ------------------------------------------------------- manual entry
+
+    /// The shared "Unidentified" identity, created on demand.
+    ///
+    /// Used when the user records something by hand without naming an email, so
+    /// the entry still hangs off a real identity rather than floating free.
+    fn unidentified_identity_id(&self) -> Result<Uuid> {
+        const LABEL: &str = "Unidentified";
+        let inner = self.unlocked()?;
+        if let Some(existing) = inner
+            .store
+            .list_identities()?
+            .into_iter()
+            .find(|i| i.email.is_none() && i.label == LABEL)
+        {
+            return Ok(existing.id);
+        }
+        Ok(inner.store.create_identity(LABEL, None, None)?.id)
+    }
+
+    /// Resolve an identity from an optional email, creating it if needed.
+    fn identity_for_optional_email(&self, email: Option<&str>) -> Result<Uuid> {
+        match email.map(str::trim).filter(|e| !e.is_empty()) {
+            Some(email) => self.identity_id_for_email(email),
+            None => self.unidentified_identity_id(),
+        }
+    }
+
+    /// Create a provider account explicitly under an identity.
+    ///
+    /// Always inserts a new row. Use [`Self::add_account`] when an existing
+    /// account for the same provider should be reused.
+    pub fn create_account_manual(
+        &self,
+        identity_id: Uuid,
+        provider: Provider,
+        label: &str,
+    ) -> Result<Account> {
+        self.create_account_with_details(identity_id, provider, label, &AccountDetails::default())
+    }
+
+    /// Create an account together with how to sign in to it.
+    ///
+    /// The provider can be anything, including [`Provider::Other`] for a
+    /// service DevLedger has no built-in knowledge of. The login address may
+    /// differ from the identity's own: people sign in to different services
+    /// with different addresses, and that is exactly what this records.
+    pub fn create_account_with_details(
+        &self,
+        identity_id: Uuid,
+        provider: Provider,
+        label: &str,
+        details: &AccountDetails,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        if provider == Provider::Unknown {
+            return Err(CoreError::Invalid(
+                "name the service this account is with".into(),
+            ));
+        }
+        let details = AccountDetails {
+            login_email: match details.login_email.as_deref().map(str::trim) {
+                Some(raw) if !raw.is_empty() => Some(manual::normalize_email(raw)?),
+                _ => None,
+            },
+            username: manual::clean(details.username.as_deref()),
+            url: manual::clean(details.url.as_deref()),
+            notes: manual::clean(details.notes.as_deref()),
+        };
+        self.unlocked()?
+            .store
+            .create_account_full(identity_id, &provider, None, trimmed, &details)
+    }
+
+    /// Add a provider account for an identity resolved by email.
+    ///
+    /// This is the manual counterpart to Connect: it records that an account
+    /// exists without contacting the provider. Like [`Self::add_account`] it
+    /// always creates. `note` is stored as the account's external reference.
+    pub fn create_account_for_email(
+        &self,
+        email: Option<&str>,
+        provider: Provider,
+        label: &str,
+        note: Option<&str>,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        let identity_id = self.identity_for_optional_email(email)?;
+        self.add_account(identity_id, provider, trimmed, note)
+    }
+
+    /// Add a provider account under a known identity.
+    ///
+    /// Always creates. This is what the map's "Add account" and the service
+    /// catalog call, and both are explicit requests for a new account. It used
+    /// to hand back the identity's existing account for the same provider
+    /// instead, which folded a second Supabase account into the first while the
+    /// UI still reported "Account added" -- the silent merge DevLedger must never
+    /// make. A duplicate added by mistake is visible and can be deleted; a merge
+    /// nobody saw cannot be undone.
+    pub fn add_account(
+        &self,
+        identity_id: Uuid,
+        provider: Provider,
+        label: &str,
+        note: Option<&str>,
+    ) -> Result<Account> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        let note = note.map(str::trim).filter(|n| !n.is_empty());
+        self.unlocked()?
+            .store
+            .create_account(identity_id, &provider, note, trimmed)
+    }
+
+    /// The account something implicit should be filed under, if that is knowable.
+    ///
+    /// For callers that are *not* an explicit "add account" -- a subscription
+    /// entered by email and provider, for instance. No account: create one.
+    /// Exactly one: that is the answer. Several: refuse, naming them, because
+    /// picking one would file a bill under an account the user never chose.
+    fn resolve_account(
+        &self,
+        identity_id: Uuid,
+        provider: &Provider,
+        label: &str,
+    ) -> Result<Account> {
+        let inner = self.unlocked()?;
+        let mut existing = inner.store.accounts_for(identity_id, provider)?;
+        match existing.len() {
+            0 => inner
+                .store
+                .create_account(identity_id, provider, None, label),
+            1 => Ok(existing.remove(0)),
+            _ => Err(CoreError::Invalid(format!(
+                "this identity holds {} {} accounts ({}); add it from the right account in the map",
+                existing.len(),
+                provider.label(),
+                existing
+                    .iter()
+                    .map(|a| a.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        }
+    }
+
+    /// Record a provider resource by hand, under an account.
+    pub fn create_service_project_manual(
+        &self,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+        provider: Provider,
+        name: &str,
+        provider_ref: Option<&str>,
+        environment: Environment,
+    ) -> Result<ServiceProject> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Invalid("a resource needs a name".into()));
+        }
+        if let Some(org_id) = organization_id {
+            let belongs = self
+                .unlocked()?
+                .store
+                .organizations_for_account(account_id)?
+                .iter()
+                .any(|org| org.id == org_id);
+            if !belongs {
+                return Err(CoreError::Invalid(
+                    "organization does not belong to this account".into(),
+                ));
+            }
+        }
+        let provider_ref = provider_ref.map(str::trim).filter(|r| !r.is_empty());
+        self.unlocked()?.store.create_service_project(
+            account_id,
+            organization_id,
+            &provider,
+            provider_ref,
+            trimmed,
+            None,
+            environment,
+        )
+    }
+
+    /// Store a manually entered API key/secret against a project or provider resource.
+    ///
+    /// The plaintext crosses IPC only on the explicit Add API/Secret action and is
+    /// immediately sealed by the same vault primitive used by Smart Paste.
+    pub fn create_manual_secret(
+        &mut self,
+        project_id: Option<Uuid>,
+        service_project_id: Option<Uuid>,
+        name: &str,
+        environment: Environment,
+        value: &SecretString,
+    ) -> Result<SecretRecord> {
+        self.store_secret(
+            &manual::NewSecret {
+                owner: SecretOwner {
+                    project_id,
+                    service_project_id,
+                    account_id: None,
+                },
+                kind: SecretKind::GenericApiKey,
+                name: name.to_string(),
+                environment,
+                notes: None,
+            },
+            value,
+        )
+    }
+
+    /// Record a subscription by hand, without a paste.
+    ///
+    /// The subscription hangs off an account for the resolved identity. When no
+    /// provider is given it is filed under a generic account, which is enough to
+    /// track "what am I paying for" without pretending to know the provider.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_subscription_manual(
+        &self,
+        email: Option<&str>,
+        provider: Provider,
+        plan: &str,
+        status: SubscriptionStatus,
+        amount_cents: Option<i64>,
+        currency: Option<&str>,
+        interval: Option<BillingInterval>,
+        renews_at: Option<&str>,
+    ) -> Result<Subscription> {
+        let plan = plan.trim();
+        if plan.is_empty() {
+            return Err(CoreError::Invalid(
+                "a subscription needs a plan name".into(),
+            ));
+        }
+        let identity_id = self.identity_for_optional_email(email)?;
+        let label = email
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| provider.label())
+            .to_string();
+        let account = self.resolve_account(identity_id, &provider, &label)?;
+        let parsed = ParsedSubscription {
+            plan: plan.to_string(),
+            status,
+            amount_cents,
+            currency: currency
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map(str::to_string),
+            interval,
+            trial_ends_at: renews_at
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_string),
+        };
+        self.unlocked()?
+            .store
+            .create_subscription(account.id, &parsed)
+    }
+
+    /// Move an account under a different identity.
+    pub fn move_account(&self, account_id: Uuid, identity_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .set_account_identity(account_id, identity_id)
+    }
+
+    /// Move an organization under a different account.
+    pub fn move_organization(&self, organization_id: Uuid, account_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .set_organization_account(organization_id, account_id)
+    }
+
+    /// Move a resource under a different account, clearing its organization.
+    pub fn move_service_project(
+        &self,
+        service_project_id: Uuid,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+    ) -> Result<()> {
+        self.unlocked()?.store.set_service_project_account(
+            service_project_id,
+            account_id,
+            organization_id,
+        )
+    }
+
+    /// Delete an account and everything under it.
+    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_account(account_id)
+    }
+
+    /// Delete an organization. Its resources survive, unassigned.
+    pub fn delete_organization(&self, organization_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_organization(organization_id)
+    }
+
+    /// Delete a provider resource and its secrets.
+    pub fn delete_service_project(&self, service_project_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .delete_service_project(service_project_id)
+    }
+
+    /// Delete a subscription.
+    pub fn delete_subscription(&self, subscription_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_subscription(subscription_id)
+    }
+
     /// Every relation touching an entity.
     pub fn relations_for(&self, entity: EntityRef) -> Result<Vec<Relation>> {
         self.unlocked()?.store.relations_for(entity)
@@ -1094,48 +1466,6 @@ impl Vault {
     // Everything in this section works with no token, no network and no
     // provider DevLedger knows about. See `crate::manual` for why that is the
     // baseline rather than the fallback.
-
-    /// Create an identity, optionally with its first email address.
-    pub fn create_identity(&self, label: &str, email: Option<&str>) -> Result<Identity> {
-        let label = label.trim();
-        let address = match email {
-            Some(raw) if !raw.trim().is_empty() => Some(manual::normalize_email(raw)?),
-            _ => None,
-        };
-        let label = if label.is_empty() {
-            match &address {
-                Some(a) => a.clone(),
-                None => {
-                    return Err(CoreError::Invalid(
-                        "an identity needs a name or an email".into(),
-                    ))
-                }
-            }
-        } else {
-            label.to_string()
-        };
-
-        let inner = self.unlocked()?;
-        let (email_ref, index) = match &address {
-            Some(a) => {
-                let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, a)?;
-                if inner.store.identity_for_email_index(&bi)?.is_some() {
-                    return Err(CoreError::Invalid(
-                        "an identity with that email already exists".into(),
-                    ));
-                }
-                (Some(a.as_str()), Some(bi))
-            }
-            None => (None, None),
-        };
-        let identity = inner
-            .store
-            .create_identity(&label, email_ref, index.as_deref())?;
-        if let (Some(a), Some(bi)) = (address.as_deref(), index.as_deref()) {
-            inner.store.add_identity_email(identity.id, a, bi, true)?;
-        }
-        Ok(identity)
-    }
 
     /// Rename an identity.
     pub fn update_identity(&self, identity_id: Uuid, label: &str) -> Result<()> {
@@ -1194,19 +1524,6 @@ impl Vault {
             .remove_identity_email(identity_id, email_id)
     }
 
-    /// Create an account by hand, with any service the user can name.
-    pub fn create_account(&self, entry: &manual::NewAccount) -> Result<Account> {
-        entry.validate()?;
-        let provider = entry.provider();
-        self.unlocked()?.store.create_account_full(
-            entry.identity_id,
-            &provider,
-            None,
-            entry.label.trim(),
-            &entry.details(),
-        )
-    }
-
     /// Edit an account's label and login details.
     pub fn update_account(
         &self,
@@ -1223,11 +1540,6 @@ impl Vault {
             .update_account(account_id, label, details)
     }
 
-    /// Delete an account and everything filed under it.
-    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
-        self.unlocked()?.store.delete_account(account_id)
-    }
-
     /// Fetch one account.
     pub fn account(&self, account_id: Uuid) -> Result<Option<Account>> {
         self.unlocked()?.store.account(account_id)
@@ -1236,43 +1548,6 @@ impl Vault {
     /// Every secret filed against an account.
     pub fn account_secrets(&self, account_id: Uuid) -> Result<Vec<VaultEntry>> {
         self.unlocked()?.store.list_secrets_for_account(account_id)
-    }
-
-    /// Create a provider resource by hand.
-    pub fn create_resource(&self, entry: &manual::NewResource) -> Result<ServiceProject> {
-        entry.validate()?;
-        let inner = self.unlocked()?;
-        let account = inner
-            .store
-            .account(entry.account_id)?
-            .ok_or_else(|| CoreError::NotFound(format!("account {}", entry.account_id)))?;
-
-        // An organization has to belong to the same account, or the map would
-        // claim a relationship that is not true.
-        if let Some(org_id) = entry.organization_id {
-            let owned = inner
-                .store
-                .organizations_for_account(entry.account_id)?
-                .into_iter()
-                .any(|o| o.id == org_id);
-            if !owned {
-                return Err(CoreError::Invalid(
-                    "that organization belongs to a different account".into(),
-                ));
-            }
-        }
-
-        inner.store.create_service_project_full(
-            entry.account_id,
-            entry.organization_id,
-            &account.provider,
-            manual::clean(entry.provider_ref.as_deref()).as_deref(),
-            entry.name.trim(),
-            manual::clean(entry.region.as_deref()).as_deref(),
-            entry.environment,
-            manual::clean(entry.url.as_deref()).as_deref(),
-            manual::clean(entry.notes.as_deref()).as_deref(),
-        )
     }
 
     /// Edit a provider resource.
@@ -1290,11 +1565,6 @@ impl Vault {
             manual::clean(edit.url.as_deref()).as_deref(),
             manual::clean(edit.notes.as_deref()).as_deref(),
         )
-    }
-
-    /// Delete a provider resource and the secrets filed against it.
-    pub fn delete_resource(&self, id: Uuid) -> Result<()> {
-        self.unlocked()?.store.delete_service_project(id)
     }
 
     /// Store a secret entered by hand: a password, an API key, an env var.
@@ -1419,64 +1689,41 @@ impl Vault {
     }
 }
 
-/// Group entries by name and keep the names that appear more than once.
+/// The names a `.env` export would refuse: repeated with differing values.
+///
+/// Mirrors [`Vault::export_env_for_environment`] exactly -- a name repeated with
+/// an identical value is fine, a name repeated with a different one is not --
+/// but decides it from blind indexes, so asking "would this export work?"
+/// never decrypts a value or writes a reveal to the audit log.
 fn conflicting_names(entries: &[VaultEntry]) -> Vec<EnvConflict> {
     let mut order: Vec<String> = Vec::new();
-    let mut grouped: HashMap<String, Vec<EnvDefinition>> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<&VaultEntry>> = HashMap::new();
     for entry in entries {
         let name = entry.secret.name.clone();
         if !grouped.contains_key(&name) {
             order.push(name.clone());
         }
-        grouped.entry(name).or_default().push(EnvDefinition {
-            secret_id: entry.secret.id,
-            environment: entry.secret.environment,
-            source: entry.service_project_name.clone(),
-        });
+        grouped.entry(name).or_default().push(entry);
     }
     order
         .into_iter()
         .filter_map(|name| {
-            let definitions = grouped.remove(&name)?;
-            (definitions.len() > 1).then_some(EnvConflict { name, definitions })
+            let group = grouped.remove(&name)?;
+            let first = &group[0].secret.value_blind_index;
+            let differs = group.iter().any(|e| &e.secret.value_blind_index != first);
+            differs.then(|| EnvConflict {
+                name,
+                definitions: group
+                    .iter()
+                    .map(|e| EnvDefinition {
+                        secret_id: e.secret.id,
+                        environment: e.secret.environment,
+                        source: e.service_project_name.clone(),
+                    })
+                    .collect(),
+            })
         })
         .collect()
-}
-
-/// Explain a conflict without naming a single value.
-fn describe_conflicts(conflicts: &[EnvConflict]) -> String {
-    let detail = conflicts
-        .iter()
-        .map(|c| {
-            let environments = c
-                .definitions
-                .iter()
-                .map(|d| environment_label(d.environment))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{} ({})", c.name, environments)
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    format!(
-        "this project defines {} more than once, so a .env file would silently keep only one \
-         of each: {detail}. Export a single environment, or rename one of them.",
-        if conflicts.len() == 1 {
-            "a variable".to_string()
-        } else {
-            format!("{} variables", conflicts.len())
-        }
-    )
-}
-
-/// The word used for an environment in messages and the audit log.
-fn environment_label(environment: Environment) -> &'static str {
-    match environment {
-        Environment::Development => "development",
-        Environment::Staging => "staging",
-        Environment::Production => "production",
-        Environment::Unknown => "no environment",
-    }
 }
 
 /// Turn a proposed endpoint into a concrete [`EntityRef`].
