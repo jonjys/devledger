@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-26
+Feature Built: Subscription status follows the renewal date — Active, Expiring Soon inside 7 days, or Expired once the date has passed.
+Suggested Tweet:
+"The renewal date passed. Your ledger still said Active.
+
+DevLedger now reads that date. Inside a week: Expiring Soon. After it: Expired.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
