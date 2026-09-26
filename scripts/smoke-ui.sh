@@ -43,19 +43,47 @@ for _ in $(seq 1 60); do
 done
 [ -n "$WINDOW" ] || { echo "DevLedger did not open a visible window"; exit 1; }
 xdotool windowactivate --sync "$WINDOW" 2>/dev/null || xdotool windowfocus "$WINDOW"
-sleep 2
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
-xdotool type --delay 35 "$PASSPHRASE"
-xdotool key Tab; sleep 1
-xdotool type --delay 35 "$PASSPHRASE"; sleep 1
+
+# The window title appears before WebKit paints. Typing during that white
+# frame drops keystrokes, so the two passphrase fields disagree and the vault
+# never opens. Wait until the frame has real contrast.
+painted=0
+mean=0
+deviation=0
+for _ in $(seq 1 40); do
+  import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
+  mean=$(identify -format "%[fx:int(mean*255)]" "$OUT/01-onboarding.png")
+  deviation=$(identify -format "%[fx:int(standard_deviation*255)]" "$OUT/01-onboarding.png")
+  if [ "$mean" -le 120 ] && [ "$deviation" -ge 8 ]; then
+    painted=1
+    break
+  fi
+  sleep 1
+done
+if [ "$painted" -ne 1 ]; then
+  echo "UI smoke FAILED: onboarding never painted (mean $mean, deviation $deviation)"
+  exit 1
+fi
+
+# Click the passphrase field (fixed 1180x800 window), clear it, then confirm.
+xdotool mousemove --window "$WINDOW" 544 370 click 1
+sleep 0.2
+xdotool key ctrl+a BackSpace
+xdotool type --delay 20 "$PASSPHRASE"
+xdotool mousemove --window "$WINDOW" 544 450 click 1
+sleep 0.2
+xdotool key ctrl+a BackSpace
+xdotool type --delay 20 "$PASSPHRASE"
+sleep 0.4
 xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
 # Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window.
 xdotool mousemove --window "$WINDOW" 120 270 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-# The Supabase "Connect" button sits at the right of the first connector row.
-xdotool mousemove --window "$WINDOW" 1090 212 click 1; sleep 3
+# Supabase "Connect" is the first connector row. The paste bar above it
+# pushes that row down to about y=274 in the default 1180×800 window.
+xdotool mousemove --window "$WINDOW" 1090 275 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 xdotool key Escape; sleep 1
 # Phone-sized window. The shell must collapse the sidebar into a bottom bar.
@@ -66,7 +94,7 @@ DRIVE
 chmod +x "$DATA/drive.sh"
 
 BIN="$PWD/$BIN" OUT="$PWD/$OUT" PASSPHRASE="$PASSPHRASE" XDG_DATA_HOME="$DATA/appdata" \
-  timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" "$DATA/drive.sh"
+  timeout 180 xvfb-run -a --server-args="-screen 0 1280x900x24" "$DATA/drive.sh"
 
 shots=$(ls "$OUT"/*.png 2>/dev/null | wc -l)
 if [ "$shots" -lt 4 ]; then
