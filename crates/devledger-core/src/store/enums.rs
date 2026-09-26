@@ -36,17 +36,18 @@ macro_rules! str_enum {
     };
 }
 
-str_enum!(
-    Provider, provider_to_str, provider_from_str,
-    Provider::Supabase => "supabase",
-    Provider::Postgres => "postgres",
-    Provider::GitHub => "github",
-    Provider::Stripe => "stripe",
-    Provider::OpenAi => "openai",
-    Provider::Aws => "aws",
-    Provider::Vercel => "vercel",
-    Provider::Unknown => "unknown",
-);
+// Provider is deliberately not a `str_enum!`. It is open: a user can name a
+// service DevLedger has never heard of, so the encoding has to carry a payload
+// and decoding an unknown string is normal rather than corruption. The pair
+// lives on the type itself so the storage format and the IPC format cannot
+// drift apart.
+pub(crate) fn provider_to_str(value: &Provider) -> String {
+    value.as_key()
+}
+
+pub(crate) fn provider_from_str(text: &str) -> Result<Provider> {
+    Ok(Provider::from_key(text))
+}
 
 str_enum!(
     Environment, environment_to_str, environment_from_str,
@@ -69,6 +70,7 @@ str_enum!(
     SecretKind::AwsSecretAccessKey => "aws_secret_access_key",
     SecretKind::GenericApiKey => "generic_api_key",
     SecretKind::Password => "password",
+    SecretKind::EnvVar => "env_var",
 );
 
 str_enum!(

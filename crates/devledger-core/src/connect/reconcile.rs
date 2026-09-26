@@ -143,7 +143,7 @@ pub trait GraphView {
     /// A resource with this provider ref, anywhere in the vault.
     fn service_project_by_ref(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
     ) -> crate::Result<Option<ServiceProject>>;
     /// A resource with this name under this account.
@@ -170,7 +170,7 @@ pub trait GraphView {
 pub fn reconcile(
     connection_id: Uuid,
     account_id: Uuid,
-    provider: Provider,
+    provider: &Provider,
     discovery: &Discovery,
     graph: &dyn GraphView,
 ) -> crate::Result<ReconcileReport> {
@@ -284,7 +284,7 @@ fn reconcile_organization(
 
 fn reconcile_project(
     account_id: Uuid,
-    provider: Provider,
+    provider: &Provider,
     project: &super::DiscoveredProject,
     graph: &dyn GraphView,
 ) -> crate::Result<ReconcileItem> {

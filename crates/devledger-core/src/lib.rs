@@ -25,6 +25,7 @@ pub mod connect;
 pub mod connect_vault;
 pub mod crypto;
 pub mod error;
+pub mod manual;
 pub mod model;
 pub mod paste;
 pub mod redact;

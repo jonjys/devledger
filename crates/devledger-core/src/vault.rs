@@ -22,9 +22,11 @@ use crate::crypto::blind_index::{self, DOMAIN_IDENTITY_EMAIL, DOMAIN_SECRET_VALU
 use crate::crypto::kdf::{self, KdfParams};
 use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
+use crate::manual;
 use crate::model::{
-    Account, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity, Organization,
-    Project, Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject,
+    Account, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel, Identity, IdentityEmail,
+    Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
+    ServiceProject,
 };
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
 use crate::paste::review::{
@@ -35,8 +37,8 @@ use crate::paste::{Q_IDENTITY, Q_ORGANIZATION, Q_PROJECT};
 use crate::redact::{Provenance, SourceKind};
 use crate::secret::{mask_preview, SecretBytes, SecretString};
 use crate::store::{
-    AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary, Store,
-    SubscriptionSummary, VaultEntry,
+    AccountDetails, AttentionItem, AuditEntry, IdentityNode, ProjectRefLabel, ProjectSummary,
+    ServiceProjectSummary, Store, SubscriptionSummary, VaultEntry,
 };
 
 /// Name of the cleartext sidecar holding KDF parameters.
@@ -87,6 +89,56 @@ pub struct VaultStatus {
     pub initialized: bool,
     /// Whether it is currently unlocked.
     pub unlocked: bool,
+}
+
+/// One identity with the whole chain that hangs off it.
+///
+/// This is the answer to "which of my email addresses is this project actually
+/// running on", which is the question the rest of the model exists to make
+/// answerable: address -> account -> organization -> resource -> project, in
+/// one shape the UI can render without five more round trips.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OverviewIdentity {
+    /// The person.
+    pub identity: Identity,
+    /// Every address they hold, primary first.
+    pub emails: Vec<IdentityEmail>,
+    /// Their accounts, with organizations and resources beneath them.
+    pub accounts: Vec<crate::store::AccountNode>,
+    /// Every DevLedger project reachable from this identity, by name.
+    pub projects: Vec<ProjectRefLabel>,
+    /// How many secrets are filed anywhere under this identity.
+    pub secret_count: i64,
+}
+
+/// One variable name a project defines more than once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvConflict {
+    /// The repeated variable name.
+    pub name: String,
+    /// Which environments define it, and under which resource.
+    pub definitions: Vec<EnvDefinition>,
+}
+
+/// Where one definition of a repeated variable comes from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvDefinition {
+    /// The secret's id, so the UI can offer to rename or delete it.
+    pub secret_id: Uuid,
+    /// Which environment it is filed under.
+    pub environment: Environment,
+    /// The resource it came from, when it has one.
+    pub source: Option<String>,
+}
+
+/// What deleting something would take with it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeletionImpact {
+    /// Secrets that would be destroyed, because they are filed directly against
+    /// the thing being deleted.
+    pub secrets_deleted: i64,
+    /// Resources that would merely be unlinked, and survive.
+    pub resources_unlinked: i64,
 }
 
 /// The ids the chain resolved to during a commit.
@@ -447,7 +499,7 @@ impl Vault {
         outcome: &mut CommitOutcome,
     ) -> Result<ResolvedChain> {
         let chain: &ProposedChain = &analysis.chain;
-        let provider = analysis.provider;
+        let provider = &analysis.provider;
         let mut resolved = ResolvedChain::default();
 
         let needs_account = chain.service_project.is_some() || chain.account.is_some();
@@ -464,17 +516,35 @@ impl Vault {
         };
 
         // --- account
-        if needs_account && provider != Provider::Unknown {
+        //
+        // One identity may hold several accounts with the same provider: two
+        // Supabase accounts signed in with different addresses is a normal
+        // thing to have, and the whole point of this program is to keep track
+        // of exactly that. A paste that only names the provider cannot say
+        // which one it means. Rather than pick silently, the oldest is used and
+        // the choice is reported back, so a wrong guess is visible and can be
+        // corrected from the map instead of quietly filing a production key
+        // under the wrong account.
+        if needs_account && *provider != Provider::Unknown {
             if let Some(identity_id) = resolved.identity {
-                let existing = self.unlocked()?.store.account_for(identity_id, provider)?;
-                resolved.account = Some(match existing {
-                    Some(account) => account.id,
-                    None => {
+                let existing = self.unlocked()?.store.accounts_for(identity_id, provider)?;
+                resolved.account = Some(match existing.len() {
+                    0 => {
                         outcome.accounts_created += 1;
                         self.unlocked()?
                             .store
                             .create_account(identity_id, provider, None, provider.label())?
                             .id
+                    }
+                    1 => existing[0].id,
+                    n => {
+                        outcome.notes.push(format!(
+                            "This identity holds {n} {} accounts. Filed under \"{}\", the \
+                             oldest one. Move it from the map if that is wrong.",
+                            provider.label(),
+                            existing[0].label
+                        ));
+                        existing[0].id
                     }
                 });
             }
@@ -762,9 +832,31 @@ impl Vault {
     /// Produced entirely in Rust so the UI can put it on the clipboard without
     /// ever holding the values in JavaScript. Includes every secret the project
     /// can reach, across all the provider resources it uses.
-    pub fn export_env(&self, project_id: Uuid) -> Result<SecretString> {
+    pub fn export_env(
+        &self,
+        project_id: Uuid,
+        environment: Option<Environment>,
+    ) -> Result<SecretString> {
         let inner = self.unlocked()?;
-        let entries = inner.store.list_secrets_for_project(project_id)?;
+        let entries: Vec<_> = inner
+            .store
+            .list_secrets_for_project(project_id)?
+            .into_iter()
+            .filter(|e| environment.is_none_or(|want| e.secret.environment == want))
+            .collect();
+
+        // A `.env` file is a flat namespace and every parser resolves a repeated
+        // key by taking the last one. Exporting a project that reaches both a
+        // staging and a production resource would therefore write
+        // DATABASE_URL twice and silently hand over whichever happened to sort
+        // last -- a production credential delivered under the impression it was
+        // the development one. Refusing is the only safe answer: the user picks
+        // an environment, or renames one of the two.
+        let conflicts = conflicting_names(&entries);
+        if !conflicts.is_empty() {
+            return Err(CoreError::Invalid(describe_conflicts(&conflicts)));
+        }
+
         let mut out = String::new();
         for entry in &entries {
             let value = self.reveal_secret(entry.secret.id)?;
@@ -783,9 +875,55 @@ impl Vault {
             "project.export_env",
             Some("project"),
             Some(project_id),
-            &format!("Exported {} secrets as .env", entries.len()),
+            &format!(
+                "Exported {} secrets as .env ({})",
+                entries.len(),
+                match environment {
+                    Some(env) => environment_label(env),
+                    None => "all environments",
+                }
+            ),
         )?;
         Ok(SecretString::new(out))
+    }
+
+    /// Variable names a project defines more than once, and where.
+    ///
+    /// The UI asks for this before offering Copy .env, so a conflict is
+    /// something the user sees and resolves rather than an error they hit.
+    pub fn env_conflicts(
+        &self,
+        project_id: Uuid,
+        environment: Option<Environment>,
+    ) -> Result<Vec<EnvConflict>> {
+        let entries: Vec<_> = self
+            .unlocked()?
+            .store
+            .list_secrets_for_project(project_id)?
+            .into_iter()
+            .filter(|e| environment.is_none_or(|want| e.secret.environment == want))
+            .collect();
+        Ok(conflicting_names(&entries))
+    }
+
+    /// Which environments a project's secrets actually use, in a fixed order.
+    pub fn project_environments(&self, project_id: Uuid) -> Result<Vec<Environment>> {
+        let entries = self
+            .unlocked()?
+            .store
+            .list_secrets_for_project(project_id)?;
+        let mut out: Vec<Environment> = Vec::new();
+        for env in [
+            Environment::Development,
+            Environment::Staging,
+            Environment::Production,
+            Environment::Unknown,
+        ] {
+            if entries.iter().any(|e| e.secret.environment == env) {
+                out.push(env);
+            }
+        }
+        Ok(out)
     }
 
     // ----------------------------------------------------------------- vault
@@ -951,6 +1089,324 @@ impl Vault {
         self.unlocked()?.store.provenance_for(entity)
     }
 
+    // ----------------------------------------------------- manual entry
+    //
+    // Everything in this section works with no token, no network and no
+    // provider DevLedger knows about. See `crate::manual` for why that is the
+    // baseline rather than the fallback.
+
+    /// Create an identity, optionally with its first email address.
+    pub fn create_identity(&self, label: &str, email: Option<&str>) -> Result<Identity> {
+        let label = label.trim();
+        let address = match email {
+            Some(raw) if !raw.trim().is_empty() => Some(manual::normalize_email(raw)?),
+            _ => None,
+        };
+        let label = if label.is_empty() {
+            match &address {
+                Some(a) => a.clone(),
+                None => {
+                    return Err(CoreError::Invalid(
+                        "an identity needs a name or an email".into(),
+                    ))
+                }
+            }
+        } else {
+            label.to_string()
+        };
+
+        let inner = self.unlocked()?;
+        let (email_ref, index) = match &address {
+            Some(a) => {
+                let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, a)?;
+                if inner.store.identity_for_email_index(&bi)?.is_some() {
+                    return Err(CoreError::Invalid(
+                        "an identity with that email already exists".into(),
+                    ));
+                }
+                (Some(a.as_str()), Some(bi))
+            }
+            None => (None, None),
+        };
+        let identity = inner
+            .store
+            .create_identity(&label, email_ref, index.as_deref())?;
+        if let (Some(a), Some(bi)) = (address.as_deref(), index.as_deref()) {
+            inner.store.add_identity_email(identity.id, a, bi, true)?;
+        }
+        Ok(identity)
+    }
+
+    /// Rename an identity.
+    pub fn update_identity(&self, identity_id: Uuid, label: &str) -> Result<()> {
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(CoreError::Invalid("an identity needs a name".into()));
+        }
+        self.unlocked()?
+            .store
+            .update_identity_label(identity_id, label)
+    }
+
+    /// Delete an identity and everything filed under it.
+    pub fn delete_identity(&self, identity_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_identity(identity_id)
+    }
+
+    /// Attach another email address to an identity.
+    pub fn add_identity_email(
+        &self,
+        identity_id: Uuid,
+        address: &str,
+        make_primary: bool,
+    ) -> Result<IdentityEmail> {
+        let address = manual::normalize_email(address)?;
+        let inner = self.unlocked()?;
+        let bi = blind_index::blind_index(&inner.index_key, DOMAIN_IDENTITY_EMAIL, &address)?;
+        let is_first = inner.store.identity_emails(identity_id)?.is_empty();
+        inner
+            .store
+            .add_identity_email(identity_id, &address, &bi, make_primary || is_first)
+    }
+
+    /// Every address attached to an identity.
+    pub fn identity_emails(&self, identity_id: Uuid) -> Result<Vec<IdentityEmail>> {
+        self.unlocked()?.store.identity_emails(identity_id)
+    }
+
+    /// Choose which address an identity is shown and matched by.
+    pub fn set_primary_email(&self, identity_id: Uuid, email_id: Uuid) -> Result<()> {
+        let inner = self.unlocked()?;
+        let emails = inner.store.identity_emails(identity_id)?;
+        let target = emails
+            .iter()
+            .find(|e| e.id == email_id)
+            .ok_or_else(|| CoreError::NotFound(format!("email {email_id}")))?;
+        inner
+            .store
+            .set_primary_email(identity_id, &target.blind_index)
+    }
+
+    /// Detach an address from an identity.
+    pub fn remove_identity_email(&self, identity_id: Uuid, email_id: Uuid) -> Result<()> {
+        self.unlocked()?
+            .store
+            .remove_identity_email(identity_id, email_id)
+    }
+
+    /// Create an account by hand, with any service the user can name.
+    pub fn create_account(&self, entry: &manual::NewAccount) -> Result<Account> {
+        entry.validate()?;
+        let provider = entry.provider();
+        self.unlocked()?.store.create_account_full(
+            entry.identity_id,
+            &provider,
+            None,
+            entry.label.trim(),
+            &entry.details(),
+        )
+    }
+
+    /// Edit an account's label and login details.
+    pub fn update_account(
+        &self,
+        account_id: Uuid,
+        label: &str,
+        details: &AccountDetails,
+    ) -> Result<()> {
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(CoreError::Invalid("an account needs a label".into()));
+        }
+        self.unlocked()?
+            .store
+            .update_account(account_id, label, details)
+    }
+
+    /// Delete an account and everything filed under it.
+    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_account(account_id)
+    }
+
+    /// Fetch one account.
+    pub fn account(&self, account_id: Uuid) -> Result<Option<Account>> {
+        self.unlocked()?.store.account(account_id)
+    }
+
+    /// Every secret filed against an account.
+    pub fn account_secrets(&self, account_id: Uuid) -> Result<Vec<VaultEntry>> {
+        self.unlocked()?.store.list_secrets_for_account(account_id)
+    }
+
+    /// Create a provider resource by hand.
+    pub fn create_resource(&self, entry: &manual::NewResource) -> Result<ServiceProject> {
+        entry.validate()?;
+        let inner = self.unlocked()?;
+        let account = inner
+            .store
+            .account(entry.account_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("account {}", entry.account_id)))?;
+
+        // An organization has to belong to the same account, or the map would
+        // claim a relationship that is not true.
+        if let Some(org_id) = entry.organization_id {
+            let owned = inner
+                .store
+                .organizations_for_account(entry.account_id)?
+                .into_iter()
+                .any(|o| o.id == org_id);
+            if !owned {
+                return Err(CoreError::Invalid(
+                    "that organization belongs to a different account".into(),
+                ));
+            }
+        }
+
+        inner.store.create_service_project_full(
+            entry.account_id,
+            entry.organization_id,
+            &account.provider,
+            manual::clean(entry.provider_ref.as_deref()).as_deref(),
+            entry.name.trim(),
+            manual::clean(entry.region.as_deref()).as_deref(),
+            entry.environment,
+            manual::clean(entry.url.as_deref()).as_deref(),
+            manual::clean(entry.notes.as_deref()).as_deref(),
+        )
+    }
+
+    /// Edit a provider resource.
+    pub fn update_resource(&self, id: Uuid, edit: &manual::ResourceEdit) -> Result<()> {
+        let name = edit.name.trim();
+        if name.is_empty() {
+            return Err(CoreError::Invalid("a resource needs a name".into()));
+        }
+        self.unlocked()?.store.update_service_project(
+            id,
+            name,
+            manual::clean(edit.provider_ref.as_deref()).as_deref(),
+            manual::clean(edit.region.as_deref()).as_deref(),
+            edit.environment,
+            manual::clean(edit.url.as_deref()).as_deref(),
+            manual::clean(edit.notes.as_deref()).as_deref(),
+        )
+    }
+
+    /// Delete a provider resource and the secrets filed against it.
+    pub fn delete_resource(&self, id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_service_project(id)
+    }
+
+    /// Store a secret entered by hand: a password, an API key, an env var.
+    ///
+    /// The value arrives as a [`SecretString`], is sealed before it touches the
+    /// database, and is never returned by this call.
+    pub fn store_secret(
+        &mut self,
+        entry: &manual::NewSecret,
+        value: &SecretString,
+    ) -> Result<SecretRecord> {
+        entry.validate()?;
+        if value.expose().is_empty() {
+            return Err(CoreError::Invalid("a secret needs a value".into()));
+        }
+        let name = entry.name.trim().to_string();
+        let notes = manual::clean(entry.notes.as_deref());
+        let (bi, envelope, preview) = self.seal_for_storage(&name, value)?;
+        let inner = self.unlocked_mut()?;
+        inner.store.create_secret_owned(
+            entry.owner,
+            entry.kind,
+            &name,
+            &preview,
+            &bi,
+            entry.environment,
+            notes.as_deref(),
+            &envelope,
+        )
+    }
+
+    /// Edit a secret's name, environment or note, leaving its value alone.
+    pub fn update_secret_meta(
+        &self,
+        secret_id: Uuid,
+        name: &str,
+        environment: Environment,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CoreError::Invalid("a secret needs a name".into()));
+        }
+        self.unlocked()?.store.update_secret_meta(
+            secret_id,
+            name,
+            environment,
+            manual::clean(notes).as_deref(),
+        )
+    }
+
+    /// Replace a secret's value, keeping its identity, name and history.
+    pub fn replace_secret_value(&mut self, secret_id: Uuid, value: &SecretString) -> Result<()> {
+        if value.expose().is_empty() {
+            return Err(CoreError::Invalid("a secret needs a value".into()));
+        }
+        self.write_secret_value(secret_id, value)
+    }
+
+    /// The whole ledger, one row per identity, from address down to project.
+    pub fn overview(&self) -> Result<Vec<OverviewIdentity>> {
+        let inner = self.unlocked()?;
+        let mut out = Vec::new();
+        for node in inner.store.identity_graph()? {
+            let emails = inner.store.identity_emails(node.identity.id)?;
+
+            // Reachable projects are collected across every resource under
+            // every account, de-duplicated: one project often uses several
+            // resources belonging to the same person.
+            let mut projects: Vec<ProjectRefLabel> = Vec::new();
+            let mut secret_count = 0i64;
+            for account in &node.accounts {
+                secret_count += inner.store.list_secrets_for_account(account.id())?.len() as i64;
+                let resources = account
+                    .organizations
+                    .iter()
+                    .flat_map(|o| o.service_projects.iter())
+                    .chain(account.unassigned.iter());
+                for resource in resources {
+                    secret_count += resource.secret_count;
+                    for project in &resource.used_by {
+                        if !projects.iter().any(|p| p.id == project.id) {
+                            projects.push(project.clone());
+                        }
+                    }
+                }
+            }
+            projects.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+            out.push(OverviewIdentity {
+                identity: node.identity,
+                emails,
+                accounts: node.accounts,
+                projects,
+                secret_count,
+            });
+        }
+        Ok(out)
+    }
+
+    /// How much a project delete would take with it.
+    ///
+    /// Deleting cascades to the secrets filed directly against the project.
+    /// Returning the count lets the UI say so before the fact rather than after.
+    pub fn project_deletion_impact(&self, project_id: Uuid) -> Result<DeletionImpact> {
+        let inner = self.unlocked()?;
+        Ok(DeletionImpact {
+            secrets_deleted: inner.store.secrets_owned_directly(project_id)?,
+            resources_unlinked: inner.store.service_projects_for_project(project_id)?.len() as i64,
+        })
+    }
+
     /// Attempt to rewrite the audit log. Always fails; exists so the
     /// append-only triggers can be exercised from an integration test without
     /// exposing a general-purpose SQL escape hatch.
@@ -960,6 +1416,66 @@ impl Vault {
         conn.execute("UPDATE audit_log SET detail = 'tampered'", [])?;
         conn.execute("DELETE FROM audit_log", [])?;
         Ok(())
+    }
+}
+
+/// Group entries by name and keep the names that appear more than once.
+fn conflicting_names(entries: &[VaultEntry]) -> Vec<EnvConflict> {
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: HashMap<String, Vec<EnvDefinition>> = HashMap::new();
+    for entry in entries {
+        let name = entry.secret.name.clone();
+        if !grouped.contains_key(&name) {
+            order.push(name.clone());
+        }
+        grouped.entry(name).or_default().push(EnvDefinition {
+            secret_id: entry.secret.id,
+            environment: entry.secret.environment,
+            source: entry.service_project_name.clone(),
+        });
+    }
+    order
+        .into_iter()
+        .filter_map(|name| {
+            let definitions = grouped.remove(&name)?;
+            (definitions.len() > 1).then_some(EnvConflict { name, definitions })
+        })
+        .collect()
+}
+
+/// Explain a conflict without naming a single value.
+fn describe_conflicts(conflicts: &[EnvConflict]) -> String {
+    let detail = conflicts
+        .iter()
+        .map(|c| {
+            let environments = c
+                .definitions
+                .iter()
+                .map(|d| environment_label(d.environment))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} ({})", c.name, environments)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "this project defines {} more than once, so a .env file would silently keep only one \
+         of each: {detail}. Export a single environment, or rename one of them.",
+        if conflicts.len() == 1 {
+            "a variable".to_string()
+        } else {
+            format!("{} variables", conflicts.len())
+        }
+    )
+}
+
+/// The word used for an environment in messages and the audit log.
+fn environment_label(environment: Environment) -> &'static str {
+    match environment {
+        Environment::Development => "development",
+        Environment::Staging => "staging",
+        Environment::Production => "production",
+        Environment::Unknown => "no environment",
     }
 }
 
@@ -1027,7 +1543,7 @@ impl MatchLookup for StoreLookup<'_> {
     }
     fn service_project_by_ref(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
     ) -> Result<Option<ServiceProject>> {
         self.store.service_project_by_ref(provider, provider_ref)

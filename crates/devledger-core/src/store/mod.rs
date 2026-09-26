@@ -23,8 +23,9 @@ use crate::error::{CoreError, Result};
 use crate::secret::SecretBytes;
 
 pub use repo::{
-    AccountNode, AttentionItem, AttentionKind, AuditEntry, IdentityNode, OrganizationNode,
-    ProjectRefLabel, ProjectSummary, ServiceProjectSummary, SubscriptionSummary, VaultEntry,
+    AccountDetails, AccountNode, AttentionItem, AttentionKind, AuditEntry, IdentityNode,
+    OrganizationNode, ProjectRefLabel, ProjectSummary, SecretOwner, ServiceProjectSummary,
+    SubscriptionSummary, VaultEntry,
 };
 
 /// A handle to the opened, decrypted database.
@@ -58,6 +59,49 @@ impl Store {
         Ok(store)
     }
 
+    /// Open an in-memory database stopped at an older schema version.
+    ///
+    /// The only way to test that an upgrade preserves data is to build a
+    /// database as the older version left it and then upgrade it for real, so
+    /// this exists for the migration tests and nothing else.
+    #[doc(hidden)]
+    pub fn open_in_memory_at_version(master_key: &SecretBytes, version: usize) -> Result<Self> {
+        let db_key = crypto::derive_subkey(master_key, LABEL_DATABASE)?;
+        let conn = Connection::open_in_memory()?;
+        Self::configure(&conn, &db_key)?;
+        conn.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL);")?;
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        for sql in schema::MIGRATIONS.iter().take(version) {
+            conn.execute_batch(sql)?;
+        }
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [version as i64],
+        )?;
+        Ok(Store { conn })
+    }
+
+    /// Run any outstanding migrations. Test hook for [`Self::open_in_memory_at_version`].
+    #[doc(hidden)]
+    pub fn migrate_now(&mut self) -> Result<()> {
+        self.migrate()
+    }
+
+    /// Run arbitrary SQL, so a migration test can write rows the way the old
+    /// version of the code would have written them.
+    #[doc(hidden)]
+    pub fn execute_batch_for_test(&self, sql: &str) -> Result<()> {
+        self.conn.execute_batch(sql)?;
+        Ok(())
+    }
+
+    /// Evaluate a scalar query, for asserting on a migrated database.
+    #[doc(hidden)]
+    pub fn scalar_for_test(&self, sql: &str) -> Result<i64> {
+        Ok(self.conn.query_row(sql, [], |r| r.get(0))?)
+    }
+
     fn configure(conn: &Connection, db_key: &SecretBytes) -> Result<()> {
         let hex = db_key.to_hex();
         // The `x'...'` form hands SQLCipher raw key bytes and skips its own
@@ -78,6 +122,23 @@ impl Store {
         Ok(())
     }
 
+    /// Apply any migrations this database has not seen yet.
+    ///
+    /// # Foreign keys are off while migrating, on purpose
+    ///
+    /// SQLite's `DROP TABLE` performs an implicit `DELETE FROM` when foreign
+    /// keys are enforced, so dropping a table that a child references with
+    /// `ON DELETE CASCADE` silently empties the child as well. The v1 -> v2
+    /// migration rebuilds `secrets` that way, and with enforcement on it
+    /// cascade-deleted every row of `secret_values`: the metadata survived and
+    /// every ciphertext was destroyed, which looks like a working vault until
+    /// the first Reveal.
+    ///
+    /// Turning enforcement off for the duration is what SQLite itself
+    /// prescribes for a table rebuild. The pragma is a no-op inside a
+    /// transaction, so it is set here, around the loop, rather than in the
+    /// migration SQL. `PRAGMA foreign_key_check` afterwards means a migration
+    /// that leaves a dangling reference fails loudly instead of quietly.
     fn migrate(&mut self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
@@ -95,6 +156,29 @@ impl Store {
             )));
         }
 
+        if current == schema::CURRENT_VERSION {
+            return Ok(());
+        }
+
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let outcome = self.apply_migrations(current);
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        outcome?;
+
+        let dangling: i64 =
+            self.conn
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                    r.get(0)
+                })?;
+        if dangling > 0 {
+            return Err(CoreError::Storage(format!(
+                "migration left {dangling} rows pointing at something that no longer exists"
+            )));
+        }
+        Ok(())
+    }
+
+    fn apply_migrations(&mut self, current: i64) -> Result<()> {
         for (i, sql) in schema::MIGRATIONS.iter().enumerate() {
             let target = i as i64 + 1;
             if target <= current {

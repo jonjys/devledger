@@ -7,8 +7,9 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::model::{
-    Account, EntityKind, EntityRef, Environment, Evidence, Identity, Organization, Project,
-    Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject, Subscription,
+    Account, EntityKind, EntityRef, Environment, Evidence, Identity, IdentityEmail, Organization,
+    Project, Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject,
+    Subscription,
 };
 use crate::paste::ParsedSubscription;
 use crate::redact::Provenance;
@@ -77,6 +78,13 @@ pub struct AccountNode {
     pub subscriptions: Vec<Subscription>,
 }
 
+impl AccountNode {
+    /// The account's id, without reaching through the struct at every call site.
+    pub fn id(&self) -> Uuid {
+        self.account.id
+    }
+}
+
 /// One organization and the resources inside it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OrganizationNode {
@@ -112,6 +120,37 @@ pub struct SubscriptionSummary {
     pub identity_email: Option<String>,
 }
 
+/// What a secret belongs to.
+///
+/// All three may be set: a service_role key belongs to a Supabase resource, is
+/// used by a DevLedger project, and both facts are worth keeping. At least one
+/// must be, which the database also enforces.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretOwner {
+    /// The DevLedger project it is filed under.
+    pub project_id: Option<Uuid>,
+    /// The provider resource it authenticates to.
+    pub service_project_id: Option<Uuid>,
+    /// The account it belongs to, for a login password.
+    pub account_id: Option<Uuid>,
+}
+
+/// The editable details of an account, as a manual entry supplies them.
+///
+/// Grouped into a struct rather than five more positional parameters so that
+/// adding a field later cannot silently shift an argument at a call site.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccountDetails {
+    /// The address this account signs in with.
+    pub login_email: Option<String>,
+    /// The username this account signs in with.
+    pub username: Option<String>,
+    /// Where to sign in.
+    pub url: Option<String>,
+    /// Free-text note.
+    pub notes: Option<String>,
+}
+
 /// Why something is on the Needs attention list.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +163,20 @@ pub enum AttentionKind {
     IdentityWithoutEmail,
     /// A secret filed against nothing in particular.
     OrphanSecret,
+    /// A secret whose sealed value is gone, so it can never be revealed.
+    ///
+    /// The only known cause is a vault upgraded from DevLedger 0.3.0 by a build
+    /// released before the migration runner stopped enforcing foreign keys
+    /// while it worked: the upgrade cascade-deleted every envelope and left the
+    /// metadata behind. Nothing can recover the value, so the point of
+    /// surfacing it is to say so plainly rather than let the row look usable.
+    SecretValueMissing,
+    /// An identity holding more than one account with the same provider.
+    ///
+    /// Perfectly legitimate -- two Supabase accounts under one person -- but it
+    /// makes an incoming paste ambiguous, so DevLedger says which account it
+    /// chose rather than filing things silently.
+    AmbiguousProviderAccount,
 }
 
 /// One item DevLedger cannot resolve on its own.
@@ -276,27 +329,256 @@ impl Store {
         }
     }
 
+    /// Rename an identity.
+    pub fn update_identity_label(&self, identity_id: Uuid, label: &str) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE identities SET label = ?2 WHERE id = ?1",
+            params![identity_id.to_string(), label],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("identity {identity_id}")));
+        }
+        self.audit(
+            "identity.update",
+            Some("identity"),
+            Some(identity_id),
+            &format!("Renamed identity to {label}"),
+        )
+    }
+
+    /// Delete an identity, and with it every account filed under it.
+    pub fn delete_identity(&self, identity_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM identities WHERE id = ?1",
+            params![identity_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("identity {identity_id}")));
+        }
+        self.audit(
+            "identity.delete",
+            Some("identity"),
+            Some(identity_id),
+            "Deleted an identity and everything filed under it",
+        )
+    }
+
+    // ---------------------------------------------------------- identity email
+
+    /// Attach another email address to an identity.
+    ///
+    /// The blind index is unique across the whole vault, so the same address
+    /// cannot end up under two identities -- which is what would otherwise let
+    /// one person's accounts drift apart into two half-populated maps.
+    pub fn add_identity_email(
+        &self,
+        identity_id: Uuid,
+        address: &str,
+        blind_index: &str,
+        is_primary: bool,
+    ) -> Result<IdentityEmail> {
+        if let Some(owner) = self.identity_for_email_index(blind_index)? {
+            if owner != identity_id {
+                return Err(CoreError::Invalid(
+                    "that email address is already attached to another identity".into(),
+                ));
+            }
+        }
+        let id = Uuid::new_v4();
+        let created_at = now_rfc3339()?;
+        self.conn().execute(
+            "INSERT INTO identity_emails
+                (id, identity_id, address, blind_index, is_primary, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (blind_index) DO NOTHING",
+            params![
+                id.to_string(),
+                identity_id.to_string(),
+                address,
+                blind_index,
+                is_primary as i64,
+                created_at
+            ],
+        )?;
+        if is_primary {
+            self.set_primary_email(identity_id, blind_index)?;
+        }
+        self.audit(
+            "identity.email.add",
+            Some("identity"),
+            Some(identity_id),
+            "Added an email address to an identity",
+        )?;
+        Ok(IdentityEmail {
+            id,
+            identity_id,
+            address: address.to_string(),
+            blind_index: blind_index.to_string(),
+            is_primary,
+            created_at: parse_rfc3339(&created_at)?,
+        })
+    }
+
+    /// Which identity, if any, holds an address with this blind index.
+    pub fn identity_for_email_index(&self, blind_index: &str) -> Result<Option<Uuid>> {
+        let direct: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT identity_id FROM identity_emails WHERE blind_index = ?1",
+                params![blind_index],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match direct {
+            Some(raw) => Ok(Some(parse_uuid(&raw, "identity")?)),
+            None => self.identity_id_by_email_index(blind_index),
+        }
+    }
+
+    /// Every address attached to an identity, primary first.
+    pub fn identity_emails(&self, identity_id: Uuid) -> Result<Vec<IdentityEmail>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, identity_id, address, blind_index, is_primary, created_at
+               FROM identity_emails WHERE identity_id = ?1
+              ORDER BY is_primary DESC, address",
+        )?;
+        let raw = stmt
+            .query_map(params![identity_id.to_string()], |row| {
+                Ok((
+                    IdentityEmail {
+                        id: uuid_from(row, 0)?,
+                        identity_id: uuid_from(row, 1)?,
+                        address: row.get(2)?,
+                        blind_index: row.get(3)?,
+                        is_primary: row.get::<_, i64>(4)? != 0,
+                        created_at: OffsetDateTime::UNIX_EPOCH,
+                    },
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(raw.len());
+        for (mut email, created) in raw {
+            email.created_at = parse_rfc3339(&created)?;
+            out.push(email);
+        }
+        Ok(out)
+    }
+
+    /// Make one address the identity's primary, and mirror it onto the identity.
+    ///
+    /// `identities.email` remains the primary address so that every existing
+    /// lookup keeps working; this is the one place the two are kept in step.
+    pub fn set_primary_email(&self, identity_id: Uuid, blind_index: &str) -> Result<()> {
+        let address: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT address FROM identity_emails WHERE identity_id = ?1 AND blind_index = ?2",
+                params![identity_id.to_string(), blind_index],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let address = address.ok_or_else(|| {
+            CoreError::NotFound("that address is not attached to this identity".to_string())
+        })?;
+        self.conn().execute(
+            "UPDATE identity_emails SET is_primary = (blind_index = ?2) WHERE identity_id = ?1",
+            params![identity_id.to_string(), blind_index],
+        )?;
+        self.conn().execute(
+            "UPDATE identities SET email = ?2, email_blind_index = ?3 WHERE id = ?1",
+            params![identity_id.to_string(), address, blind_index],
+        )?;
+        self.audit(
+            "identity.email.primary",
+            Some("identity"),
+            Some(identity_id),
+            "Changed the primary email address of an identity",
+        )
+    }
+
+    /// Detach an address from an identity.
+    ///
+    /// The last address cannot be removed while it is the primary one, because
+    /// an identity with no address cannot be matched to anything afterwards.
+    pub fn remove_identity_email(&self, identity_id: Uuid, email_id: Uuid) -> Result<()> {
+        let emails = self.identity_emails(identity_id)?;
+        let target = emails
+            .iter()
+            .find(|e| e.id == email_id)
+            .ok_or_else(|| CoreError::NotFound(format!("email {email_id}")))?;
+        if target.is_primary && emails.len() > 1 {
+            return Err(CoreError::Invalid(
+                "choose another primary address before removing this one".into(),
+            ));
+        }
+        self.conn().execute(
+            "DELETE FROM identity_emails WHERE id = ?1",
+            params![email_id.to_string()],
+        )?;
+        if target.is_primary {
+            self.conn().execute(
+                "UPDATE identities SET email = NULL, email_blind_index = NULL WHERE id = ?1",
+                params![identity_id.to_string()],
+            )?;
+        }
+        self.audit(
+            "identity.email.remove",
+            Some("identity"),
+            Some(identity_id),
+            "Removed an email address from an identity",
+        )
+    }
+
     // ----------------------------------------------------------------- account
+
+    pub(crate) const ACCOUNT_COLUMNS: &'static str =
+        "id, identity_id, provider, external_ref, label, login_email, username, url, notes, \
+         created_at";
 
     /// Insert an account under an identity.
     pub fn create_account(
         &self,
         identity_id: Uuid,
-        provider: Provider,
+        provider: &Provider,
         external_ref: Option<&str>,
         label: &str,
+    ) -> Result<Account> {
+        self.create_account_full(
+            identity_id,
+            provider,
+            external_ref,
+            label,
+            &AccountDetails::default(),
+        )
+    }
+
+    /// Insert an account together with the details a manual entry carries.
+    pub fn create_account_full(
+        &self,
+        identity_id: Uuid,
+        provider: &Provider,
+        external_ref: Option<&str>,
+        label: &str,
+        details: &AccountDetails,
     ) -> Result<Account> {
         let id = Uuid::new_v4();
         let created_at = now_rfc3339()?;
         self.conn().execute(
-            "INSERT INTO accounts (id, identity_id, provider, external_ref, label, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO accounts
+                (id, identity_id, provider, external_ref, label, login_email, username, url,
+                 notes, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 id.to_string(),
                 identity_id.to_string(),
                 provider_to_str(provider),
                 external_ref,
                 label,
+                details.login_email,
+                details.username,
+                details.url,
+                details.notes,
                 created_at
             ],
         )?;
@@ -309,33 +591,127 @@ impl Store {
         Ok(Account {
             id,
             identity_id,
-            provider,
+            provider: provider.clone(),
             external_ref: external_ref.map(str::to_string),
             label: label.to_string(),
+            login_email: details.login_email.clone(),
+            username: details.username.clone(),
+            url: details.url.clone(),
+            notes: details.notes.clone(),
             created_at: parse_rfc3339(&created_at)?,
         })
     }
 
-    /// Find the account an identity holds with a given provider.
-    ///
-    /// One identity holds at most one account per provider: a second Supabase
-    /// account means a second email, which is a different identity.
-    pub fn account_for(&self, identity_id: Uuid, provider: Provider) -> Result<Option<Account>> {
+    /// Update the editable fields of an account.
+    pub fn update_account(
+        &self,
+        account_id: Uuid,
+        label: &str,
+        details: &AccountDetails,
+    ) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE accounts SET label = ?2, login_email = ?3, username = ?4, url = ?5,
+                    notes = ?6
+              WHERE id = ?1",
+            params![
+                account_id.to_string(),
+                label,
+                details.login_email,
+                details.username,
+                details.url,
+                details.notes
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("account {account_id}")));
+        }
+        self.audit(
+            "account.update",
+            Some("account"),
+            Some(account_id),
+            &format!("Updated account {label}"),
+        )
+    }
+
+    /// Delete an account, and with it everything filed under it.
+    pub fn delete_account(&self, account_id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM accounts WHERE id = ?1",
+            params![account_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("account {account_id}")));
+        }
+        self.audit(
+            "account.delete",
+            Some("account"),
+            Some(account_id),
+            "Deleted an account and everything filed under it",
+        )
+    }
+
+    /// Fetch one account.
+    pub fn account(&self, account_id: Uuid) -> Result<Option<Account>> {
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE id = ?1",
+            Self::ACCOUNT_COLUMNS
+        );
         let row = self
             .conn()
             .query_row(
-                "SELECT id, identity_id, provider, external_ref, label, created_at
-                 FROM accounts WHERE identity_id = ?1 AND provider = ?2",
-                params![identity_id.to_string(), provider_to_str(provider)],
+                &sql,
+                params![account_id.to_string()],
                 Self::account_from_row,
             )
             .optional()?;
         Self::finish_account(row)
     }
 
+    /// Every account an identity holds with a given provider.
+    ///
+    /// Returns a list rather than an option because holding two accounts with
+    /// the same provider is legitimate -- two Supabase accounts under one
+    /// person, signed in with different addresses. Callers that need exactly
+    /// one have to decide what to do about the ambiguity rather than being
+    /// handed an arbitrary row.
+    pub fn accounts_for(&self, identity_id: Uuid, provider: &Provider) -> Result<Vec<Account>> {
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE identity_id = ?1 AND provider = ?2
+              ORDER BY created_at, id",
+            Self::ACCOUNT_COLUMNS
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let raw = stmt
+            .query_map(
+                params![identity_id.to_string(), provider_to_str(provider)],
+                Self::account_from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(raw.len());
+        for row in raw {
+            if let Some(account) = Self::finish_account(Some(row))? {
+                out.push(account);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The single account an identity holds with a provider, if it is unambiguous.
+    ///
+    /// `Ok(None)` means either none exists or several do; [`Self::accounts_for`]
+    /// distinguishes the two.
+    pub fn account_for(&self, identity_id: Uuid, provider: &Provider) -> Result<Option<Account>> {
+        let mut accounts = self.accounts_for(identity_id, provider)?;
+        if accounts.len() == 1 {
+            Ok(Some(accounts.remove(0)))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn account_from_row(row: &Row<'_>) -> rusqlite::Result<(Account, String, String)> {
         let provider: String = row.get(2)?;
-        let created: String = row.get(5)?;
+        let created: String = row.get(9)?;
         Ok((
             Account {
                 id: uuid_from(row, 0)?,
@@ -343,6 +719,10 @@ impl Store {
                 provider: Provider::Unknown,
                 external_ref: row.get(3)?,
                 label: row.get(4)?,
+                login_email: row.get(5)?,
+                username: row.get(6)?,
+                url: row.get(7)?,
+                notes: row.get(8)?,
                 created_at: OffsetDateTime::UNIX_EPOCH,
             },
             provider,
@@ -363,10 +743,11 @@ impl Store {
 
     /// Every account belonging to an identity.
     pub fn accounts_for_identity(&self, identity_id: Uuid) -> Result<Vec<Account>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, identity_id, provider, external_ref, label, created_at
-             FROM accounts WHERE identity_id = ?1 ORDER BY provider, label",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE identity_id = ?1 ORDER BY provider, label",
+            Self::ACCOUNT_COLUMNS
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
         let raw = stmt
             .query_map(params![identity_id.to_string()], Self::account_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -502,7 +883,8 @@ impl Store {
     // --------------------------------------------------------- service project
 
     pub(crate) const SERVICE_PROJECT_COLUMNS: &'static str =
-        "id, account_id, organization_id, provider, provider_ref, name, region, environment, created_at";
+        "id, account_id, organization_id, provider, provider_ref, name, region, environment, \
+         url, notes, created_at";
 
     /// Insert a provider resource.
     #[allow(clippy::too_many_arguments)]
@@ -510,19 +892,46 @@ impl Store {
         &self,
         account_id: Uuid,
         organization_id: Option<Uuid>,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: Option<&str>,
         name: &str,
         region: Option<&str>,
         environment: Environment,
+    ) -> Result<ServiceProject> {
+        self.create_service_project_full(
+            account_id,
+            organization_id,
+            provider,
+            provider_ref,
+            name,
+            region,
+            environment,
+            None,
+            None,
+        )
+    }
+
+    /// Insert a provider resource, including the details a manual entry carries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_service_project_full(
+        &self,
+        account_id: Uuid,
+        organization_id: Option<Uuid>,
+        provider: &Provider,
+        provider_ref: Option<&str>,
+        name: &str,
+        region: Option<&str>,
+        environment: Environment,
+        url: Option<&str>,
+        notes: Option<&str>,
     ) -> Result<ServiceProject> {
         let id = Uuid::new_v4();
         let created_at = now_rfc3339()?;
         self.conn().execute(
             "INSERT INTO service_projects
                 (id, account_id, organization_id, provider, provider_ref, name, region,
-                 environment, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 environment, url, notes, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 id.to_string(),
                 account_id.to_string(),
@@ -532,6 +941,8 @@ impl Store {
                 name,
                 region,
                 environment_to_str(environment),
+                url,
+                notes,
                 created_at
             ],
         )?;
@@ -545,11 +956,13 @@ impl Store {
             id,
             account_id,
             organization_id,
-            provider,
+            provider: provider.clone(),
             provider_ref: provider_ref.map(str::to_string),
             name: name.to_string(),
             region: region.map(str::to_string),
             environment,
+            url: url.map(str::to_string),
+            notes: notes.map(str::to_string),
             created_at: parse_rfc3339(&created_at)?,
         })
     }
@@ -559,7 +972,7 @@ impl Store {
     ) -> rusqlite::Result<(ServiceProject, String, String, String)> {
         let provider: String = row.get(3)?;
         let environment: String = row.get(7)?;
-        let created: String = row.get(8)?;
+        let created: String = row.get(10)?;
         Ok((
             ServiceProject {
                 id: uuid_from(row, 0)?,
@@ -569,6 +982,8 @@ impl Store {
                 provider_ref: row.get(4)?,
                 name: row.get(5)?,
                 region: row.get(6)?,
+                url: row.get(8)?,
+                notes: row.get(9)?,
                 environment: Environment::Unknown,
                 created_at: OffsetDateTime::UNIX_EPOCH,
             },
@@ -591,7 +1006,7 @@ impl Store {
     /// Find a resource by its provider-side reference.
     pub fn service_project_by_ref(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
     ) -> Result<Option<ServiceProject>> {
         let sql = format!(
@@ -866,7 +1281,7 @@ impl Store {
             let mut providers: Vec<Provider> = Vec::new();
             for r in &resources {
                 if !providers.contains(&r.provider) {
-                    providers.push(r.provider);
+                    providers.push(r.provider.clone());
                 }
             }
             out.push(ProjectSummary {
@@ -934,11 +1349,72 @@ impl Store {
         Ok(())
     }
 
+    /// Update the editable fields of a provider resource.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_service_project(
+        &self,
+        id: Uuid,
+        name: &str,
+        provider_ref: Option<&str>,
+        region: Option<&str>,
+        environment: Environment,
+        url: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE service_projects
+                SET name = ?2, provider_ref = ?3, region = ?4, environment = ?5, url = ?6,
+                    notes = ?7
+              WHERE id = ?1",
+            params![
+                id.to_string(),
+                name,
+                provider_ref,
+                region,
+                environment_to_str(environment),
+                url,
+                notes
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("resource {id}")));
+        }
+        self.audit(
+            "service_project.update",
+            Some("service_project"),
+            Some(id),
+            &format!("Updated resource {name}"),
+        )
+    }
+
+    /// Delete a provider resource and the relations that pointed at it.
+    pub fn delete_service_project(&self, id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM service_projects WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("resource {id}")));
+        }
+        self.conn().execute(
+            "DELETE FROM relations
+              WHERE (from_kind = 'service_project' AND from_id = ?1)
+                 OR (to_kind = 'service_project' AND to_id = ?1)",
+            params![id.to_string()],
+        )?;
+        self.audit(
+            "service_project.delete",
+            Some("service_project"),
+            Some(id),
+            "Deleted a provider resource and its secrets",
+        )
+    }
+
     // ------------------------------------------------------------------ secret
 
     const SECRET_COLUMNS: &'static str =
         "id, project_id, service_project_id, kind, name, preview, value_blind_index, \
-         environment, created_at, updated_at";
+         environment, account_id, notes, created_at, updated_at";
 
     /// Insert a secret's metadata and its sealed value together.
     #[allow(clippy::too_many_arguments)]
@@ -953,9 +1429,43 @@ impl Store {
         environment: Environment,
         envelope: &[u8],
     ) -> Result<SecretRecord> {
-        if project_id.is_none() && service_project_id.is_none() {
+        self.create_secret_owned(
+            SecretOwner {
+                project_id,
+                service_project_id,
+                account_id: None,
+            },
+            kind,
+            name,
+            preview,
+            value_blind_index,
+            environment,
+            None,
+            envelope,
+        )
+    }
+
+    /// Insert a secret against any of the three things one can belong to.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_secret_owned(
+        &mut self,
+        owner: SecretOwner,
+        kind: SecretKind,
+        name: &str,
+        preview: &str,
+        value_blind_index: &str,
+        environment: Environment,
+        notes: Option<&str>,
+        envelope: &[u8],
+    ) -> Result<SecretRecord> {
+        let SecretOwner {
+            project_id,
+            service_project_id,
+            account_id,
+        } = owner;
+        if project_id.is_none() && service_project_id.is_none() && account_id.is_none() {
             return Err(CoreError::Invalid(
-                "a secret must belong to a project or a service resource".into(),
+                "a secret must belong to a project, a service resource or an account".into(),
             ));
         }
         let id = Uuid::new_v4();
@@ -963,18 +1473,20 @@ impl Store {
         let tx = self.conn_mut().transaction()?;
         tx.execute(
             "INSERT INTO secrets
-                (id, project_id, service_project_id, kind, name, preview, value_blind_index,
-                 environment, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                (id, project_id, service_project_id, account_id, kind, name, preview,
+                 value_blind_index, environment, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 id.to_string(),
                 project_id.map(|v| v.to_string()),
                 service_project_id.map(|v| v.to_string()),
+                account_id.map(|v| v.to_string()),
                 secret_kind_to_str(kind),
                 name,
                 preview,
                 value_blind_index,
                 environment_to_str(environment),
+                notes,
                 at
             ],
         )?;
@@ -999,11 +1511,13 @@ impl Store {
             id,
             project_id,
             service_project_id,
+            account_id,
             kind,
             name: name.to_string(),
             preview: preview.to_string(),
             value_blind_index: value_blind_index.to_string(),
             environment,
+            notes: notes.map(str::to_string),
             created_at: parse_rfc3339(&at)?,
             updated_at: parse_rfc3339(&at)?,
         })
@@ -1049,18 +1563,20 @@ impl Store {
     fn secret_from_row(row: &Row<'_>) -> rusqlite::Result<(SecretRecord, String, String, String)> {
         let kind: String = row.get(3)?;
         let env: String = row.get(7)?;
-        let created: String = row.get(8)?;
-        let updated: String = row.get(9)?;
+        let created: String = row.get(10)?;
+        let updated: String = row.get(11)?;
         Ok((
             SecretRecord {
                 id: uuid_from(row, 0)?,
                 project_id: opt_uuid_from(row, 1)?,
                 service_project_id: opt_uuid_from(row, 2)?,
+                account_id: opt_uuid_from(row, 8)?,
                 kind: SecretKind::GenericApiKey,
                 name: row.get(4)?,
                 preview: row.get(5)?,
                 value_blind_index: row.get(6)?,
                 environment: Environment::Unknown,
+                notes: row.get(9)?,
                 created_at: OffsetDateTime::UNIX_EPOCH,
                 updated_at: OffsetDateTime::UNIX_EPOCH,
             },
@@ -1199,6 +1715,65 @@ impl Store {
             out.push(self.decorate(Self::finish_secret(entry)?)?);
         }
         Ok(out)
+    }
+
+    /// Update a secret's metadata, leaving its value untouched.
+    pub fn update_secret_meta(
+        &self,
+        secret_id: Uuid,
+        name: &str,
+        environment: Environment,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE secrets SET name = ?2, environment = ?3, notes = ?4, updated_at = ?5
+              WHERE id = ?1",
+            params![
+                secret_id.to_string(),
+                name,
+                environment_to_str(environment),
+                notes,
+                now_rfc3339()?
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("secret {secret_id}")));
+        }
+        self.audit(
+            "secret.update",
+            Some("secret"),
+            Some(secret_id),
+            &format!("Updated the details of {name}"),
+        )
+    }
+
+    /// Every secret filed against an account, metadata only.
+    pub fn list_secrets_for_account(&self, account_id: Uuid) -> Result<Vec<VaultEntry>> {
+        let sql = format!(
+            "SELECT {} FROM secrets WHERE account_id = ?1 ORDER BY name",
+            Self::SECRET_COLUMNS
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let raw = stmt
+            .query_map(params![account_id.to_string()], Self::secret_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(raw.len());
+        for entry in raw {
+            out.push(self.decorate(Self::finish_secret(entry)?)?);
+        }
+        Ok(out)
+    }
+
+    /// How many secrets a delete would take with it.
+    ///
+    /// Deleting cascades, and a count shown before the fact is the difference
+    /// between an informed decision and an unrecoverable surprise.
+    pub fn secrets_owned_directly(&self, project_id: Uuid) -> Result<i64> {
+        Ok(self.conn().query_row(
+            "SELECT count(*) FROM secrets WHERE project_id = ?1",
+            params![project_id.to_string()],
+            |r| r.get(0),
+        )?)
     }
 
     /// Read the sealed envelope for a secret.
@@ -1578,6 +2153,55 @@ impl Store {
                 title: format!("{} is filed against nothing", secret.name),
                 detail: "Attach it to a project or a service resource.".to_string(),
                 entity: EntityRef::new(EntityKind::Secret, secret.id),
+            });
+        }
+
+        let mut stmt = self.conn().prepare(
+            "SELECT id, name FROM secrets s
+              WHERE NOT EXISTS (SELECT 1 FROM secret_values v WHERE v.secret_id = s.id)",
+        )?;
+        let missing = stmt
+            .query_map([], |row| Ok((uuid_from(row, 0)?, row.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, name) in missing {
+            items.push(AttentionItem {
+                kind: AttentionKind::SecretValueMissing,
+                title: format!("{name} has no stored value"),
+                detail: "This entry lost its encrypted value, which a DevLedger build before \
+                         0.6.0 could do while upgrading a 0.3.0 vault. The value cannot be \
+                         recovered. Delete the entry and store the credential again."
+                    .to_string(),
+                entity: EntityRef::new(EntityKind::Secret, id),
+            });
+        }
+
+        let mut stmt = self.conn().prepare(
+            "SELECT a.identity_id, a.provider, count(*) FROM accounts a
+              GROUP BY a.identity_id, a.provider HAVING count(*) > 1",
+        )?;
+        let ambiguous = stmt
+            .query_map([], |row| {
+                Ok((
+                    uuid_from(row, 0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (identity_id, provider, count) in ambiguous {
+            let provider = provider_from_str(&provider)?;
+            let label = self
+                .identity(identity_id)?
+                .map(|i| i.label)
+                .unwrap_or_else(|| "an identity".to_string());
+            items.push(AttentionItem {
+                kind: AttentionKind::AmbiguousProviderAccount,
+                title: format!("{label} holds {count} {} accounts", provider.label()),
+                detail: "That is fine, but a paste naming only the provider cannot say which \
+                         account it belongs to. DevLedger will file it under the oldest one and \
+                         tell you; move it from the map if it guessed wrong."
+                    .to_string(),
+                entity: EntityRef::new(EntityKind::Identity, identity_id),
             });
         }
 

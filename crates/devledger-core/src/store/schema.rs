@@ -2,12 +2,29 @@
 //!
 //! Migrations are append-only: each entry is applied once, in order, inside a
 //! transaction, and `schema_version` records how far the database has got.
+//!
+//! # One amendment, and why it was allowed
+//!
+//! [`V2`] was corrected after release. Normally an applied migration is frozen,
+//! because rewriting one changes history for databases that have already run
+//! it. This one was safe to amend for exactly that reason: a vault past version
+//! 2 never runs it again, so the edit can only affect a vault still at version
+//! 1 — where the original would have refused to open it at all. See the
+//! `two_v1_projects_sharing_a_name_do_not_block_the_upgrade` test.
+//!
+//! The other v1 defect — the upgrade destroying every sealed value — was fixed
+//! in the migration *runner* rather than here, because it was a property of how
+//! migrations were executed and would have recurred in any future rebuild of a
+//! referenced table. A vault that was upgraded before that fix has lost its
+//! ciphertext already; nothing here can bring it back, so
+//! [`crate::store::AttentionKind::SecretValueMissing`] surfaces it instead of
+//! letting it look like a working vault.
 
 /// The schema version this build expects.
-pub const CURRENT_VERSION: i64 = 3;
+pub const CURRENT_VERSION: i64 = 4;
 
 /// Ordered migration steps. Index `n` upgrades the database to version `n + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 const V1: &str = r#"
 CREATE TABLE identities (
@@ -198,13 +215,38 @@ SELECT p.id, o.account_id, p.organization_id, 'supabase', p.provider_project_ref
 FROM projects_v1 p
 JOIN organizations o ON o.id = p.organization_id;
 
-INSERT INTO projects (id, name, description, created_at)
-SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
+-- One DevLedger project per v1 resource, mapped by id rather than by name.
+--
+-- v1 allowed two resources to share a name; v2's `projects` table does not.
+-- Matching them up by name would both abort the migration on a collision and,
+-- worse, risk linking a resource to a project it has nothing to do with. Two
+-- rows that happen to share a name are not evidence that they are the same
+-- project, so a collision disambiguates with the resource's own id instead of
+-- merging.
+CREATE TABLE v2_project_map (
+    service_project_id TEXT PRIMARY KEY,
+    project_id         TEXT NOT NULL,
+    name               TEXT NOT NULL
+);
+
+INSERT INTO v2_project_map (service_project_id, project_id, name)
+SELECT sp.id,
+       lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
        || substr(lower(hex(randomblob(2))), 2) || '-a'
        || substr(lower(hex(randomblob(2))), 2) || '-'
        || lower(hex(randomblob(6))),
-       sp.name, 'Migrated from DevLedger 0.3.0', sp.created_at
+       CASE
+           WHEN (SELECT count(*) FROM service_projects other
+                  WHERE other.name = sp.name COLLATE NOCASE) > 1
+               THEN sp.name || ' (' || substr(sp.id, 1, 8) || ')'
+           ELSE sp.name
+       END
 FROM service_projects sp;
+
+INSERT INTO projects (id, name, description, created_at)
+SELECT m.project_id, m.name, 'Migrated from DevLedger 0.3.0', sp.created_at
+FROM v2_project_map m
+JOIN service_projects sp ON sp.id = m.service_project_id;
 
 CREATE TABLE secrets_v2 (
     id                 TEXT PRIMARY KEY,
@@ -242,13 +284,14 @@ SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
        || substr(lower(hex(randomblob(2))), 2) || '-a'
        || substr(lower(hex(randomblob(2))), 2) || '-'
        || lower(hex(randomblob(6))),
-       'service_project', sp.id, 'project', p.id, 'used_by',
+       'service_project', m.service_project_id, 'project', m.project_id, 'used_by',
        'heuristic', 'migration.v2',
        'Carried over from a DevLedger 0.3.0 vault, where the two were one row',
        sp.created_at
-FROM service_projects sp
-JOIN projects p ON p.name = sp.name;
+FROM v2_project_map m
+JOIN service_projects sp ON sp.id = m.service_project_id;
 
+DROP TABLE v2_project_map;
 DROP TABLE projects_v1;
 
 UPDATE service_projects
@@ -295,4 +338,93 @@ CREATE TABLE discoveries (
     payload       TEXT NOT NULL,
     fetched_at    TEXT NOT NULL
 );
+"#;
+
+/// v4 makes manual entry a first-class way in, alongside Smart Paste and
+/// connectors.
+///
+/// Until now a row could only be created by recognising something: a paste the
+/// detectors understood, or a provider a connector could read. That left the
+/// larger half of a developer's life unrepresentable -- the hosting panel with
+/// no API, the registrar, the bank, the account whose password lives in a
+/// browser. v4 removes the three structural obstacles:
+///
+/// - **One email per identity.** `identities.email` stays as the primary
+///   address; `identity_emails` holds every address, primary included, so one
+///   person can hold accounts under several addresses without becoming several
+///   people.
+/// - **Nowhere to put a login.** Accounts gain the fields you actually need to
+///   sign in by hand, and `secrets` gains `account_id` so a password can belong
+///   to the account rather than being forced under a project.
+/// - **One variable name per project.** The unique index now includes the
+///   environment, so `DATABASE_URL` can exist for development and production at
+///   once instead of one silently blocking the other.
+///
+/// The `secrets` rebuild is the same shape as v2's, and safe for the same
+/// reason the runner now guarantees: foreign keys are off while migrating, so
+/// dropping the old table cannot cascade into `secret_values`.
+const V4: &str = r#"
+CREATE TABLE identity_emails (
+    id          TEXT PRIMARY KEY,
+    identity_id TEXT NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+    address     TEXT NOT NULL,
+    blind_index TEXT NOT NULL,
+    is_primary  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_identity_emails_bi ON identity_emails (blind_index);
+CREATE INDEX idx_identity_emails_identity ON identity_emails (identity_id);
+
+INSERT INTO identity_emails (id, identity_id, address, blind_index, is_primary, created_at)
+SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
+       || substr(lower(hex(randomblob(2))), 2) || '-a'
+       || substr(lower(hex(randomblob(2))), 2) || '-'
+       || lower(hex(randomblob(6))),
+       i.id, i.email, i.email_blind_index, 1, i.created_at
+FROM identities i
+WHERE i.email IS NOT NULL AND i.email_blind_index IS NOT NULL;
+
+ALTER TABLE accounts ADD COLUMN login_email TEXT;
+ALTER TABLE accounts ADD COLUMN username TEXT;
+ALTER TABLE accounts ADD COLUMN url TEXT;
+ALTER TABLE accounts ADD COLUMN notes TEXT;
+
+ALTER TABLE service_projects ADD COLUMN url TEXT;
+ALTER TABLE service_projects ADD COLUMN notes TEXT;
+
+CREATE TABLE secrets_v4 (
+    id                 TEXT PRIMARY KEY,
+    project_id         TEXT REFERENCES projects (id) ON DELETE CASCADE,
+    service_project_id TEXT REFERENCES service_projects (id) ON DELETE CASCADE,
+    account_id         TEXT REFERENCES accounts (id) ON DELETE CASCADE,
+    kind               TEXT NOT NULL,
+    name               TEXT NOT NULL,
+    preview            TEXT NOT NULL,
+    value_blind_index  TEXT NOT NULL,
+    environment        TEXT NOT NULL,
+    notes              TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    CHECK (project_id IS NOT NULL
+        OR service_project_id IS NOT NULL
+        OR account_id IS NOT NULL)
+);
+
+INSERT INTO secrets_v4
+    (id, project_id, service_project_id, account_id, kind, name, preview,
+     value_blind_index, environment, notes, created_at, updated_at)
+SELECT id, project_id, service_project_id, NULL, kind, name, preview,
+       value_blind_index, environment, NULL, created_at, updated_at
+FROM secrets;
+
+DROP TABLE secrets;
+ALTER TABLE secrets_v4 RENAME TO secrets;
+
+CREATE INDEX idx_secrets_blind_index ON secrets (value_blind_index);
+CREATE INDEX idx_secrets_project ON secrets (project_id);
+CREATE INDEX idx_secrets_service_project ON secrets (service_project_id);
+CREATE INDEX idx_secrets_account ON secrets (account_id);
+CREATE UNIQUE INDEX idx_secrets_unique_name
+    ON secrets (COALESCE(project_id, ''), COALESCE(service_project_id, ''),
+                COALESCE(account_id, ''), name, environment);
 "#;

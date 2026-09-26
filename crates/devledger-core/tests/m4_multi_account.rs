@@ -377,7 +377,9 @@ fn secrets_stay_with_their_own_resource_across_accounts() {
     }
 
     // And the .env export for one account never contains the other's values.
-    let env = vault.export_env(dashboard.project.id).expect("export");
+    let env = vault
+        .export_env(dashboard.project.id, None)
+        .expect("export");
     assert!(env.expose().contains("BETA_SUPABASE_ANON_KEY"));
     assert!(!env.expose().contains("s3cr3t-pw"));
 }

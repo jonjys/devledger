@@ -66,7 +66,7 @@ struct StoreGraph<'a> {
 impl GraphView for StoreGraph<'_> {
     fn service_project_by_ref(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
     ) -> Result<Option<ServiceProject>> {
         self.store.service_project_by_ref(provider, provider_ref)
@@ -157,7 +157,7 @@ impl Vault {
             None => {
                 let identity_id = self.identity_for_connection(discovery, label)?;
                 let account_id =
-                    self.account_for_connection(identity_id, descriptor.provider, label)?;
+                    self.account_for_connection(identity_id, &descriptor.provider, label)?;
 
                 // The credential is sealed against the connection id, so it has
                 // to exist first. A placeholder is written, then replaced.
@@ -199,7 +199,7 @@ impl Vault {
         connect::reconcile::reconcile(
             connection.id,
             connection.account_id,
-            discovery.provider,
+            &discovery.provider,
             discovery,
             &graph,
         )
@@ -360,7 +360,7 @@ impl Vault {
                     // Defence in depth: reconciliation already refuses a ref
                     // owned by another account, and so does this.
                     if self.store()?.ref_belongs_to_other_account(
-                        provider,
+                        &provider,
                         &item.provider_id,
                         connection.account_id,
                     )? {
@@ -370,7 +370,7 @@ impl Vault {
                     let created = self.store()?.create_service_project(
                         connection.account_id,
                         organization_id,
-                        provider,
+                        &provider,
                         Some(&item.provider_id),
                         &item.name,
                         region,
@@ -487,7 +487,7 @@ impl Vault {
     fn account_for_connection(
         &self,
         identity_id: Uuid,
-        provider: Provider,
+        provider: &Provider,
         label: &str,
     ) -> Result<Uuid> {
         let store = self.store()?;

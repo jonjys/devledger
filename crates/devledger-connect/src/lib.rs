@@ -25,6 +25,8 @@ pub mod supabase;
 
 use std::time::Duration;
 
+use devledger_core::connect::Discovery;
+
 use thiserror::Error;
 
 /// How long a single provider request may take.
@@ -66,11 +68,42 @@ pub enum ConnectError {
     /// A URL outside the connector's allowlist was constructed.
     #[error("refused to contact {0}: it is not an allowed host for this connector")]
     HostNotAllowed(String),
+
+    /// A connector id with no implementation behind it.
+    ///
+    /// Refusing beats falling back to a default: a credential meant for one
+    /// provider must never be sent to another.
+    #[error("no connector named {0} is built into this version of DevLedger")]
+    UnknownConnector(String),
 }
 
 impl From<ConnectError> for devledger_core::CoreError {
     fn from(error: ConnectError) -> Self {
         devledger_core::CoreError::Invalid(error.to_string())
+    }
+}
+
+/// Route a request to the connector the caller asked for.
+///
+/// The dispatch lives here, next to the implementations, rather than at the IPC
+/// boundary. When it lived there, both commands called the Supabase client
+/// directly and ignored the connector id they were given -- harmless while
+/// Supabase was the only connector, and a credential sent to the wrong provider
+/// the moment a second one shipped. An unknown id is refused rather than
+/// defaulted, so the failure mode of adding a connector and forgetting to wire
+/// it up is an error message, not a leak.
+pub async fn discover_with(connector: &str, token: &str) -> Result<Discovery, ConnectError> {
+    match connector {
+        "supabase" => supabase::discover(token).await,
+        other => Err(ConnectError::UnknownConnector(other.to_string())),
+    }
+}
+
+/// Check a credential against its provider before storing it.
+pub async fn verify_with(connector: &str, token: &str) -> Result<Discovery, ConnectError> {
+    match connector {
+        "supabase" => supabase::verify(token).await,
+        other => Err(ConnectError::UnknownConnector(other.to_string())),
     }
 }
 

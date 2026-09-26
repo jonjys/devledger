@@ -20,18 +20,22 @@ use std::sync::Mutex;
 use devledger_core::connect::reconcile::ReconcileReport;
 use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorId};
 use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
+use devledger_core::manual::{NewAccount, NewResource, NewSecret, ResourceEdit};
 use devledger_core::model::{
-    Account, EntityKind, EntityRef, Identity, Organization, Project, Relation, ServiceProject,
+    Account, EntityKind, EntityRef, Environment, Identity, IdentityEmail, Organization, Project,
+    Relation, SecretRecord, ServiceProject,
 };
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
 use devledger_core::redact::{Provenance, SourceKind};
 use devledger_core::secret::SecretString;
 use devledger_core::store::{
-    AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary,
+    AccountDetails, AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary,
     SubscriptionSummary, VaultEntry,
 };
-use devledger_core::vault::{default_vault_dir, VaultStatus};
+use devledger_core::vault::{
+    default_vault_dir, DeletionImpact, EnvConflict, OverviewIdentity, VaultStatus,
+};
 use devledger_core::{CoreError, Vault};
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -350,8 +354,9 @@ fn copy_env(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     project_id: Uuid,
+    environment: Option<Environment>,
 ) -> IpcResult<usize> {
-    let rendered = state.with(|vault| vault.export_env(project_id))?;
+    let rendered = state.with(|vault| vault.export_env(project_id, environment))?;
     let count = rendered.expose().lines().filter(|l| !l.is_empty()).count();
     app.clipboard()
         .write_text(rendered.expose().to_string())
@@ -360,6 +365,191 @@ fn copy_env(
             message: format!("could not write to the clipboard: {e}"),
         })?;
     Ok(count)
+}
+
+// ---------------------------------------------------------------- manual entry
+//
+// The commands that make DevLedger usable without a single token. None of them
+// touch the network, and the one that carries a credential takes it as an
+// argument and never gives it back.
+
+/// Create an identity, optionally with its first email address.
+#[tauri::command]
+fn create_identity(
+    state: State<'_, AppState>,
+    label: String,
+    email: Option<String>,
+) -> IpcResult<Identity> {
+    state.with(|vault| vault.create_identity(&label, email.as_deref()))
+}
+
+/// Rename an identity.
+#[tauri::command]
+fn update_identity(state: State<'_, AppState>, identity_id: Uuid, label: String) -> IpcResult<()> {
+    state.with(|vault| vault.update_identity(identity_id, &label))
+}
+
+/// Delete an identity and everything filed under it.
+#[tauri::command]
+fn delete_identity(state: State<'_, AppState>, identity_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_identity(identity_id))
+}
+
+/// Every email address attached to an identity.
+#[tauri::command]
+fn identity_emails(state: State<'_, AppState>, identity_id: Uuid) -> IpcResult<Vec<IdentityEmail>> {
+    state.with(|vault| vault.identity_emails(identity_id))
+}
+
+/// Attach another email address to an identity.
+#[tauri::command]
+fn add_identity_email(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    address: String,
+    make_primary: bool,
+) -> IpcResult<IdentityEmail> {
+    state.with(|vault| vault.add_identity_email(identity_id, &address, make_primary))
+}
+
+/// Choose which address an identity is shown and matched by.
+#[tauri::command]
+fn set_primary_email(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    email_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.set_primary_email(identity_id, email_id))
+}
+
+/// Detach an email address from an identity.
+#[tauri::command]
+fn remove_identity_email(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    email_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.remove_identity_email(identity_id, email_id))
+}
+
+/// Create an account with any service the user can name.
+#[tauri::command]
+fn create_account(state: State<'_, AppState>, entry: NewAccount) -> IpcResult<Account> {
+    state.with(|vault| vault.create_account(&entry))
+}
+
+/// Edit an account's label and login details.
+#[tauri::command]
+fn update_account(
+    state: State<'_, AppState>,
+    account_id: Uuid,
+    label: String,
+    details: AccountDetails,
+) -> IpcResult<()> {
+    state.with(|vault| vault.update_account(account_id, &label, &details))
+}
+
+/// Delete an account and everything filed under it.
+#[tauri::command]
+fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_account(account_id))
+}
+
+/// Every secret filed against an account, metadata only.
+#[tauri::command]
+fn account_secrets(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<Vec<VaultEntry>> {
+    state.with(|vault| vault.account_secrets(account_id))
+}
+
+/// Create a provider resource by hand.
+#[tauri::command]
+fn create_resource(state: State<'_, AppState>, entry: NewResource) -> IpcResult<ServiceProject> {
+    state.with(|vault| vault.create_resource(&entry))
+}
+
+/// Edit a provider resource.
+#[tauri::command]
+fn update_resource(
+    state: State<'_, AppState>,
+    resource_id: Uuid,
+    edit: ResourceEdit,
+) -> IpcResult<()> {
+    state.with(|vault| vault.update_resource(resource_id, &edit))
+}
+
+/// Delete a provider resource and the secrets filed against it.
+#[tauri::command]
+fn delete_resource(state: State<'_, AppState>, resource_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_resource(resource_id))
+}
+
+/// Store a secret entered by hand.
+///
+/// The value crosses the IPC boundary once, inbound. It is sealed in Rust and
+/// never returned; the command answers with metadata only.
+#[tauri::command]
+fn store_secret(
+    state: State<'_, AppState>,
+    entry: NewSecret,
+    value: String,
+) -> IpcResult<SecretRecord> {
+    state.with(|vault| vault.store_secret(&entry, &SecretString::new(value)))
+}
+
+/// Edit a secret's name, environment or note, leaving its value alone.
+#[tauri::command]
+fn update_secret_meta(
+    state: State<'_, AppState>,
+    secret_id: Uuid,
+    name: String,
+    environment: Environment,
+    notes: Option<String>,
+) -> IpcResult<()> {
+    state.with(|vault| vault.update_secret_meta(secret_id, &name, environment, notes.as_deref()))
+}
+
+/// Replace a secret's value, keeping its identity and history.
+#[tauri::command]
+fn replace_secret_value(
+    state: State<'_, AppState>,
+    secret_id: Uuid,
+    value: String,
+) -> IpcResult<()> {
+    state.with(|vault| vault.replace_secret_value(secret_id, &SecretString::new(value)))
+}
+
+/// Which environments a project's secrets use.
+#[tauri::command]
+fn project_environments(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+) -> IpcResult<Vec<Environment>> {
+    state.with(|vault| vault.project_environments(project_id))
+}
+
+/// Variable names a project defines more than once.
+#[tauri::command]
+fn env_conflicts(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    environment: Option<Environment>,
+) -> IpcResult<Vec<EnvConflict>> {
+    state.with(|vault| vault.env_conflicts(project_id, environment))
+}
+
+/// What deleting a project would take with it.
+#[tauri::command]
+fn project_deletion_impact(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+) -> IpcResult<DeletionImpact> {
+    state.with(|vault| vault.project_deletion_impact(project_id))
+}
+
+/// The whole chain, from each email address down to the projects it reaches.
+#[tauri::command]
+fn ledger_overview(state: State<'_, AppState>) -> IpcResult<Vec<OverviewIdentity>> {
+    state.with(|vault| vault.overview())
 }
 
 // ------------------------------------------------------------------ connectors
@@ -400,7 +590,7 @@ async fn connector_connect(
         state.with(|_| devledger_core::connect::check_token_shape(&descriptor.auth, &token))?;
     }
 
-    let discovery = devledger_connect::supabase::verify(&token)
+    let discovery = devledger_connect::verify_with(&connector_id.0, &token)
         .await
         .map_err(|e| IpcError {
             code: "connector",
@@ -423,9 +613,24 @@ async fn connector_refresh(
     state: State<'_, AppState>,
     connection_id: Uuid,
 ) -> IpcResult<ReconcileReport> {
-    let token = state.with(|vault| vault.connection_token(connection_id))?;
+    let (connector, token) = state.with(|vault| {
+        let summary = vault
+            .list_connections()?
+            .into_iter()
+            .find(|c| c.connection.id == connection_id)
+            .ok_or_else(|| {
+                devledger_core::CoreError::NotFound(format!("connection {connection_id}"))
+            })?;
+        Ok((
+            summary.connection.connector_id.0.clone(),
+            vault.connection_token(connection_id)?,
+        ))
+    })?;
 
-    let discovery = devledger_connect::supabase::discover(token.expose())
+    // Routed by the connection's own connector id. Reading the credential and
+    // then handing it to a hard-coded client would send it wherever that client
+    // happens to point.
+    let discovery = devledger_connect::discover_with(&connector, token.expose())
         .await
         .map_err(|e| IpcError {
             code: "connector",
@@ -515,6 +720,27 @@ pub fn run() {
             connector_report,
             connector_import,
             connector_disconnect,
+            create_identity,
+            update_identity,
+            delete_identity,
+            identity_emails,
+            add_identity_email,
+            set_primary_email,
+            remove_identity_email,
+            create_account,
+            update_account,
+            delete_account,
+            account_secrets,
+            create_resource,
+            update_resource,
+            delete_resource,
+            store_secret,
+            update_secret_meta,
+            replace_secret_value,
+            project_environments,
+            env_conflicts,
+            project_deletion_impact,
+            ledger_overview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevLedger");

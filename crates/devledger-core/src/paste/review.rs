@@ -331,4 +331,11 @@ pub struct CommitOutcome {
     pub relations_created: usize,
     /// Ids of the projects touched, so the UI can navigate there.
     pub touched_project_ids: Vec<Uuid>,
+    /// Things the user should know about how the save was interpreted.
+    ///
+    /// Not errors: the save happened. These are the judgement calls DevLedger
+    /// had to make and would rather state out loud than bury, such as filing a
+    /// paste under one of several accounts the same person holds with the same
+    /// provider.
+    pub notes: Vec<String>,
 }

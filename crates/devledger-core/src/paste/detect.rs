@@ -654,7 +654,7 @@ fn detect_bare_lines(text: &str, found: &mut Vec<Detection>, claimed: &mut Vec<(
                     label: provider.label().to_string(),
                     value_preview: trimmed.to_string(),
                     secret_kind: None,
-                    provider,
+                    provider: provider.clone(),
                     environment: Environment::Unknown,
                     project_ref: None,
                     evidence: Evidence::new(

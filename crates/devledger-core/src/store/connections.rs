@@ -396,7 +396,7 @@ impl Store {
     /// Whether any account other than `account_id` already holds this ref.
     pub fn ref_belongs_to_other_account(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
         account_id: Uuid,
     ) -> Result<bool> {

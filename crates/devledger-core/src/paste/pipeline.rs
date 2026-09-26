@@ -49,7 +49,7 @@ pub trait MatchLookup {
     /// Find a provider resource by its provider-side reference.
     fn service_project_by_ref(
         &self,
-        provider: Provider,
+        provider: &Provider,
         provider_ref: &str,
     ) -> Result<Option<ServiceProject>>;
     /// Find a DevLedger project by name.
@@ -80,7 +80,7 @@ impl MatchLookup for EmptyLookup {
     }
     fn service_project_by_ref(
         &self,
-        _provider: Provider,
+        _provider: &Provider,
         _provider_ref: &str,
     ) -> Result<Option<ServiceProject>> {
         Ok(None)
@@ -184,7 +184,7 @@ pub fn analyze(
     let mut recommendations = Vec::with_capacity(entities.len());
 
     let provider = dominant_provider(&detections);
-    let chain = build_chain(&detections, provider, index_key, lookup)?;
+    let chain = build_chain(&detections, provider.clone(), index_key, lookup)?;
 
     for (i, det) in detections.iter().enumerate() {
         recommendations.push(recommend(
@@ -213,8 +213,8 @@ pub fn analyze(
         ));
     }
 
-    let questions = build_questions(&detections, &chain, provider, lookup)?;
-    let proposed_relations = propose_relations(&detections, &chain, provider);
+    let questions = build_questions(&detections, &chain, &provider, lookup)?;
+    let proposed_relations = propose_relations(&detections, &chain, &provider);
 
     warnings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.title.cmp(&b.title)));
     let blocks_save = warnings.iter().any(Warning::blocks_save);
@@ -250,11 +250,11 @@ fn dominant_provider(detections: &[Detection]) -> Provider {
         .iter()
         .find(|d| d.entity.kind == DetectedKind::ServiceMention)
     {
-        return mentioned.entity.provider;
+        return mentioned.entity.provider.clone();
     }
     let mut best = Provider::Unknown;
     let mut best_count = 0usize;
-    for candidate in detections.iter().map(|d| d.entity.provider) {
+    for candidate in detections.iter().map(|d| d.entity.provider.clone()) {
         if candidate == Provider::Unknown {
             continue;
         }
@@ -354,7 +354,7 @@ fn build_chain(
             .iter()
             .filter(|d| d.entity.project_ref.as_deref() == Some(project_ref.as_str()))
             .count();
-        let existing = lookup.service_project_by_ref(provider, &project_ref)?;
+        let existing = lookup.service_project_by_ref(&provider, &project_ref)?;
         chain.service_project = Some(ChainNode {
             role: ChainRole::ServiceProject,
             label: project_ref.clone(),
@@ -460,7 +460,7 @@ fn build_chain(
 fn build_questions(
     detections: &[Detection],
     chain: &ProposedChain,
-    provider: Provider,
+    provider: &Provider,
     lookup: &dyn MatchLookup,
 ) -> Result<Vec<OpenQuestion>> {
     let mut questions = Vec::new();
@@ -541,7 +541,7 @@ fn build_questions(
             kind: QuestionKind::WhichOrganization,
             prompt: format!(
                 "Which {} organization owns this?",
-                if provider == Provider::Unknown {
+                if *provider == Provider::Unknown {
                     "".to_string()
                 } else {
                     provider.label().to_string()
@@ -801,7 +801,7 @@ fn warn_unattributed_secrets(
 fn propose_relations(
     detections: &[Detection],
     chain: &ProposedChain,
-    provider: Provider,
+    provider: &Provider,
 ) -> Vec<ProposedRelation> {
     let mut proposals: Vec<ProposedRelation> = Vec::new();
 

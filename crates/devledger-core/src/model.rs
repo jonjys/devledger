@@ -38,6 +38,41 @@ pub struct Account {
     pub external_ref: Option<String>,
     /// Display label.
     pub label: String,
+    /// The address this account signs in with, when it differs from the
+    /// identity's primary address.
+    ///
+    /// Separate from the identity's email on purpose: one person often signs in
+    /// to different services with different addresses, and flattening the two
+    /// would either lose that or split the person into several identities.
+    pub login_email: Option<String>,
+    /// The username this account signs in with, for services that use one.
+    pub username: Option<String>,
+    /// Where to sign in.
+    pub url: Option<String>,
+    /// Free-text note. Never put a credential here: it is not treated as one.
+    pub notes: Option<String>,
+    /// Creation timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// One email address belonging to an identity.
+///
+/// An identity is a person, not an address. Keeping addresses in their own
+/// table is what lets one person hold accounts under several of them without
+/// becoming several people in the map.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdentityEmail {
+    /// Stable local id.
+    pub id: Uuid,
+    /// Which identity this address belongs to.
+    pub identity_id: Uuid,
+    /// The address itself, lowercased.
+    pub address: String,
+    /// Blind index over the address, for duplicate detection.
+    pub blind_index: String,
+    /// Whether this is the address shown as the identity's own.
+    pub is_primary: bool,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -89,6 +124,10 @@ pub struct ServiceProject {
     pub region: Option<String>,
     /// Which environment this resource represents.
     pub environment: Environment,
+    /// Where this resource lives, for a service with no connector.
+    pub url: Option<String>,
+    /// Free-text note. Never put a credential here.
+    pub notes: Option<String>,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -111,9 +150,23 @@ pub struct Project {
     pub created_at: OffsetDateTime,
 }
 
-/// Providers DevLedger can recognise deterministically.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
+/// A service an account can be held with.
+///
+/// The named variants are the ones DevLedger can recognise from a paste or
+/// reach with a connector. [`Provider::Other`] carries anything else by name,
+/// because a developer's accounts are not limited to the services this program
+/// happens to know about: a hosting panel, a bank, a domain registrar and a
+/// hobby forum all belong in the ledger on the same terms.
+///
+/// # Wire and storage format
+///
+/// One string, used both on disk and over IPC: the named variants keep their
+/// snake_case spelling, and [`Provider::Other`] is `other:<name>`. Having a
+/// single encoding means a value read from the database and a value received
+/// from the UI cannot disagree. Unrecognised text decodes to
+/// [`Provider::Other`] rather than failing, so a vault touched by a newer build
+/// still opens.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Provider {
     /// Supabase.
     Supabase,
@@ -129,13 +182,18 @@ pub enum Provider {
     Aws,
     /// Vercel.
     Vercel,
+    /// A service DevLedger has no built-in knowledge of, named by the user.
+    Other(String),
     /// Anything recognised as a credential but not attributable.
     Unknown,
 }
 
+/// The `other:` prefix that marks a user-named service on disk and over IPC.
+const OTHER_PREFIX: &str = "other:";
+
 impl Provider {
     /// Human-readable provider name.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             Provider::Supabase => "Supabase",
             Provider::Postgres => "Postgres",
@@ -144,8 +202,92 @@ impl Provider {
             Provider::OpenAi => "OpenAI",
             Provider::Aws => "AWS",
             Provider::Vercel => "Vercel",
+            Provider::Other(name) => name,
             Provider::Unknown => "Unknown",
         }
+    }
+
+    /// The stable string form used on disk and over IPC.
+    pub fn as_key(&self) -> String {
+        match self {
+            Provider::Supabase => "supabase".to_string(),
+            Provider::Postgres => "postgres".to_string(),
+            Provider::GitHub => "github".to_string(),
+            Provider::Stripe => "stripe".to_string(),
+            Provider::OpenAi => "openai".to_string(),
+            Provider::Aws => "aws".to_string(),
+            Provider::Vercel => "vercel".to_string(),
+            Provider::Other(name) => format!("{OTHER_PREFIX}{name}"),
+            Provider::Unknown => "unknown".to_string(),
+        }
+    }
+
+    /// Parse the string form. Never fails: anything unrecognised is a service
+    /// DevLedger does not know, which is a fact about DevLedger, not an error.
+    pub fn from_key(text: &str) -> Provider {
+        match text {
+            "supabase" => Provider::Supabase,
+            "postgres" => Provider::Postgres,
+            "github" => Provider::GitHub,
+            "stripe" => Provider::Stripe,
+            "openai" => Provider::OpenAi,
+            "aws" => Provider::Aws,
+            "vercel" => Provider::Vercel,
+            "unknown" => Provider::Unknown,
+            other => {
+                let name = other.strip_prefix(OTHER_PREFIX).unwrap_or(other).trim();
+                if name.is_empty() {
+                    Provider::Unknown
+                } else {
+                    Provider::Other(name.to_string())
+                }
+            }
+        }
+    }
+
+    /// Build a provider from what a user typed in the "service" box.
+    ///
+    /// A name that matches one DevLedger knows resolves to that variant, so
+    /// typing "Supabase" by hand and discovering it through the connector end
+    /// up as the same provider rather than two look-alikes.
+    pub fn from_user_input(text: &str) -> Provider {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Provider::Unknown;
+        }
+        match trimmed.to_ascii_lowercase().as_str() {
+            "supabase" => Provider::Supabase,
+            "postgres" | "postgresql" => Provider::Postgres,
+            "github" => Provider::GitHub,
+            "stripe" => Provider::Stripe,
+            "openai" => Provider::OpenAi,
+            "aws" | "amazon web services" => Provider::Aws,
+            "vercel" => Provider::Vercel,
+            _ => Provider::Other(trimmed.to_string()),
+        }
+    }
+
+    /// Whether this is a service the user named rather than one DevLedger knows.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Provider::Other(_))
+    }
+}
+
+impl Serialize for Provider {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_key())
+    }
+}
+
+impl<'de> Deserialize<'de> for Provider {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(Provider::from_key(&text))
     }
 }
 
@@ -190,6 +332,12 @@ pub enum SecretKind {
     GenericApiKey,
     /// A password field.
     Password,
+    /// A configuration value the user filed by hand.
+    ///
+    /// DevLedger has no way to tell whether a value a user typed is sensitive,
+    /// so it is stored encrypted like everything else and treated as unsafe to
+    /// expose to client code until the user says otherwise.
+    EnvVar,
 }
 
 impl SecretKind {
@@ -207,6 +355,7 @@ impl SecretKind {
             SecretKind::AwsSecretAccessKey => "AWS secret access key",
             SecretKind::GenericApiKey => "API key",
             SecretKind::Password => "password",
+            SecretKind::EnvVar => "environment variable",
         }
     }
 
@@ -229,7 +378,9 @@ impl SecretKind {
             SecretKind::StripeSecretKey => Provider::Stripe,
             SecretKind::OpenAiApiKey => Provider::OpenAi,
             SecretKind::AwsAccessKeyId | SecretKind::AwsSecretAccessKey => Provider::Aws,
-            SecretKind::GenericApiKey | SecretKind::Password => Provider::Unknown,
+            SecretKind::GenericApiKey | SecretKind::Password | SecretKind::EnvVar => {
+                Provider::Unknown
+            }
         }
     }
 }
@@ -243,8 +394,12 @@ pub struct SecretRecord {
     pub project_id: Option<Uuid>,
     /// The provider resource this secret authenticates to, when one is known.
     ///
-    /// At least one of `project_id` and `service_project_id` is always set.
+    /// At least one of `project_id`, `service_project_id` and `account_id` is
+    /// always set, so no secret is filed against nothing.
     pub service_project_id: Option<Uuid>,
+    /// The account this secret belongs to, for a login password or a token that
+    /// is a property of the account rather than of one resource.
+    pub account_id: Option<Uuid>,
     /// What kind of credential it is.
     pub kind: SecretKind,
     /// The environment-variable style name, e.g. `SUPABASE_SERVICE_ROLE_KEY`.
@@ -255,6 +410,8 @@ pub struct SecretRecord {
     pub value_blind_index: String,
     /// Environment this secret applies to.
     pub environment: Environment,
+    /// Free-text note. Never put a credential here.
+    pub notes: Option<String>,
     /// Creation timestamp.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
