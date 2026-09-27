@@ -33,7 +33,14 @@ interface ModeContextValue {
 
 const ModeContext = createContext<ModeContextValue | null>(null);
 
+/**
+ * Whether the Indie / Dev switch is offered. It is hidden for now; while it
+ * is, everyone gets Indie, so nobody is left in Dev with no way back.
+ */
+export const MODE_SWITCH_SHOWN = false;
+
 function readInitialMode(): Mode {
+  if (!MODE_SWITCH_SHOWN) return "indie";
   try {
     return window.localStorage.getItem(STORAGE_KEY) === "dev" ? "dev" : "indie";
   } catch {

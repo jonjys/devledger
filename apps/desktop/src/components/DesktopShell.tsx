@@ -206,6 +206,8 @@ function DesktopShellInner({ onLock }: Props) {
   // The project a paste was made inside, so the review files it there.
   const [pasteTarget, setPasteTarget] = useState<string | null>(null);
   const [attentionCount, setAttentionCount] = useState(0);
+  // Entries with no email hold accounts filed under no one: the badge pulses.
+  const [unidentified, setUnidentified] = useState(0);
   const [trialsCount, setTrialsCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   // false = closed; true = open with nothing chosen; a kind = open with it chosen.
@@ -224,6 +226,7 @@ function DesktopShellInner({ onLock }: Props) {
     ]);
     setProjects(rows);
     setAttentionCount(attention.length);
+    setUnidentified(attention.filter((a) => a.kind === "identity_without_email").length);
     setTrialsCount(trialsFrom(subs).length);
     // `selected` is the project open on the Projects page; the list is the default.
     setSelected((current) => (current && rows.some((r) => r.project.id === current) ? current : null));
@@ -308,7 +311,16 @@ function DesktopShellInner({ onLock }: Props) {
                     </span>
                     <span className="nav-label">{item.label}</span>
                     {count > 0 && (
-                      <span className={`nav-badge${item.badge === "attention" ? " alert" : ""}`}>
+                      <span
+                        className={`nav-badge${item.badge === "attention" ? " alert" : ""}${
+                          item.badge === "attention" && unidentified > 0 ? " pulse" : ""
+                        }`}
+                        title={
+                          item.badge === "attention" && unidentified > 0
+                            ? `${plural(unidentified, "entry", "entries")} with no email`
+                            : undefined
+                        }
+                      >
                         {count}
                       </span>
                     )}
@@ -407,7 +419,9 @@ function DesktopShellInner({ onLock }: Props) {
 
           {view === "secrets" && <SecretsView onNotify={notify} refreshKey={refreshKey} />}
 
-          {view === "attention" && <AttentionView onNotify={notify} refreshKey={refreshKey} />}
+          {view === "attention" && (
+            <AttentionView onNotify={notify} refreshKey={refreshKey} onChanged={refresh} />
+          )}
         </div>
       </div>
 

@@ -288,4 +288,24 @@ describe("Skill tree", () => {
     render(<SkillTree onNotify={vi.fn()} onChanged={vi.fn()} />);
     expect(await screen.findByRole("button", { name: "Add your email" })).toBeInTheDocument();
   });
+
+  it("moves an account to another person from its menu", async () => {
+    const data = vault(STATE);
+    const other = data.people[1];
+    if (!other) throw new Error("fixture");
+    other.identity.email = "second@example.com";
+    serve(data);
+    await renderTree();
+    fireEvent.contextMenu(node(`account:${IDS.supabase}`));
+    await menuPick(["Move to", "second@example.com"]);
+    await waitFor(() => expect(mocked.moveAccount).toHaveBeenCalledWith(IDS.supabase, IDS.other));
+  });
+
+  it("moves every account of an entry with no email to the primary", async () => {
+    serve();
+    await renderTree();
+    fireEvent.contextMenu(node(`identity:${IDS.other}`));
+    await menuPick(["Move all accounts to", "primary@example.com"]);
+    await waitFor(() => expect(mocked.moveAccount).toHaveBeenCalledWith(IDS.loopia, IDS.me));
+  });
 });

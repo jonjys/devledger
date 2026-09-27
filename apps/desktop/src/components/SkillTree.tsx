@@ -524,6 +524,31 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
         onSelect: () => void copy(f),
       }));
 
+  // Everyone an account could be moved to: people with an email address.
+  // With `accountId`, moves that account; without, every account of `except`.
+  const moveTargets = (except: string | null, accountId?: string): MenuItem[] =>
+    (data?.people ?? [])
+      .filter((p) => p.identity.id !== except && p.identity.email)
+      .map((p) => ({
+        label: p.identity.email ?? p.identity.label,
+        onSelect: () =>
+          void moveAccounts(except, p.identity.id, p.identity.email ?? p.identity.label, accountId),
+      }));
+
+  /** Move one account, or with `accountId` null every account of `from`, to a person. */
+  async function moveAccounts(from: string | null, to: string, toLabel: string, accountId?: string) {
+    try {
+      const ids = accountId
+        ? [accountId]
+        : (data?.people.find((p) => p.identity.id === from)?.accounts ?? []).map((a) => a.account.id);
+      for (const id of ids) await api.moveAccount(id, to);
+      onNotify(ids.length === 1 ? `Moved to ${toLabel}` : `Moved ${ids.length} accounts to ${toLabel}`);
+      await changed();
+    } catch (e: unknown) {
+      onNotify(message(e), true);
+    }
+  }
+
   function menuFor(target: TreeItem | null): { title: string; items: MenuItem[] } {
     const open = (kind: AddKind, parent: TreeItem) => () => setDialog({ kind, parent });
     if (!target) {
@@ -567,6 +592,7 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
           items: [
             { label: "Add", items: [{ label: "Account", onSelect: open("account", target) }] },
             { label: "Make Primary", onSelect: () => void makePrimary(target) },
+            { label: "Move all accounts to", items: moveTargets(target.id) },
             rename,
             { label: "Status", items: statusItems(target) },
             del(),
@@ -594,6 +620,13 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
               { label: "Project", hint: "used by", onSelect: open("project", target) },
             ] },
             { label: "Copy", items: copyItems(target) },
+            {
+              label: "Move to",
+              items: moveTargets(
+                target.id ? (accountById(target.id)?.identity_id ?? null) : null,
+                target.id ?? undefined,
+              ),
+            },
             rename,
             { label: "Status", items: statusItems(target) },
             del(),
