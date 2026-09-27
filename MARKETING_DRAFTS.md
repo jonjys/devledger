@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-27
+Feature Built: The Ledger — one screen from person to sign-in address to account to project, editable by hand, with the vault locking after 15 idle minutes.
+Suggested Tweet:
+"Which email owns that project? You have no idea.
+
+The Ledger maps person → login → project. Add it by hand. It locks itself after 15 idle minutes.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
