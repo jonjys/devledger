@@ -135,7 +135,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          gh release upload "$tag" apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/*.apk --clobber
+          mapfile -t apks < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk')
+          test "${#apks[@]}" -gt 0
+          gh release upload "$tag" "${apks[@]}" --clobber
 
   ios:
     name: iPhone IPA
