@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-27
+Feature Built: + Add — type a project, login, password, API key, or a field you name; secrets stay masked and sealed.
+Suggested Tweet:
+"You needed a token just to log an email.
+
++ Add is here: type a project, login, password, API key, or a field you name. Secrets stay sealed.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
