@@ -10,11 +10,10 @@ import AttentionView from "./AttentionView";
 import ConnectionsView from "./ConnectionsView";
 import MapView from "./MapView";
 import StackGraphView from "./StackGraphView";
-import NewProjectForm from "./NewProjectForm";
 import OverviewView from "./OverviewView";
 import AddAnythingDialog, { type WordKind } from "./AddAnythingDialog";
 import LedgerView from "./LedgerView";
-import ProjectVault from "./ProjectVault";
+import Projects from "./Projects";
 import ReviewSheet from "./ReviewSheet";
 import SecretsView from "./SecretsView";
 import SmartPasteBar from "./SmartPasteBar";
@@ -46,9 +45,9 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: "Workspace",
     items: [
-      { id: "overview", label: "Overview", icon: "overview" },
-      { id: "ledger", label: "Ledger", icon: "ledger" },
       { id: "projects", label: "Projects", icon: "projects" },
+      { id: "ledger", label: "Ledger", icon: "ledger" },
+      { id: "overview", label: "Overview", icon: "overview" },
       { id: "identities", label: "Identities", icon: "identities" },
       { id: "stack", label: "Stack", icon: "stack" },
       { id: "connections", label: "Connections", icon: "connections" },
@@ -202,8 +201,13 @@ function DesktopShellInner({ onLock }: Props) {
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; bad: boolean } | null>(null);
-  const [view, setView] = useState<View>("overview");
+  // Projects is the start page.
+  const [view, setView] = useState<View>("projects");
+  // The project a paste was made inside, so the review files it there.
+  const [pasteTarget, setPasteTarget] = useState<string | null>(null);
   const [attentionCount, setAttentionCount] = useState(0);
+  // Entries with no email hold accounts filed under no one: the badge pulses.
+  const [unidentified, setUnidentified] = useState(0);
   const [trialsCount, setTrialsCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   // false = closed; true = open with nothing chosen; a kind = open with it chosen.
@@ -222,11 +226,10 @@ function DesktopShellInner({ onLock }: Props) {
     ]);
     setProjects(rows);
     setAttentionCount(attention.length);
+    setUnidentified(attention.filter((a) => a.kind === "identity_without_email").length);
     setTrialsCount(trialsFrom(subs).length);
-    setSelected((current) => {
-      if (current && rows.some((r) => r.project.id === current)) return current;
-      return rows[0]?.project.id ?? null;
-    });
+    // `selected` is the project open on the Projects page; the list is the default.
+    setSelected((current) => (current && rows.some((r) => r.project.id === current) ? current : null));
     setRefreshKey((k) => k + 1);
   }, []);
 
@@ -234,7 +237,8 @@ function DesktopShellInner({ onLock }: Props) {
     refresh().catch((e: unknown) => notify(e instanceof Error ? e.message : String(e), true));
   }, [refresh, notify]);
 
-  async function analyze(text: string) {
+  async function analyze(text: string, projectId: string | null = null) {
+    setPasteTarget(projectId);
     setAnalyzing(true);
     try {
       setAnalysis(await api.analyzePaste(text));
@@ -275,8 +279,6 @@ function DesktopShellInner({ onLock }: Props) {
     }
   }
 
-  const current = projects.find((p) => p.project.id === selected) ?? null;
-
   function badgeValue(kind: BadgeKind): number {
     return kind === "trials" ? trialsCount : attentionCount;
   }
@@ -309,7 +311,16 @@ function DesktopShellInner({ onLock }: Props) {
                     </span>
                     <span className="nav-label">{item.label}</span>
                     {count > 0 && (
-                      <span className={`nav-badge${item.badge === "attention" ? " alert" : ""}`}>
+                      <span
+                        className={`nav-badge${item.badge === "attention" ? " alert" : ""}${
+                          item.badge === "attention" && unidentified > 0 ? " pulse" : ""
+                        }`}
+                        title={
+                          item.badge === "attention" && unidentified > 0
+                            ? `${plural(unidentified, "entry", "entries")} with no email`
+                            : undefined
+                        }
+                      >
                         {count}
                       </span>
                     )}
@@ -330,7 +341,7 @@ function DesktopShellInner({ onLock }: Props) {
 
       <div className="app-main">
         <SmartPasteBar
-          onAnalyze={analyze}
+          onAnalyze={(text) => analyze(text)}
           busy={analyzing}
           extra={
             <button
@@ -352,7 +363,7 @@ function DesktopShellInner({ onLock }: Props) {
           />
         )}
 
-        <div className="content">
+        <div className={`content${view === "ledger" ? " full" : ""}`}>
           {view === "overview" && (
             <OverviewView
               onNotify={notify}
@@ -364,60 +375,17 @@ function DesktopShellInner({ onLock }: Props) {
           )}
 
           {view === "projects" && (
-            <div className="dash">
-              <div className="dash-head">
-                <h1>Projects</h1>
-                <span className="spacer" />
-                <NewProjectForm
-                  onCreated={(id) => {
-                    void refresh();
-                    setSelected(id);
-                  }}
-                  onNotify={notify}
-                />
-              </div>
-              <div className="proj-pane">
-                <nav className="proj-list">
-                  {projects.length === 0 ? (
-                    <p className="muted-p">Nothing yet.</p>
-                  ) : (
-                    projects.map((summary) => (
-                      <button
-                        key={summary.project.id}
-                        type="button"
-                        className={`proj${summary.project.id === selected ? " active" : ""}`}
-                        onClick={() => setSelected(summary.project.id)}
-                      >
-                        <div className="name">{summary.project.name}</div>
-                        <div className="meta">
-                          {plural(summary.secret_count, "secret")}
-                          {summary.service_project_count > 0
-                            ? ` · ${plural(summary.service_project_count, "resource")}`
-                            : ""}
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </nav>
-                <div className="proj-main">
-                  {current ? (
-                    <ProjectVault summary={current} onNotify={notify} onChanged={refresh} />
-                  ) : (
-                    <div className="empty">
-                      <p style={{ margin: 0, fontWeight: 600 }}>No projects yet</p>
-                      <p style={{ marginBottom: 12 }}>
-                        Create one with <strong>+ New project</strong>, or type its name in{" "}
-                        <strong>+ Add</strong>. You can also paste a <code>.env</code> block or a
-                        few lines naming your project, and DevLedger will work out what it can.
-                      </p>
-                      <button type="button" onClick={() => setAddingAnything("project")}>
-                        Add a project
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <Projects
+              projects={projects}
+              openId={selected}
+              onOpen={setSelected}
+              onNotify={notify}
+              onChanged={refresh}
+              refreshKey={refreshKey}
+              onPaste={(text, projectId) => void analyze(text, projectId)}
+              analyzing={analyzing}
+              onAdd={(kind) => setAddingAnything(kind)}
+            />
           )}
 
           {view === "ledger" && (
@@ -451,12 +419,20 @@ function DesktopShellInner({ onLock }: Props) {
 
           {view === "secrets" && <SecretsView onNotify={notify} refreshKey={refreshKey} />}
 
-          {view === "attention" && <AttentionView onNotify={notify} refreshKey={refreshKey} />}
+          {view === "attention" && (
+            <AttentionView onNotify={notify} refreshKey={refreshKey} onChanged={refresh} />
+          )}
         </div>
       </div>
 
       {analysis && (
-        <ReviewSheet analysis={analysis} onCancel={cancelReview} onSave={save} saving={saving} />
+        <ReviewSheet
+          analysis={analysis}
+          onCancel={cancelReview}
+          onSave={save}
+          saving={saving}
+          targetProjectId={pasteTarget}
+        />
       )}
 
       {toast && <div className={`toast${toast.bad ? " bad" : ""}`}>{toast.text}</div>}

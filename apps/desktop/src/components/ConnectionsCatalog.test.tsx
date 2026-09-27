@@ -129,14 +129,48 @@ describe("Service catalog", () => {
     expect(onNotify).toHaveBeenCalledWith(expect.stringContaining("not verified"));
   });
 
-  it("lists manual services before the optional automatic connectors", async () => {
+  it("shows Supabase as an ordinary card, with no separate discovery section", async () => {
     renderView();
-    const manual = await screen.findByRole("heading", { name: "Add a service" });
-    const automatic = await screen.findByRole("heading", {
-      name: "Automatic discovery — optional",
+    await screen.findByRole("heading", { name: "Add a service" });
+    expect(screen.queryByRole("heading", { name: /Automatic discovery/ })).not.toBeInTheDocument();
+
+    const supabase = catalogCard("Supabase");
+    expect(within(supabase).getByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(within(supabase).getByText("DevLedger only reads")).toBeInTheDocument();
+    // Its logo is drawn from the bundled icon set, not fetched.
+    expect(within(supabase).getByRole("img", { name: "Supabase" })).toBeInTheDocument();
+  });
+
+  it("files a catalog service under its own name, never under the label typed", async () => {
+    const user = userEvent.setup();
+    const { onNotify } = renderView();
+    mocked.createAccountForEmail.mockResolvedValue({
+      id: "account-3",
+      identity_id: "identity-1",
+      provider: "other:Resend",
+      external_ref: null,
+      label: "test@example.com",
+      login_email: null,
+      username: null,
+      url: null,
+      notes: null,
+      created_at: "2026-09-27T10:00:00Z",
     });
-    // DOCUMENT_POSITION_FOLLOWING: the automatic section comes after.
-    expect(manual.compareDocumentPosition(automatic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByRole("heading", { name: "Add a service" });
+    await user.click(within(catalogCard("Resend")).getByRole("button", { name: "+ Add" }));
+    await user.click(screen.getByRole("tab", { name: "Manual Connection" }));
+    await user.type(screen.getByLabelText("Account email"), "test@example.com");
+    await user.click(screen.getByRole("button", { name: "Save account" }));
+
+    await waitFor(() =>
+      expect(mocked.createAccountForEmail).toHaveBeenCalledWith(
+        "test@example.com",
+        "other:Resend",
+        "test@example.com",
+        null,
+      ),
+    );
+    expect(onNotify).toHaveBeenCalledWith("Saved Resend account");
   });
 
   it("offers a card for any service that is not listed", async () => {

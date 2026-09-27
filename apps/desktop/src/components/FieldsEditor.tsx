@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "../lib/api";
+import { isHiddenField } from "../lib/skillTree";
 import type { CustomField, EntityRef, SecretOwner } from "../lib/types";
 
 interface Props {
@@ -46,7 +47,9 @@ export default function FieldsEditor({ entity, secretOwner, onNotify, onSecretSt
   const { kind, id } = entity;
   const load = useCallback(async () => {
     try {
-      setFields(await api.customFields({ kind, id }));
+      // A field whose name starts with "_" is DevLedger's own bookkeeping --
+      // the skill tree's categories live in one -- and is not the user's to edit.
+      setFields((await api.customFields({ kind, id })).filter((f) => !isHiddenField(f.label)));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -171,6 +174,11 @@ function FieldForm({
   async function submit() {
     if (busy || !label.trim()) return;
     if (hidden && !value) return;
+    if (isHiddenField(label.trim())) {
+      // It would be saved and then never shown again.
+      onNotify('Field names starting with "_" are reserved for DevLedger.', true);
+      return;
+    }
     setBusy(true);
     try {
       await onSubmit(label.trim(), value, hidden);

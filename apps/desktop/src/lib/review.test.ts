@@ -191,6 +191,32 @@ describe("open questions", () => {
     });
   });
 
+  it("starts on the project the paste was made in, over the recommendation", () => {
+    const inside = "44444444-4444-4444-8444-444444444444";
+    const analysis = analysisFixture({
+      questions: [
+        {
+          id: "project",
+          kind: "which_project",
+          prompt: "Which project?",
+          candidates: [
+            {
+              existing: { kind: "project", id: "33333333-3333-4333-8333-333333333333" },
+              label: "Recommended",
+              reason: "",
+              recommended: true,
+            },
+            { existing: { kind: "project", id: inside }, label: "Open project", reason: "", recommended: false },
+          ],
+          allow_free_text: true,
+          required: true,
+        },
+      ],
+    });
+    const answers = buildAnswers(analysis, initialAnswers(analysis, inside));
+    expect(answers[0]!.choice).toEqual({ sort: "existing", entity: { kind: "project", id: inside } });
+  });
+
   it("carries a typed name through as new_named", () => {
     const analysis = analysisFixture();
     const answers = buildAnswers(analysis, {

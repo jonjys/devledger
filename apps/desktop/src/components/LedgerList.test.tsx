@@ -12,7 +12,7 @@ import type {
   ServiceProjectSummary,
   VaultEntry,
 } from "../lib/types";
-import LedgerView from "./LedgerView";
+import LedgerList from "./LedgerList";
 
 vi.mock("../lib/api");
 
@@ -108,7 +108,7 @@ beforeEach(() => {
 function renderLedger() {
   const onNotify = vi.fn();
   const onChanged = vi.fn();
-  render(<LedgerView onNotify={onNotify} onChanged={onChanged} />);
+  render(<LedgerList onNotify={onNotify} onChanged={onChanged} />);
   return { onNotify, onChanged };
 }
 

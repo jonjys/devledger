@@ -114,10 +114,26 @@ export interface AnswerState {
   freeText: string;
 }
 
-/** The answer each question starts on: its recommended candidate, if any. */
-export function initialAnswers(analysis: PasteAnalysis): Record<string, AnswerState> {
+/**
+ * The answer each question starts on: its recommended candidate, if any.
+ *
+ * With `targetProjectId` -- a paste made inside a project -- "which project?"
+ * starts on that project when it is one of the candidates.
+ */
+export function initialAnswers(
+  analysis: PasteAnalysis,
+  targetProjectId: string | null = null,
+): Record<string, AnswerState> {
   const state: Record<string, AnswerState> = {};
   for (const question of analysis.questions) {
+    const target =
+      targetProjectId && question.kind === "which_project"
+        ? question.candidates.findIndex((c) => c.existing?.id === targetProjectId)
+        : -1;
+    if (target >= 0) {
+      state[question.id] = { selection: target, freeText: "" };
+      continue;
+    }
     const recommended = question.candidates.findIndex((c) => c.recommended);
     state[question.id] = {
       // With no candidate to recommend, an optional question starts at

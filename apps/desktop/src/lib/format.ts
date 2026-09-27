@@ -1,5 +1,6 @@
 // Display helpers. Nothing here ever receives a secret value.
 
+import { providerForName } from "./providers";
 import type { Environment, KnownProvider, Provider, SecretKind, Severity } from "./types";
 
 // Human-readable provider names, keyed by the canonical tag that crosses IPC.
@@ -40,32 +41,18 @@ export function isCustomProvider(provider: Provider | string): boolean {
 /**
  * The provider tag for what a user typed as a service name.
  *
- * Mirrors the backend's `Provider::from_user_input`: a name DevLedger knows, in
- * any case, becomes that provider, so typing "Supabase" by hand and connecting
- * through the connector land on the same thing. Anything else is `other:<name>`.
+ * A name DevLedger knows, in any case or by an alias ("Claude" for Anthropic),
+ * becomes that provider, so typing "Supabase" by hand and connecting through the
+ * connector land on the same thing. Anything else is `other:<name>`. The
+ * registry in `providers.ts` is the one list of what DevLedger knows.
  */
 export function providerFromInput(text: string): Provider {
-  const trimmed = text.trim();
-  if (!trimmed) return "unknown";
-  const lowered = trimmed.toLowerCase();
-  const aliases: Record<string, KnownProvider> = {
-    supabase: "supabase",
-    postgres: "postgres",
-    postgresql: "postgres",
-    github: "github",
-    git_hub: "github",
-    stripe: "stripe",
-    openai: "openai",
-    open_ai: "openai",
-    aws: "aws",
-    "amazon web services": "aws",
-    vercel: "vercel",
-    anthropic: "anthropic",
-  };
-  return aliases[lowered] ?? `other:${trimmed}`;
+  return providerForName(text);
 }
 
 const SECRET_KIND_LABELS: Record<SecretKind, string> = {
+  git_hub_token: "GitHub token",
+  open_ai_api_key: "OpenAI API key",
   supabase_anon_key: "Supabase anon key",
   supabase_service_role_key: "Supabase service_role key",
   postgres_connection_string: "Postgres connection string",
@@ -80,8 +67,18 @@ const SECRET_KIND_LABELS: Record<SecretKind, string> = {
   env_var: "Environment variable",
 };
 
+const SECRET_KIND_ALIASES: Partial<Record<SecretKind, SecretKind>> = {
+  git_hub_token: "github_token",
+  open_ai_api_key: "openai_api_key",
+};
+
+/** The canonical spelling of a secret kind, whichever one the backend sent. */
+export function normalizeSecretKind(kind: SecretKind): SecretKind {
+  return SECRET_KIND_ALIASES[kind] ?? kind;
+}
+
 export function secretKindLabel(kind: SecretKind | null): string {
-  return kind ? SECRET_KIND_LABELS[kind] : "Value";
+  return kind ? SECRET_KIND_LABELS[normalizeSecretKind(kind)] : "Value";
 }
 
 export function environmentLabel(environment: Environment): string {

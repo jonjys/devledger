@@ -57,12 +57,15 @@ export default function OverviewView({
         api.listProjects(),
         api.identityGraph(),
         api.listSubscriptions(),
-        api.recentAudit(8),
+        // Fetch extra: DevLedger's own bookkeeping is dropped below.
+        api.recentAudit(40),
       ]);
       setProjects(p);
       setIdentities(g);
       setSubs(s);
-      setAudit(a);
+      // The skill tree saves its categories in a hidden field on every change.
+      // That is housekeeping, not something the user did to their ledger.
+      setAudit(a.filter((e) => !/\bfield _/.test(e.detail)).slice(0, 8));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {

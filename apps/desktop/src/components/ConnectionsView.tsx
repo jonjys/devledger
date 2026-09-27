@@ -12,6 +12,7 @@ import {
 } from "../lib/connections";
 import { formatTime, plural } from "../lib/format";
 import { useMode } from "../lib/mode";
+import { catalogProviders, providerInfo, type ProviderInfo } from "../lib/providers";
 import type {
   ConnectionSummary,
   ConnectorDescriptor,
@@ -23,6 +24,7 @@ import type {
 import { MATCH_STATUS_LABEL } from "../lib/types";
 
 import Modal from "./Modal";
+import ProviderIcon from "./ProviderIcon";
 
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
@@ -31,119 +33,25 @@ interface Props {
   onAddOther?: () => void;
 }
 
-/** A service in the catalog that has no live connector — added by hand. */
-interface CatalogEntry {
-  provider: Provider;
-  name: string;
-  summary: string;
-  keyPlaceholder: string;
-}
-
-/**
- * Services DevLedger knows how to file by hand. These have no automatic
- * connector yet, so both tabs of the modal save a manual account rather than
- * reading from the provider. Supabase is intentionally absent: it has a real
- * connector and appears in its own section above.
- */
-const CATALOG: CatalogEntry[] = [
-  {
-    provider: "github",
-    name: "GitHub",
-    summary: "Repositories, tokens and webhooks.",
-    keyPlaceholder: "ghp_…",
-  },
-  {
-    provider: "vercel",
-    name: "Vercel",
-    summary: "Deployments and project settings.",
-    keyPlaceholder: "vercel token",
-  },
-  {
-    provider: "stripe",
-    name: "Stripe",
-    summary: "Billing, customers and payouts.",
-    keyPlaceholder: "sk_live_…",
-  },
-  {
-    provider: "openai",
-    name: "OpenAI",
-    summary: "API usage and keys.",
-    keyPlaceholder: "sk-…",
-  },
-  {
-    provider: "anthropic",
-    name: "Anthropic",
-    summary: "Claude API keys and usage.",
-    keyPlaceholder: "sk-ant-…",
-  },
-  {
-    provider: "aws",
-    name: "AWS",
-    summary: "Access keys and services.",
-    keyPlaceholder: "AKIA…",
-  },
-  {
-    provider: "postgres",
-    name: "Neon",
-    summary: "Serverless Postgres and connection strings.",
-    keyPlaceholder: "postgresql://…",
-  },
-  {
-    provider: "unknown",
-    name: "Cloudflare",
-    summary: "DNS, workers and API tokens.",
-    keyPlaceholder: "cf token",
-  },
-  {
-    provider: "unknown",
-    name: "Netlify",
-    summary: "Sites and deploy keys.",
-    keyPlaceholder: "nfp_…",
-  },
-  {
-    provider: "unknown",
-    name: "Firebase",
-    summary: "Projects and service accounts.",
-    keyPlaceholder: "service account",
-  },
-  {
-    provider: "unknown",
-    name: "Railway",
-    summary: "Projects and deploy tokens.",
-    keyPlaceholder: "railway token",
-  },
-  {
-    provider: "unknown",
-    name: "Render",
-    summary: "Services and API keys.",
-    keyPlaceholder: "rnd_…",
-  },
-  {
-    provider: "unknown",
-    name: "Sentry", // catalog-only
-    summary: "Projects and auth tokens.",
-    keyPlaceholder: "sntrys_…",
-  },
-  {
-    provider: "unknown",
-    name: "Resend",
-    summary: "Sending domains and API keys.",
-    keyPlaceholder: "re_…",
-  },
-];
-
 /** What the unified Add / Connect modal is currently opened for. */
 type ModalTarget =
   | { kind: "connector"; connector: ConnectorDescriptor }
-  | { kind: "catalog"; entry: CatalogEntry };
+  | { kind: "catalog"; entry: ProviderInfo };
+
+/** One card in the grid: a service, and its reader if DevLedger has one. */
+interface Card {
+  info: ProviderInfo;
+  connector: ConnectorDescriptor | null;
+}
 
 /**
  * Services / Connections.
  *
- * The second way information reaches DevLedger: instead of pasting, you connect
- * a provider account (read-only, over the network) or record one by hand.
- * Everything here is explicit — a request only happens because a button was
- * pressed, and nothing reaches the graph until it is confirmed.
+ * Every service is a card, and every card can be added by hand. Supabase is a
+ * card like the rest; it just also has a reader behind its button, which asks
+ * for a token and reads the account's structure. A request only happens
+ * because that button was pressed, and nothing reaches the graph until the
+ * review is confirmed.
  */
 export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Props) {
   const { dev } = useMode();
@@ -177,7 +85,7 @@ export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Pro
     void load();
   }, [load]);
 
-  // How many accounts already exist per provider, so a catalog card can say so.
+  // How many accounts already exist per provider, so a card can say so.
   const accountsByProvider = useMemo(() => {
     const counts = new Map<Provider, number>();
     for (const identity of graph) {
@@ -187,6 +95,30 @@ export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Pro
     }
     return counts;
   }, [graph]);
+
+  // The catalog, with each connector attached to its service's card. A
+  // connector for a service the catalog does not list still gets a card.
+  const cards = useMemo<Card[]>(() => {
+    const list: Card[] = catalogProviders().map((info) => ({
+      info,
+      connector: connectors.find((c) => c.provider === info.provider) ?? null,
+    }));
+    for (const connector of connectors) {
+      if (!list.some((card) => card.connector?.id === connector.id)) {
+        list.unshift({
+          info: providerInfo(connector.provider) ?? {
+            provider: connector.provider,
+            name: connector.display_name,
+            summary: connector.summary,
+            keyPlaceholder: "",
+            icon: null,
+          },
+          connector,
+        });
+      }
+    }
+    return list;
+  }, [connectors]);
 
   async function refresh(connectionId: string) {
     setBusy(true);
@@ -223,36 +155,65 @@ export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Pro
         <div>
           <h1>Services &amp; connections</h1>
           <div className="sub">
-            Add any service by hand. For some providers DevLedger can also read your
-            structure automatically; it only ever reads, and nothing is saved until you review
-            it.
+            Add any service by hand — nothing here needs a token. Where a card says{" "}
+            <strong>Connect</strong>, DevLedger can also read the account&apos;s structure for you;
+            it only ever reads, and nothing is saved until you review it.
           </div>
         </div>
       </div>
 
       <section className="section catalog">
         <h3>Add a service</h3>
-        <p className="muted catalog-intro">
-          By hand, for any service. Nothing here needs a token or a connection.
-        </p>
         <div className="catalog-grid">
-          {CATALOG.map((entry) => {
-            const count = accountsByProvider.get(entry.provider) ?? 0;
+          {cards.map(({ info, connector }) => {
+            const count = accountsByProvider.get(info.provider) ?? 0;
+            const linked = connector ? (grouped.get(connector.id) ?? []) : [];
             return (
-              <div key={entry.name} className="catalog-card">
+              <div key={info.provider} className="catalog-card">
                 <div className="catalog-head">
-                  <span className="catalog-name">{entry.name}</span>
-                  {dev && <code className="ref">{entry.provider}</code>}
+                  <ProviderIcon provider={info.provider} size={18} />
+                  <span className="catalog-name">{info.name}</span>
+                  {dev && <code className="ref">{info.provider}</code>}
+                  {connector?.read_only && (
+                    // This describes what DevLedger does, not what the token can
+                    // do. DevLedger cannot inspect a token's permissions, so it
+                    // must not imply the token itself is limited.
+                    <span
+                      className="tag explicit"
+                      title="DevLedger only sends read requests. It cannot see what your token is allowed to do — limit that when you create the token."
+                    >
+                      DevLedger only reads
+                    </span>
+                  )}
                 </div>
-                <p className="catalog-summary">{entry.summary}</p>
+                <p className="catalog-summary">{connector?.summary ?? info.summary}</p>
                 <div className="catalog-foot">
                   <span className="catalog-count">
-                    {count === 0 ? "Not added yet." : plural(count, "account")}
+                    {count === 0 && linked.length === 0
+                      ? connector
+                        ? "No accounts connected yet."
+                        : "Not added yet."
+                      : [
+                          count > 0 ? plural(count, "account") : null,
+                          connector && linked.length > 0
+                            ? `${linked.length} connected`
+                            : connector
+                              ? "none connected"
+                              : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                   </span>
                   <span className="spacer" />
-                  <button type="button" onClick={() => setModal({ kind: "catalog", entry })}>
-                    + Add
-                  </button>
+                  {connector ? (
+                    <button type="button" onClick={() => setModal({ kind: "connector", connector })}>
+                      {linked.length === 0 ? "Connect" : "+ Connect another account"}
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => setModal({ kind: "catalog", entry: info })}>
+                      + Add
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -274,97 +235,64 @@ export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Pro
         </div>
       </section>
 
-      {connectors.length > 0 && (
-        <section className="section discovery">
-          <h3>Automatic discovery — optional</h3>
-          <p className="muted catalog-intro">
-            For some providers DevLedger can read your organizations and projects instead of
-            you typing them. Everything above works without it.
-          </p>
-      {connectors.map((connector) => {
-        const existing = grouped.get(connector.id) ?? [];
-        return (
-          <section key={connector.id} className="connector">
-            <div className="connector-head">
-              <span className="connector-name">{connector.display_name}</span>
-              {connector.read_only && (
-                // This describes what DevLedger does, not what the token can do.
-                // DevLedger has no way to inspect a token's permissions, so it
-                // must not imply the token itself is limited.
-                <span
-                  className="tag explicit"
-                  title="DevLedger only sends read requests. It cannot see what your token is allowed to do — limit that when you create the token."
-                >
-                  DevLedger only reads
-                </span>
-              )}
-              <span className="spacer" />
-              <button type="button" onClick={() => setModal({ kind: "connector", connector })}>
-                {existing.length === 0 ? "Connect" : "+ Connect another account"}
-              </button>
-            </div>
-            <p className="connector-summary">{connector.summary}</p>
-
-            {existing.length === 0 ? (
-              <p className="connector-empty">No accounts connected yet.</p>
-            ) : (
-              existing.map((summary) => (
-                <div key={summary.connection.id} className="connection">
-                  <div className="map-head">
-                    <span className="map-kind">Account</span>
-                    <span className="map-name">{summary.connection.label}</span>
-                    {summary.identity_email &&
-                      summary.identity_email !== summary.connection.label && (
-                        <span className="map-meta">{summary.identity_email}</span>
-                      )}
-                  </div>
-                  <div className="connection-meta">
-                    {plural(summary.organization_count, "organization")} ·{" "}
-                    {plural(summary.resource_count, "project")} · Last checked:{" "}
-                    {summary.connection.last_checked_at
-                      ? formatTime(summary.connection.last_checked_at)
-                      : "never"}
-                  </div>
-                  <div className="connection-actions">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => refresh(summary.connection.id)}
-                    >
-                      {busy ? "Checking…" : "Refresh"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={async () => {
-                        try {
-                          setReview(await api.connectorReport(summary.connection.id));
-                        } catch (e: unknown) {
-                          onNotify(e instanceof Error ? e.message : String(e), true);
-                        }
-                      }}
-                    >
-                      Review import
-                    </button>
-                    <button
-                      type="button"
-                      className="danger"
-                      disabled={busy}
-                      onClick={() => disconnect(summary)}
-                    >
-                      Disconnect
-                    </button>
-                  </div>
+      {connections.length > 0 && (
+        <section className="section">
+          <h3>Connected accounts</h3>
+          {connections.map((summary) => {
+            const connector = connectors.find((c) => c.id === summary.connection.connector_id);
+            return (
+              <div key={summary.connection.id} className="connection">
+                <div className="map-head">
+                  {connector && <ProviderIcon provider={connector.provider} size={16} />}
+                  <span className="map-kind">{connector?.display_name ?? "Account"}</span>
+                  <span className="map-name">{summary.connection.label}</span>
+                  {summary.identity_email &&
+                    summary.identity_email !== summary.connection.label && (
+                      <span className="map-meta">{summary.identity_email}</span>
+                    )}
                 </div>
-              ))
-            )}
-          </section>
-        );
-      })}
-
+                <div className="connection-meta">
+                  {plural(summary.organization_count, "organization")} ·{" "}
+                  {plural(summary.resource_count, "project")} · Last checked:{" "}
+                  {summary.connection.last_checked_at
+                    ? formatTime(summary.connection.last_checked_at)
+                    : "never"}
+                </div>
+                <div className="connection-actions">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => refresh(summary.connection.id)}
+                  >
+                    {busy ? "Checking…" : "Refresh"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      try {
+                        setReview(await api.connectorReport(summary.connection.id));
+                      } catch (e: unknown) {
+                        onNotify(e instanceof Error ? e.message : String(e), true);
+                      }
+                    }}
+                  >
+                    Review import
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => disconnect(summary)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </section>
       )}
-
 
       {modal && (
         <ServiceModal
@@ -580,9 +508,8 @@ function ServiceModal({
               </ol>
             ) : (
               <div className="note">
-                DevLedger does not have an automatic connector for {displayName} yet, so it
-                cannot fetch from it. The key below is not stored — the account is saved so
-                you can track it, and you can add its resources by hand from the Map.
+                DevLedger cannot read {displayName} for you, so it cannot check this key.
+                It is stored encrypted on the new account, exactly as you enter it.
               </div>
             )}
 
