@@ -344,10 +344,17 @@ pub enum SecretKind {
     /// JWT signing secret.
     JwtSecret,
     /// GitHub personal access token.
+    ///
+    /// `rename_all = "snake_case"` splits GitHub into `git_hub_token`, which is
+    /// not what the database or the frontend call it. The wire name is pinned to
+    /// `github_token`; the old spelling is still accepted inbound.
+    #[serde(rename = "github_token", alias = "git_hub_token")]
     GitHubToken,
     /// Stripe secret key.
     StripeSecretKey,
-    /// OpenAI API key.
+    /// OpenAI API key. Pinned to `openai_api_key` for the same reason;
+    /// `open_ai_api_key` is still accepted inbound.
+    #[serde(rename = "openai_api_key", alias = "open_ai_api_key")]
     OpenAiApiKey,
     /// AWS access key id (paired with a secret access key).
     AwsAccessKeyId,

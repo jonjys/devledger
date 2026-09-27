@@ -251,9 +251,9 @@ describe("dropping an account", () => {
 });
 
 describe("field colours", () => {
-  it("treats the backend's spelling of a GitHub or OpenAI key as an API key", () => {
-    // serde's snake_case sends git_hub_token and open_ai_api_key; the tree
-    // coloured those as generic secrets.
+  it("treats the old spelling of a GitHub or OpenAI key as an API key", () => {
+    // Older backends sent git_hub_token and open_ai_api_key (serde's
+    // snake_case); the tree coloured those as generic secrets.
     expect(toneFor("git_hub_token")).toBe("api");
     expect(toneFor("open_ai_api_key")).toBe("api");
     expect(toneFor("password")).toBe("password");

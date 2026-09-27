@@ -125,3 +125,51 @@ str_enum!(
     SourceKind::EnvFile => "env_file",
     SourceKind::Manual => "manual",
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{secret_kind_from_str, secret_kind_to_str};
+    use crate::model::SecretKind;
+
+    const ALL: [SecretKind; 12] = [
+        SecretKind::SupabaseAnonKey,
+        SecretKind::SupabaseServiceRoleKey,
+        SecretKind::PostgresConnectionString,
+        SecretKind::JwtSecret,
+        SecretKind::GitHubToken,
+        SecretKind::StripeSecretKey,
+        SecretKind::OpenAiApiKey,
+        SecretKind::AwsAccessKeyId,
+        SecretKind::AwsSecretAccessKey,
+        SecretKind::GenericApiKey,
+        SecretKind::Password,
+        SecretKind::EnvVar,
+    ];
+
+    #[test]
+    fn a_secret_kind_is_spelled_the_same_over_ipc_as_on_disk() {
+        // serde's snake_case once sent `git_hub_token` and `open_ai_api_key`
+        // while the database held `github_token` and `openai_api_key`, and the
+        // UI, which expects the latter, showed those keys with no label.
+        for kind in ALL {
+            let wire = serde_json::to_string(&kind).unwrap();
+            assert_eq!(
+                wire,
+                format!("\"{}\"", secret_kind_to_str(kind)),
+                "{kind:?}"
+            );
+            assert_eq!(
+                secret_kind_from_str(secret_kind_to_str(kind)).unwrap(),
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_wire_spellings_are_still_accepted() {
+        let github: SecretKind = serde_json::from_str("\"git_hub_token\"").unwrap();
+        let openai: SecretKind = serde_json::from_str("\"open_ai_api_key\"").unwrap();
+        assert_eq!(github, SecretKind::GitHubToken);
+        assert_eq!(openai, SecretKind::OpenAiApiKey);
+    }
+}
