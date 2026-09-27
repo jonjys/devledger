@@ -105,4 +105,20 @@ describe("Trials", () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("does not cancel it"));
     expect(mocked.deleteSubscription).not.toHaveBeenCalled();
   });
+
+  it("leaves the skill tree's bookkeeping out of recent activity", async () => {
+    mocked.listProjects.mockResolvedValue([]);
+    mocked.identityGraph.mockResolvedValue([]);
+    mocked.listSubscriptions.mockResolvedValue([]);
+    mocked.recentAudit.mockResolvedValue([
+      { seq: 2, at: "2026-09-27T10:00:00Z", action: "field.update", entity_kind: "field", entity_id: null, detail: "Updated field _skillTreeCategories" },
+      { seq: 1, at: "2026-09-27T09:00:00Z", action: "field.create", entity_kind: "field", entity_id: null, detail: "Added field Customer number" },
+    ]);
+    render(
+      <OverviewView onNotify={vi.fn()} onNavigate={vi.fn()} onChanged={vi.fn()} refreshKey={0} />,
+    );
+
+    expect(await screen.findByText("Added field Customer number")).toBeInTheDocument();
+    expect(screen.queryByText(/_skillTreeCategories/)).toBeNull();
+  });
 });

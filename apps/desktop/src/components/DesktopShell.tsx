@@ -352,7 +352,7 @@ function DesktopShellInner({ onLock }: Props) {
           />
         )}
 
-        <div className="content">
+        <div className={`content${view === "ledger" ? " full" : ""}`}>
           {view === "overview" && (
             <OverviewView
               onNotify={notify}

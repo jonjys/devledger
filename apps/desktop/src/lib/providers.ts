@@ -35,7 +35,7 @@ import {
   siRedis,
   siRender,
   siResend,
-  siSentry,
+  siSentry, // catalog-only: a logo, not an error reporter
   siShopify,
   siStripe,
   siSupabase,
@@ -137,7 +137,7 @@ export const PROVIDERS: ProviderInfo[] = [
   other("Firebase", "Projects and service accounts.", "service account", siFirebase, true),
   other("Railway", "Projects and deploy tokens.", "railway token", siRailway, true),
   other("Render", "Services and API keys.", "rnd_…", siRender, true),
-  other("Sentry", "Projects and auth tokens.", "sntrys_…", siSentry, true),
+  other("Sentry", "Projects and auth tokens.", "sntrys_…", siSentry, true), // catalog-only
   other("Clerk", "Authentication keys.", "sk_…", siClerk),
   other("Upstash", "Redis and queues.", "token", siUpstash),
   other("PlanetScale", "MySQL databases.", "pscale_…", siPlanetscale),

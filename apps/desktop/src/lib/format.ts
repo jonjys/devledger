@@ -51,6 +51,8 @@ export function providerFromInput(text: string): Provider {
 }
 
 const SECRET_KIND_LABELS: Record<SecretKind, string> = {
+  git_hub_token: "GitHub token",
+  open_ai_api_key: "OpenAI API key",
   supabase_anon_key: "Supabase anon key",
   supabase_service_role_key: "Supabase service_role key",
   postgres_connection_string: "Postgres connection string",
@@ -65,8 +67,18 @@ const SECRET_KIND_LABELS: Record<SecretKind, string> = {
   env_var: "Environment variable",
 };
 
+const SECRET_KIND_ALIASES: Partial<Record<SecretKind, SecretKind>> = {
+  git_hub_token: "github_token",
+  open_ai_api_key: "openai_api_key",
+};
+
+/** The canonical spelling of a secret kind, whichever one the backend sent. */
+export function normalizeSecretKind(kind: SecretKind): SecretKind {
+  return SECRET_KIND_ALIASES[kind] ?? kind;
+}
+
 export function secretKindLabel(kind: SecretKind | null): string {
-  return kind ? SECRET_KIND_LABELS[kind] : "Value";
+  return kind ? SECRET_KIND_LABELS[normalizeSecretKind(kind)] : "Value";
 }
 
 export function environmentLabel(environment: Environment): string {

@@ -92,3 +92,10 @@ describe("provider names from the registry", () => {
     expect(providerFromInput("cloudflare")).toBe("other:Cloudflare");
   });
 });
+
+describe("secret kinds as the backend spells them", () => {
+  it("labels git_hub_token and open_ai_api_key like their canonical spellings", () => {
+    expect(secretKindLabel("git_hub_token")).toBe("GitHub token");
+    expect(secretKindLabel("open_ai_api_key")).toBe("OpenAI API key");
+  });
+});
