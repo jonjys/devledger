@@ -1168,3 +1168,14 @@ select {
   padding-right: 28px !important;
 }
 select option { background: var(--panel); color: var(--text); }
+
+/* --- provider logos ------------------------------------------------------ */
+
+.provider-icon { flex: none; display: inline-block; vertical-align: middle; }
+.provider-icon.monogram {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--text-faint);
+  color: var(--text-dim); font-weight: 700; line-height: 1;
+}
+.catalog-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.connection .map-head { display: flex; align-items: center; gap: 8px; }

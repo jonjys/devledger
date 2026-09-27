@@ -16,7 +16,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "simple-icons": "^16.33.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

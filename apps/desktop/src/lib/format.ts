@@ -1,5 +1,6 @@
 // Display helpers. Nothing here ever receives a secret value.
 
+import { providerForName } from "./providers";
 import type { Environment, KnownProvider, Provider, SecretKind, Severity } from "./types";
 
 // Human-readable provider names, keyed by the canonical tag that crosses IPC.
@@ -40,29 +41,13 @@ export function isCustomProvider(provider: Provider | string): boolean {
 /**
  * The provider tag for what a user typed as a service name.
  *
- * Mirrors the backend's `Provider::from_user_input`: a name DevLedger knows, in
- * any case, becomes that provider, so typing "Supabase" by hand and connecting
- * through the connector land on the same thing. Anything else is `other:<name>`.
+ * A name DevLedger knows, in any case or by an alias ("Claude" for Anthropic),
+ * becomes that provider, so typing "Supabase" by hand and connecting through the
+ * connector land on the same thing. Anything else is `other:<name>`. The
+ * registry in `providers.ts` is the one list of what DevLedger knows.
  */
 export function providerFromInput(text: string): Provider {
-  const trimmed = text.trim();
-  if (!trimmed) return "unknown";
-  const lowered = trimmed.toLowerCase();
-  const aliases: Record<string, KnownProvider> = {
-    supabase: "supabase",
-    postgres: "postgres",
-    postgresql: "postgres",
-    github: "github",
-    git_hub: "github",
-    stripe: "stripe",
-    openai: "openai",
-    open_ai: "openai",
-    aws: "aws",
-    "amazon web services": "aws",
-    vercel: "vercel",
-    anthropic: "anthropic",
-  };
-  return aliases[lowered] ?? `other:${trimmed}`;
+  return providerForName(text);
 }
 
 const SECRET_KIND_LABELS: Record<SecretKind, string> = {

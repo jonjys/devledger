@@ -84,3 +84,11 @@ describe("secret rows", () => {
     expect(secretKindColumn("stripe_secret_key", "stripe", false)).toBe("Stripe");
   });
 });
+
+describe("provider names from the registry", () => {
+  it("files a known service by its alias and a catalog service by its own name", () => {
+    expect(providerFromInput("Claude")).toBe("anthropic");
+    expect(providerFromInput("resend")).toBe("other:Resend");
+    expect(providerFromInput("cloudflare")).toBe("other:Cloudflare");
+  });
+});
