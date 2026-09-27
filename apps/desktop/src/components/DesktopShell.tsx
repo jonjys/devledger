@@ -12,6 +12,7 @@ import MapView from "./MapView";
 import StackGraphView from "./StackGraphView";
 import NewProjectForm from "./NewProjectForm";
 import OverviewView from "./OverviewView";
+import AddAnythingDialog, { type WordKind } from "./AddAnythingDialog";
 import LedgerView from "./LedgerView";
 import ProjectVault from "./ProjectVault";
 import ReviewSheet from "./ReviewSheet";
@@ -205,6 +206,8 @@ function DesktopShellInner({ onLock }: Props) {
   const [attentionCount, setAttentionCount] = useState(0);
   const [trialsCount, setTrialsCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // false = closed; true = open with nothing chosen; a kind = open with it chosen.
+  const [addingAnything, setAddingAnything] = useState<WordKind | boolean>(false);
 
   const notify = useCallback((text: string, bad = false) => {
     setToast({ text, bad });
@@ -326,7 +329,28 @@ function DesktopShellInner({ onLock }: Props) {
       </aside>
 
       <div className="app-main">
-        <SmartPasteBar onAnalyze={analyze} busy={analyzing} />
+        <SmartPasteBar
+          onAnalyze={analyze}
+          busy={analyzing}
+          extra={
+            <button
+              type="button"
+              className="add-anything-btn"
+              onClick={() => setAddingAnything(true)}
+              title="Type a word and say what it is: project, email, username, password…"
+            >
+              + Add
+            </button>
+          }
+        />
+        {addingAnything && (
+          <AddAnythingDialog
+            initialKind={typeof addingAnything === "string" ? addingAnything : undefined}
+            onClose={() => setAddingAnything(false)}
+            onDone={() => void refresh()}
+            onNotify={notify}
+          />
+        )}
 
         <div className="content">
           {view === "overview" && (
@@ -335,6 +359,7 @@ function DesktopShellInner({ onLock }: Props) {
               onNavigate={(v) => setView(v as View)}
               onChanged={refresh}
               refreshKey={refreshKey}
+              onAdd={(kind) => setAddingAnything(kind)}
             />
           )}
 
@@ -379,11 +404,15 @@ function DesktopShellInner({ onLock }: Props) {
                     <ProjectVault summary={current} onNotify={notify} onChanged={refresh} />
                   ) : (
                     <div className="empty">
-                      <p style={{ margin: 0, fontWeight: 600 }}>Your ledger is empty</p>
-                      <p style={{ marginBottom: 0 }}>
-                        Paste a <code>.env</code> block, a Supabase URL, or a few lines naming
-                        your project, organization and email to get started.
+                      <p style={{ margin: 0, fontWeight: 600 }}>No projects yet</p>
+                      <p style={{ marginBottom: 12 }}>
+                        Create one with <strong>+ New project</strong>, or type its name in{" "}
+                        <strong>+ Add</strong>. You can also paste a <code>.env</code> block or a
+                        few lines naming your project, and DevLedger will work out what it can.
                       </p>
+                      <button type="button" onClick={() => setAddingAnything("project")}>
+                        Add a project
+                      </button>
                     </div>
                   )}
                 </div>
@@ -408,7 +437,13 @@ function DesktopShellInner({ onLock }: Props) {
             <StackGraphView projects={projects} onNotify={notify} onChanged={refresh} />
           )}
 
-          {view === "connections" && <ConnectionsView onNotify={notify} onChanged={refresh} />}
+          {view === "connections" && (
+            <ConnectionsView
+              onNotify={notify}
+              onChanged={refresh}
+              onAddOther={() => setAddingAnything("service")}
+            />
+          )}
 
           {view === "subscriptions" && (
             <SubscriptionsView onNotify={notify} onChanged={refresh} />

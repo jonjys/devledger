@@ -124,3 +124,29 @@ export function plural(count: number, singular: string, pluralForm?: string): st
   const word = count === 1 ? singular : (pluralForm ?? `${singular}s`);
   return `${count} ${word}`;
 }
+
+/** Kinds whose label is generic, so a secret's own name is what tells it apart. */
+const GENERIC_SECRET_KINDS = new Set<SecretKind>(["env_var", "generic_api_key", "password"]);
+
+/**
+ * The headline and sub-line for a secret row.
+ *
+ * Indie mode leads with a friendly kind ("Stripe secret key") where the kind
+ * says something. Where it does not -- a row of "Environment variable"s, or
+ * several "Password"s -- the name leads instead, because otherwise the rows are
+ * indistinguishable.
+ */
+export function secretHeadline(
+  kind: SecretKind,
+  name: string,
+  dev: boolean,
+): { title: string; sub: string | null } {
+  if (dev || GENERIC_SECRET_KINDS.has(kind)) return { title: name, sub: null };
+  return { title: secretKindLabel(kind), sub: name };
+}
+
+/** What the Kind column shows: the provider when known, never the word "Unknown". */
+export function secretKindColumn(kind: SecretKind, provider: Provider, dev: boolean): string {
+  if (dev || provider === "unknown") return secretKindLabel(kind);
+  return providerLabel(provider);
+}

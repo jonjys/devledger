@@ -24,9 +24,9 @@ use crate::crypto::{self, aead, LABEL_BLIND_INDEX, LABEL_SECRET_AEAD};
 use crate::error::{CoreError, Result};
 use crate::manual;
 use crate::model::{
-    Account, BillingInterval, EntityKind, EntityRef, Environment, Evidence, EvidenceLevel,
-    Identity, IdentityEmail, Organization, Project, Provider, Relation, RelationKind, SecretKind,
-    SecretRecord, ServiceProject, Subscription, SubscriptionStatus,
+    Account, BillingInterval, CustomField, EntityKind, EntityRef, Environment, Evidence,
+    EvidenceLevel, Identity, IdentityEmail, Organization, Project, Provider, Relation,
+    RelationKind, SecretKind, SecretRecord, ServiceProject, Subscription, SubscriptionStatus,
 };
 use crate::paste::pipeline::{self, MatchLookup, PasteAnalysis, StagedSecrets};
 use crate::paste::review::{
@@ -1183,11 +1183,7 @@ impl Vault {
         if trimmed.is_empty() {
             return Err(CoreError::Invalid("an account needs a label".into()));
         }
-        if provider == Provider::Unknown {
-            return Err(CoreError::Invalid(
-                "name the service this account is with".into(),
-            ));
-        }
+        let provider = Self::named_provider(provider, trimmed);
         let details = AccountDetails {
             login_email: match details.login_email.as_deref().map(str::trim) {
                 Some(raw) if !raw.is_empty() => Some(manual::normalize_email(raw)?),
@@ -1243,9 +1239,26 @@ impl Vault {
             return Err(CoreError::Invalid("an account needs a label".into()));
         }
         let note = note.map(str::trim).filter(|n| !n.is_empty());
+        let provider = Self::named_provider(provider, trimmed);
         self.unlocked()?
             .store
             .create_account(identity_id, &provider, note, trimmed)
+    }
+
+    /// The provider an explicit "add account" really means.
+    ///
+    /// The quick-add dialog's "Custom / other" choice sends `unknown` with the
+    /// service's name as the label. That is not an unattributable credential,
+    /// it is a service DevLedger has no built-in knowledge of -- so it becomes
+    /// [`Provider::Other`] named after the label, which also keeps Cloudflare
+    /// and Netlify apart instead of both filed as "unknown".
+    fn named_provider(provider: Provider, label: &str) -> Provider {
+        match provider {
+            Provider::Unknown if !label.trim().is_empty() => {
+                Provider::Other(label.trim().to_string())
+            }
+            other => other,
+        }
     }
 
     /// The account something implicit should be filed under, if that is knowable.
@@ -1691,6 +1704,73 @@ impl Vault {
         Ok(out)
     }
 
+    /// Every secret in the vault, metadata only, with what each belongs to.
+    pub fn list_all_secrets(&self) -> Result<Vec<crate::store::SecretListing>> {
+        self.unlocked()?.store.list_all_secrets()
+    }
+
+    /// Longest label a custom field accepts.
+    pub const FIELD_LABEL_MAX: usize = 80;
+    /// Longest value a custom field accepts. Longer text belongs in notes.
+    pub const FIELD_VALUE_MAX: usize = 4000;
+
+    /// Attach a field the user named to a person, account, project or resource.
+    pub fn add_custom_field(
+        &self,
+        entity: &EntityRef,
+        label: &str,
+        value: &str,
+    ) -> Result<CustomField> {
+        let (label, value) = Self::clean_field(label, value)?;
+        let inner = self.unlocked()?;
+        if !inner.store.entity_exists(entity)? {
+            return Err(CoreError::NotFound(format!(
+                "{:?} {}",
+                entity.kind, entity.id
+            )));
+        }
+        inner.store.create_custom_field(entity, &label, &value)
+    }
+
+    /// Change a field's label or value.
+    pub fn update_custom_field(&self, id: Uuid, label: &str, value: &str) -> Result<()> {
+        let (label, value) = Self::clean_field(label, value)?;
+        self.unlocked()?
+            .store
+            .update_custom_field(id, &label, &value)
+    }
+
+    /// Remove a field.
+    pub fn delete_custom_field(&self, id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_custom_field(id)
+    }
+
+    /// Every field attached to an entity, in display order.
+    pub fn custom_fields(&self, entity: &EntityRef) -> Result<Vec<CustomField>> {
+        self.unlocked()?.store.custom_fields_for(entity)
+    }
+
+    fn clean_field(label: &str, value: &str) -> Result<(String, String)> {
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(CoreError::Invalid("a field needs a name".into()));
+        }
+        if label.chars().count() > Self::FIELD_LABEL_MAX {
+            return Err(CoreError::Invalid(format!(
+                "a field name can be at most {} characters",
+                Self::FIELD_LABEL_MAX
+            )));
+        }
+        let value = value.trim();
+        if value.chars().count() > Self::FIELD_VALUE_MAX {
+            return Err(CoreError::Invalid(format!(
+                "a field value can be at most {} characters",
+                Self::FIELD_VALUE_MAX
+            )));
+        }
+        Ok((label.to_string(), value.to_string()))
+    }
+
     /// How much a project delete would take with it.
     ///
     /// Deleting cascades to the secrets filed directly against the project.
@@ -1701,6 +1781,13 @@ impl Vault {
             secrets_deleted: inner.store.secrets_owned_directly(project_id)?,
             resources_unlinked: inner.store.service_projects_for_project(project_id)?.len() as i64,
         })
+    }
+
+    /// The open store, so an integration test can assert on the tables
+    /// directly. Not for application code.
+    #[doc(hidden)]
+    pub fn store_for_test(&self) -> Result<&Store> {
+        Ok(&self.unlocked()?.store)
     }
 
     /// Attempt to rewrite the audit log. Always fails; exists so the

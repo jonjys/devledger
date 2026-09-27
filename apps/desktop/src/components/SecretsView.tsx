@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "../lib/api";
-import { formatTime, plural, providerLabel, secretKindLabel } from "../lib/format";
+import {
+  environmentName,
+  formatTime,
+  plural,
+  secretHeadline,
+  secretKindColumn,
+} from "../lib/format";
 import { useMode } from "../lib/mode";
 import type { VaultEntry } from "../lib/types";
 
@@ -15,7 +21,7 @@ interface Row {
   projectName: string;
 }
 
-/** Every secret across every project, in one flat vault table. */
+/** Every secret in the vault -- on projects, resources and accounts -- in one table. */
 export default function SecretsView({ onNotify, refreshKey }: Props) {
   const { dev } = useMode();
   const [rows, setRows] = useState<Row[]>([]);
@@ -26,19 +32,10 @@ export default function SecretsView({ onNotify, refreshKey }: Props) {
     setLoading(true);
     setRevealed({});
     try {
-      const projects = await api.listProjects();
-      const seen = new Set<string>();
-      const collected: Row[] = [];
-      for (const p of projects) {
-        const entries = await api.listSecrets(p.project.id);
-        for (const entry of entries) {
-          if (seen.has(entry.secret.id)) continue;
-          seen.add(entry.secret.id);
-          collected.push({ entry, projectName: p.project.name });
-        }
-      }
-      collected.sort((a, b) => a.entry.secret.name.localeCompare(b.entry.secret.name));
-      setRows(collected);
+      // One call for the whole vault. Walking projects missed a password on an
+      // account and a key on a resource no project uses.
+      const listed = await api.listAllSecrets();
+      setRows(listed.map((l) => ({ entry: l.entry, projectName: l.owner })));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     } finally {
@@ -73,6 +70,9 @@ export default function SecretsView({ onNotify, refreshKey }: Props) {
   }
 
   async function remove(id: string, name: string) {
+    if (!window.confirm(`Delete ${name}? The stored value is destroyed and cannot be recovered.`)) {
+      return;
+    }
     try {
       await api.deleteSecret(id);
       await load();
@@ -100,7 +100,8 @@ export default function SecretsView({ onNotify, refreshKey }: Props) {
               <tr>
                 <th>Name</th>
                 <th>Kind</th>
-                <th>Project</th>
+                <th>Environment</th>
+                <th>Belongs to</th>
                 <th>Value</th>
                 <th>Updated</th>
                 <th />
@@ -112,17 +113,32 @@ export default function SecretsView({ onNotify, refreshKey }: Props) {
                 return (
                   <tr key={entry.secret.id}>
                     <td>
-                      {dev ? (
-                        <>
-                          <div className="nm">{entry.secret.name}</div>
-                          {entry.client_unsafe && <span className="tag unsafe">server only</span>}
-                        </>
-                      ) : (
-                        <div className="nm">{secretKindLabel(entry.secret.kind)}</div>
-                      )}
+                      {(() => {
+                        const head = secretHeadline(entry.secret.kind, entry.secret.name, dev);
+                        return (
+                          <>
+                            <div className="nm">{head.title}</div>
+                            {head.sub && (
+                              <div className="mono muted" style={{ fontSize: 11.5 }}>
+                                {head.sub}
+                              </div>
+                            )}
+                            {dev && entry.client_unsafe && (
+                              <span className="tag unsafe">server only</span>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>
-                      {dev ? secretKindLabel(entry.secret.kind) : providerLabel(entry.provider)}
+                      {secretKindColumn(entry.secret.kind, entry.provider, dev)}
+                    </td>
+                    <td style={{ fontSize: 12.5 }}>
+                      {entry.secret.environment !== "unknown" && (
+                        <span className={`env env-${entry.secret.environment}`}>
+                          {environmentName(entry.secret.environment)}
+                        </span>
+                      )}
                     </td>
                     <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>{projectName}</td>
                     <td>

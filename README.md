@@ -20,6 +20,7 @@ only ever reads.
 | **M5** | Read-only Supabase connector with explicit review before import | Done |
 | **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
 | **Launch** | Overview dashboard, Indie/Dev display, skill-tree editing, secrets and attention views, installer release workflow | Done |
+| **0.9** | Manual-first from install: "+ Add" to type any word and say what it is (project, email, username, password, key, variable, own field), fields you name yourself, a Secrets page that includes account passwords | Done |
 | **0.8** | Hand entry for everything: several addresses per person, any service by name, login details, account passwords, per-environment variables, the Ledger view. Migration data-loss fix, connector routing fix, idle lock | Done |
 
 185 Rust tests and 110 TypeScript tests, plus a screenshot-based UI smoke test

@@ -16,6 +16,7 @@ import type {
   ServiceProjectSummary,
   VaultEntry,
 } from "../lib/types";
+import FieldsEditor from "./FieldsEditor";
 
 interface Props {
   node: AccountNode;
@@ -162,6 +163,14 @@ export default function AccountCard({ node, emails, onNotify, onChanged }: Props
               </div>
             </div>
           )}
+
+          <div className="ledger-label">Fields</div>
+          <FieldsEditor
+            entity={{ kind: "account", id: account.id }}
+            secretOwner={{ project_id: null, service_project_id: null, account_id: account.id }}
+            onNotify={onNotify}
+            onSecretStored={() => void reloadSecrets()}
+          />
 
           <div className="ledger-label">Resources</div>
           {resources.length === 0 ? (

@@ -27,6 +27,8 @@ import Modal from "./Modal";
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
   onChanged: () => void;
+  /** Add a service that is not in the catalog. */
+  onAddOther?: () => void;
 }
 
 /** A service in the catalog that has no live connector — added by hand. */
@@ -143,7 +145,7 @@ type ModalTarget =
  * Everything here is explicit — a request only happens because a button was
  * pressed, and nothing reaches the graph until it is confirmed.
  */
-export default function ConnectionsView({ onNotify, onChanged }: Props) {
+export default function ConnectionsView({ onNotify, onChanged, onAddOther }: Props) {
   const { dev } = useMode();
   const [connectors, setConnectors] = useState<ConnectorDescriptor[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
@@ -221,13 +223,64 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
         <div>
           <h1>Services &amp; connections</h1>
           <div className="sub">
-            Connect an account and DevLedger reads its structure directly, or add any
-            service by hand. DevLedger only ever reads from a provider, and nothing is saved
-            until you review it.
+            Add any service by hand. For some providers DevLedger can also read your
+            structure automatically; it only ever reads, and nothing is saved until you review
+            it.
           </div>
         </div>
       </div>
 
+      <section className="section catalog">
+        <h3>Add a service</h3>
+        <p className="muted catalog-intro">
+          By hand, for any service. Nothing here needs a token or a connection.
+        </p>
+        <div className="catalog-grid">
+          {CATALOG.map((entry) => {
+            const count = accountsByProvider.get(entry.provider) ?? 0;
+            return (
+              <div key={entry.name} className="catalog-card">
+                <div className="catalog-head">
+                  <span className="catalog-name">{entry.name}</span>
+                  {dev && <code className="ref">{entry.provider}</code>}
+                </div>
+                <p className="catalog-summary">{entry.summary}</p>
+                <div className="catalog-foot">
+                  <span className="catalog-count">
+                    {count === 0 ? "Not added yet." : plural(count, "account")}
+                  </span>
+                  <span className="spacer" />
+                  <button type="button" onClick={() => setModal({ kind: "catalog", entry })}>
+                    + Add
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <div className="catalog-card other">
+            <div className="catalog-head">
+              <span className="catalog-name">Something else</span>
+            </div>
+            <p className="catalog-summary">
+              Any service not listed: a registrar, a hosting panel, your bank, a forum.
+            </p>
+            <div className="catalog-foot">
+              <span className="spacer" />
+              <button type="button" onClick={() => onAddOther?.()} disabled={!onAddOther}>
+                + Add
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {connectors.length > 0 && (
+        <section className="section discovery">
+          <h3>Automatic discovery — optional</h3>
+          <p className="muted catalog-intro">
+            For some providers DevLedger can read your organizations and projects instead of
+            you typing them. Everything above works without it.
+          </p>
       {connectors.map((connector) => {
         const existing = grouped.get(connector.id) ?? [];
         return (
@@ -309,32 +362,9 @@ export default function ConnectionsView({ onNotify, onChanged }: Props) {
         );
       })}
 
-      <section className="section catalog">
-        <h3>Add a service</h3>
-        <div className="catalog-grid">
-          {CATALOG.map((entry) => {
-            const count = accountsByProvider.get(entry.provider) ?? 0;
-            return (
-              <div key={entry.name} className="catalog-card">
-                <div className="catalog-head">
-                  <span className="catalog-name">{entry.name}</span>
-                  {dev && <code className="ref">{entry.provider}</code>}
-                </div>
-                <p className="catalog-summary">{entry.summary}</p>
-                <div className="catalog-foot">
-                  <span className="catalog-count">
-                    {count === 0 ? "Not added yet." : plural(count, "account")}
-                  </span>
-                  <span className="spacer" />
-                  <button type="button" onClick={() => setModal({ kind: "catalog", entry })}>
-                    + Add
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+        </section>
+      )}
+
 
       {modal && (
         <ServiceModal

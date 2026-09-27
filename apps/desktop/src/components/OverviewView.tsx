@@ -11,6 +11,7 @@ import {
   trialsFrom,
   type Trial,
 } from "../lib/overview";
+import type { WordKind } from "./AddAnythingDialog";
 import type { AuditEntry, IdentityNode, ProjectSummary, SubscriptionSummary } from "../lib/types";
 
 interface Props {
@@ -18,6 +19,8 @@ interface Props {
   onNavigate: (view: string) => void;
   onChanged: () => void;
   refreshKey: number;
+  /** Open "Add anything" with a kind already chosen. */
+  onAdd?: (kind: WordKind) => void;
 }
 
 function initials(label: string): string {
@@ -34,7 +37,13 @@ const TODAY = () =>
   });
 
 /** The landing dashboard: a glanceable summary of the whole ledger. */
-export default function OverviewView({ onNotify, onNavigate, onChanged, refreshKey }: Props) {
+export default function OverviewView({
+  onNotify,
+  onNavigate,
+  onChanged,
+  refreshKey,
+  onAdd,
+}: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [identities, setIdentities] = useState<IdentityNode[]>([]);
   const [subs, setSubs] = useState<SubscriptionSummary[]>([]);
@@ -67,7 +76,11 @@ export default function OverviewView({ onNotify, onNavigate, onChanged, refreshK
 
   async function cancelTrial(t: Trial) {
     const plan = t.summary.subscription.plan;
-    if (!window.confirm(`Cancel "${plan}"? This removes the subscription from your ledger.`)) {
+    if (
+      !window.confirm(
+        `Remove "${plan}" from your ledger? This does not cancel it with the provider.`,
+      )
+    ) {
       return;
     }
     try {
@@ -93,6 +106,40 @@ export default function OverviewView({ onNotify, onNavigate, onChanged, refreshK
         <h1>Overview</h1>
         <div className="dash-date">{TODAY()}</div>
       </div>
+
+      {projects.length === 0 && identities.length === 0 && (
+        <section className="card get-started" aria-label="Get started">
+          <div className="card-title">Get started — by hand, no token needed</div>
+          <p className="muted">
+            DevLedger works with any service, not only the ones it can connect to. Start with
+            what you know; everything can be corrected later.
+          </p>
+          <ol className="start-steps">
+            <li>
+              <button type="button" onClick={() => onAdd?.("email")}>
+                Add your email address
+              </button>
+              <span className="muted">— every address you sign in with becomes part of you.</span>
+            </li>
+            <li>
+              <button type="button" onClick={() => onAdd?.("service")}>
+                Add an account
+              </button>
+              <span className="muted">— any service: hosting, a registrar, your bank, a forum.</span>
+            </li>
+            <li>
+              <button type="button" onClick={() => onAdd?.("project")}>
+                Add a project
+              </button>
+              <span className="muted">— then link what it uses, and add its variables.</span>
+            </li>
+          </ol>
+          <p className="muted">
+            Optional shortcuts: paste text into the bar above and DevLedger recognises what it
+            can, or connect a provider under Connections to read its structure automatically.
+          </p>
+        </section>
+      )}
 
       <div className="stat-row">
         <button type="button" className="stat" onClick={() => onNavigate("projects")}>
@@ -141,22 +188,11 @@ export default function OverviewView({ onNotify, onNavigate, onChanged, refreshK
                     Account: {t.summary.identity_email ?? t.summary.account_label}
                   </div>
                   <div className="trial-acts">
-                    <button
-                      type="button"
-                      className="ghost tiny"
-                      onClick={() => onNotify(`Reminder set for ${sub.plan}`)}
-                    >
-                      Set reminder
-                    </button>
+                    {/* "Set reminder" and "Keep" used to sit here. Neither did
+                        anything but show a toast claiming it had -- there is no
+                        reminder system -- so they are gone until one exists. */}
                     <button type="button" className="outline tiny" onClick={() => cancelTrial(t)}>
-                      Cancel{sub.trial_ends_at ? ` before ${sub.trial_ends_at}` : ""}
-                    </button>
-                    <button
-                      type="button"
-                      className="primary tiny"
-                      onClick={() => onNotify(`Keeping ${sub.plan}`)}
-                    >
-                      Keep ✓
+                      Remove from ledger
                     </button>
                   </div>
                 </div>

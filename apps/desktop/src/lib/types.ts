@@ -655,3 +655,20 @@ export interface ImportOutcome {
   skipped: number;
   conflicts_refused: number;
 }
+
+/** A field the user named themselves, attached to a person, account, project or resource. */
+export interface CustomField {
+  id: string;
+  entity: EntityRef;
+  label: string;
+  value: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A secret with a short label for what it belongs to. */
+export interface SecretListing {
+  entry: VaultEntry;
+  owner: string;
+}

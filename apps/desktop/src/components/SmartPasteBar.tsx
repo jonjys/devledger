@@ -1,8 +1,10 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 
 interface Props {
   onAnalyze: (text: string) => void;
   busy: boolean;
+  /** Rendered at the end of the bar, e.g. the "+ Add" button. */
+  extra?: ReactNode;
 }
 
 /**
@@ -11,7 +13,7 @@ interface Props {
  * Always present, so anything on the clipboard can be dropped in without
  * navigating first. Ctrl/Cmd+Enter submits.
  */
-export default function SmartPasteBar({ onAnalyze, busy }: Props) {
+export default function SmartPasteBar({ onAnalyze, busy, extra }: Props) {
   const [text, setText] = useState("");
 
   function submit() {
@@ -54,6 +56,7 @@ export default function SmartPasteBar({ onAnalyze, busy }: Props) {
       >
         {busy ? "Analysing…" : "Analyze ⏎"}
       </button>
+      {extra}
     </div>
   );
 }

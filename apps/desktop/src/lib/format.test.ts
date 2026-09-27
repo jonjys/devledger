@@ -7,6 +7,8 @@ import {
   plural,
   providerFromInput,
   providerLabel,
+  secretHeadline,
+  secretKindColumn,
   secretKindLabel,
   severityRank,
 } from "./format";
@@ -58,5 +60,27 @@ describe("providers", () => {
     expect(providerFromInput("  GITHUB ")).toBe("github");
     expect(providerFromInput("My NAS")).toBe("other:My NAS");
     expect(providerFromInput("")).toBe("unknown");
+  });
+});
+
+describe("secret rows", () => {
+  it("leads with the name where the kind says nothing", () => {
+    expect(secretHeadline("env_var", "DATABASE_URL", false)).toEqual({
+      title: "DATABASE_URL",
+      sub: null,
+    });
+    expect(secretHeadline("password", "Login", false).title).toBe("Login");
+  });
+
+  it("leads with a meaningful kind in Indie mode, keeping the name visible", () => {
+    expect(secretHeadline("stripe_secret_key", "STRIPE_SECRET_KEY", false)).toEqual({
+      title: "Stripe secret key",
+      sub: "STRIPE_SECRET_KEY",
+    });
+  });
+
+  it("never prints the word Unknown in the kind column", () => {
+    expect(secretKindColumn("env_var", "unknown", false)).toBe("Environment variable");
+    expect(secretKindColumn("stripe_secret_key", "stripe", false)).toBe("Stripe");
   });
 });

@@ -4,6 +4,7 @@ import * as api from "../lib/api";
 import { isCustomProvider, plural, providerFromInput, providerLabel } from "../lib/format";
 import type { IdentityEmail, LedgerIdentity } from "../lib/types";
 import AccountCard from "./AccountCard";
+import FieldsEditor from "./FieldsEditor";
 
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
@@ -265,6 +266,11 @@ function PersonCard({
             + Address
           </button>
         )}
+      </div>
+
+      <div className="ledger-section">
+        <div className="ledger-label">Fields</div>
+        <FieldsEditor entity={{ kind: "identity", id: identity.id }} onNotify={onNotify} />
       </div>
 
       <div className="ledger-section">

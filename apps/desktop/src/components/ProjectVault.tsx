@@ -6,7 +6,8 @@ import {
   formatTime,
   plural,
   providerLabel,
-  secretKindLabel,
+  secretHeadline,
+  secretKindColumn,
 } from "../lib/format";
 import { useMode } from "../lib/mode";
 import type {
@@ -16,6 +17,7 @@ import type {
   ServiceProject,
   VaultEntry,
 } from "../lib/types";
+import FieldsEditor from "./FieldsEditor";
 
 interface Props {
   summary: ProjectSummary;
@@ -173,13 +175,15 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
             {plural(entries.length, "secret")} ·{" "}
             {resources.length === 0
               ? "no linked resources"
-              : resources
-                  .map((r) =>
-                    dev
-                      ? `${providerLabel(r.provider)}${r.provider_ref ? ` ${r.provider_ref}` : ""}`
-                      : providerLabel(r.provider),
-                  )
-                  .join(", ")}
+              : [
+                  ...new Set(
+                    resources.map((r) =>
+                      dev
+                        ? `${providerLabel(r.provider)}${r.provider_ref ? ` ${r.provider_ref}` : ""}`
+                        : providerLabel(r.provider),
+                    ),
+                  ),
+                ].join(", ")}
           </div>
         </div>
         <span className="spacer" />
@@ -216,6 +220,15 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
             Delete project
           </button>
         </div>
+      </div>
+
+      <div className="project-fields">
+        <FieldsEditor
+          entity={{ kind: "project", id: projectId }}
+          secretOwner={{ project_id: projectId, service_project_id: null, account_id: null }}
+          onNotify={onNotify}
+          onSecretStored={() => void reload()}
+        />
       </div>
 
       {conflicts.length > 0 && (
@@ -269,7 +282,7 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
               <th>Kind</th>
               <th>Environment</th>
               <th>Value</th>
-              <th>Updated</th>
+              {dev && <th>Updated</th>}
               <th />
             </tr>
           </thead>
@@ -279,24 +292,25 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
               return (
                 <tr key={entry.secret.id}>
                   <td>
-                    {dev ? (
-                      <>
-                        <div className="nm">{entry.secret.name}</div>
-                        {entry.client_unsafe && <span className="tag unsafe">server only</span>}
-                      </>
-                    ) : (
-                      <>
-                        <div className="nm">{secretKindLabel(entry.secret.kind)}</div>
-                        {/* The name is what a .env file and a conflict warning
-                            refer to, so it stays visible in every mode. */}
-                        <div className="mono muted" style={{ fontSize: 11.5 }}>
-                          {entry.secret.name}
-                        </div>
-                      </>
-                    )}
+                    {(() => {
+                      const head = secretHeadline(entry.secret.kind, entry.secret.name, dev);
+                      return (
+                        <>
+                          <div className="nm">{head.title}</div>
+                          {head.sub && (
+                            <div className="mono muted" style={{ fontSize: 11.5 }}>
+                              {head.sub}
+                            </div>
+                          )}
+                          {dev && entry.client_unsafe && (
+                            <span className="tag unsafe">server only</span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </td>
                   <td style={{ color: "var(--text-dim)", fontSize: 12.5 }}>
-                    {dev ? secretKindLabel(entry.secret.kind) : providerLabel(entry.provider)}
+                    {secretKindColumn(entry.secret.kind, entry.provider, dev)}
                     {entry.service_project_name && (
                       <div style={{ color: "var(--text-faint)", fontSize: 11.5 }}>
                         via {entry.service_project_name}
@@ -315,9 +329,11 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
                       <span className="pv">{dev ? entry.secret.preview : "••••••••"}</span>
                     )}
                   </td>
-                  <td style={{ color: "var(--text-faint)", fontSize: 12 }}>
-                    {formatTime(entry.secret.updated_at)}
-                  </td>
+                  {dev && (
+                    <td style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                      {formatTime(entry.secret.updated_at)}
+                    </td>
+                  )}
                   <td>
                     <div className="row-acts">
                       <button type="button" onClick={() => copyOne(entry.secret.id, entry.secret.name)}>

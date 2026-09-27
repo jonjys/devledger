@@ -939,3 +939,146 @@ fn changing_only_the_environment_does_not_touch_the_ciphertext() {
         "https://example.com"
     );
 }
+
+// ------------------------------------ "custom / other" from the quick-add dialog
+
+#[test]
+fn a_custom_service_chosen_as_other_is_named_after_its_label() {
+    // The quick-add dialog sends provider `unknown` with the service name as
+    // the label ("Custom / other", "Cloudflare"). That was rejected outright
+    // after hand entry started requiring a named service; it must instead
+    // become the service the label names.
+    let (_dir, vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("Me", Some("me@example.com"))
+        .expect("identity");
+
+    let account = vault
+        .create_account_manual(me.id, Provider::Unknown, "Cloudflare")
+        .expect("custom service is accepted");
+    assert_eq!(account.provider, Provider::Other("Cloudflare".into()));
+
+    let via_add = vault
+        .add_account(me.id, Provider::Unknown, "Netlify", None)
+        .expect("add_account too");
+    assert_eq!(via_add.provider, Provider::Other("Netlify".into()));
+
+    let err = vault
+        .create_account_manual(me.id, Provider::Unknown, "   ")
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::Invalid(_)),
+        "a nameless account is still refused"
+    );
+}
+
+#[test]
+fn a_password_on_an_account_is_not_reported_as_filed_against_nothing() {
+    // Needs attention flagged every account-owned secret as an orphan, because
+    // the orphan check predates secrets that belong to an account.
+    let (_dir, mut vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("Me", Some("me@example.com"))
+        .expect("identity");
+    let acc = vault
+        .create_account_manual(me.id, Provider::Other("Loopia".into()), "Domains")
+        .expect("account");
+    vault
+        .store_secret(
+            &NewSecret {
+                owner: SecretOwner {
+                    account_id: Some(acc.id),
+                    ..SecretOwner::default()
+                },
+                kind: SecretKind::Password,
+                name: "Password".into(),
+                environment: Environment::Unknown,
+                notes: None,
+            },
+            &SecretString::new("pw"),
+        )
+        .expect("store");
+
+    let attention = vault.needs_attention().expect("attention");
+    assert!(
+        attention
+            .iter()
+            .all(|i| i.kind != AttentionKind::OrphanSecret),
+        "got {attention:?}"
+    );
+}
+
+#[test]
+fn the_vault_wide_list_includes_account_passwords_and_unlinked_resources() {
+    // The Secrets page used to walk projects, so a password on an account or a
+    // key on a resource no project uses never appeared on it.
+    let (_dir, mut vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("Me", Some("me@example.com"))
+        .expect("identity");
+    let acc = vault
+        .create_account_manual(me.id, Provider::Other("Loopia".into()), "Domains")
+        .expect("account");
+    let unlinked = vault
+        .create_service_project_manual(
+            acc.id,
+            None,
+            Provider::Other("Loopia".into()),
+            "acme.se",
+            None,
+            Environment::Production,
+        )
+        .expect("resource");
+    let project = vault.create_project("Storefront", None).expect("project");
+
+    for (owner, name) in [
+        (
+            SecretOwner {
+                account_id: Some(acc.id),
+                ..SecretOwner::default()
+            },
+            "Password",
+        ),
+        (
+            SecretOwner {
+                service_project_id: Some(unlinked.id),
+                ..SecretOwner::default()
+            },
+            "DNS_API_KEY",
+        ),
+        (
+            SecretOwner {
+                project_id: Some(project.id),
+                ..SecretOwner::default()
+            },
+            "DATABASE_URL",
+        ),
+    ] {
+        vault
+            .store_secret(
+                &NewSecret {
+                    owner,
+                    kind: SecretKind::EnvVar,
+                    name: name.into(),
+                    environment: Environment::Unknown,
+                    notes: None,
+                },
+                &SecretString::new("v"),
+            )
+            .expect("store");
+    }
+
+    let all = vault.list_all_secrets().expect("list");
+    let seen: Vec<(&str, &str)> = all
+        .iter()
+        .map(|l| (l.entry.secret.name.as_str(), l.owner.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("DATABASE_URL", "Storefront"),
+            ("DNS_API_KEY", "acme.se"),
+            ("Password", "Loopia · Domains"),
+        ]
+    );
+}

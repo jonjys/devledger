@@ -24,8 +24,8 @@ use crate::secret::SecretBytes;
 
 pub use repo::{
     AccountDetails, AccountNode, AttentionItem, AttentionKind, AuditEntry, IdentityNode,
-    OrganizationNode, ProjectRefLabel, ProjectSummary, SecretOwner, ServiceProjectSummary,
-    SubscriptionSummary, VaultEntry,
+    OrganizationNode, ProjectRefLabel, ProjectSummary, SecretListing, SecretOwner,
+    ServiceProjectSummary, SubscriptionSummary, VaultEntry,
 };
 
 /// A handle to the opened, decrypted database.

@@ -23,17 +23,17 @@ use devledger_core::connect::{ConnectionSummary, ConnectorDescriptor, ConnectorI
 use devledger_core::connect_vault::{ConnectOutcome, ImportOutcome};
 use devledger_core::manual::{NewSecret, ResourceEdit};
 use devledger_core::model::{
-    Account, BillingInterval, EntityKind, EntityRef, Environment, Identity, IdentityEmail,
-    Organization, Project, Provider, Relation, SecretRecord, ServiceProject, Subscription,
-    SubscriptionStatus,
+    Account, BillingInterval, CustomField, EntityKind, EntityRef, Environment, Identity,
+    IdentityEmail, Organization, Project, Provider, Relation, SecretRecord, ServiceProject,
+    Subscription, SubscriptionStatus,
 };
 use devledger_core::paste::review::{CommitOutcome, ReviewSubmission};
 use devledger_core::paste::PasteAnalysis;
 use devledger_core::redact::{Provenance, SourceKind};
 use devledger_core::secret::SecretString;
 use devledger_core::store::{
-    AccountDetails, AttentionItem, AuditEntry, IdentityNode, ProjectSummary, ServiceProjectSummary,
-    SubscriptionSummary, VaultEntry,
+    AccountDetails, AttentionItem, AuditEntry, IdentityNode, ProjectSummary, SecretListing,
+    ServiceProjectSummary, SubscriptionSummary, VaultEntry,
 };
 use devledger_core::vault::{
     default_vault_dir, DeletionImpact, EnvConflict, OverviewIdentity, VaultStatus,
@@ -756,6 +756,46 @@ fn project_deletion_impact(
     state.with(|vault| vault.project_deletion_impact(project_id))
 }
 
+/// Every secret in the vault, metadata only, with what each belongs to.
+#[tauri::command]
+fn list_all_secrets(state: State<'_, AppState>) -> IpcResult<Vec<SecretListing>> {
+    state.with(|vault| vault.list_all_secrets())
+}
+
+/// Every field the user named on an entity.
+#[tauri::command]
+fn custom_fields(state: State<'_, AppState>, entity: EntityRef) -> IpcResult<Vec<CustomField>> {
+    state.with(|vault| vault.custom_fields(&entity))
+}
+
+/// Attach a field with a name the user chose.
+#[tauri::command]
+fn add_custom_field(
+    state: State<'_, AppState>,
+    entity: EntityRef,
+    label: String,
+    value: String,
+) -> IpcResult<CustomField> {
+    state.with(|vault| vault.add_custom_field(&entity, &label, &value))
+}
+
+/// Change a field's name or value.
+#[tauri::command]
+fn update_custom_field(
+    state: State<'_, AppState>,
+    field_id: Uuid,
+    label: String,
+    value: String,
+) -> IpcResult<()> {
+    state.with(|vault| vault.update_custom_field(field_id, &label, &value))
+}
+
+/// Remove a field.
+#[tauri::command]
+fn delete_custom_field(state: State<'_, AppState>, field_id: Uuid) -> IpcResult<()> {
+    state.with(|vault| vault.delete_custom_field(field_id))
+}
+
 /// The whole chain, from each email address down to the projects it reaches.
 #[tauri::command]
 fn ledger_overview(state: State<'_, AppState>) -> IpcResult<Vec<OverviewIdentity>> {
@@ -972,6 +1012,11 @@ pub fn run() {
             env_conflicts,
             project_deletion_impact,
             ledger_overview,
+            custom_fields,
+            list_all_secrets,
+            add_custom_field,
+            update_custom_field,
+            delete_custom_field,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevLedger");

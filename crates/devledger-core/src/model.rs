@@ -78,6 +78,31 @@ pub struct IdentityEmail {
     pub created_at: OffsetDateTime,
 }
 
+/// A field the user named themselves: a label and the value that goes with it.
+///
+/// For anything no built-in field covers -- a customer number, a support PIN,
+/// the username on a forum. Shown in the clear; a sensitive value belongs in a
+/// secret instead, where it is sealed and only shown on Reveal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomField {
+    /// Stable local id.
+    pub id: Uuid,
+    /// What the field is attached to.
+    pub entity: EntityRef,
+    /// The name the user gave the field.
+    pub label: String,
+    /// Its value.
+    pub value: String,
+    /// Display order among the entity's fields.
+    pub position: i64,
+    /// Creation timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// Last update timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
 /// An organization inside a provider account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Organization {

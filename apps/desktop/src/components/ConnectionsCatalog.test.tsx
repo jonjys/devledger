@@ -128,4 +128,27 @@ describe("Service catalog", () => {
     );
     expect(onNotify).toHaveBeenCalledWith(expect.stringContaining("not verified"));
   });
+
+  it("lists manual services before the optional automatic connectors", async () => {
+    renderView();
+    const manual = await screen.findByRole("heading", { name: "Add a service" });
+    const automatic = await screen.findByRole("heading", {
+      name: "Automatic discovery — optional",
+    });
+    // DOCUMENT_POSITION_FOLLOWING: the automatic section comes after.
+    expect(manual.compareDocumentPosition(automatic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("offers a card for any service that is not listed", async () => {
+    const user = userEvent.setup();
+    mocked.listConnectors.mockResolvedValue([supabaseConnector()]);
+    mocked.listConnections.mockResolvedValue([]);
+    mocked.identityGraph.mockResolvedValue([]);
+    const onAddOther = vi.fn();
+    render(<ConnectionsView onNotify={vi.fn()} onChanged={vi.fn()} onAddOther={onAddOther} />);
+
+    await screen.findByRole("heading", { name: "Add a service" });
+    await user.click(within(catalogCard("Something else")).getByRole("button", { name: "+ Add" }));
+    expect(onAddOther).toHaveBeenCalled();
+  });
 });

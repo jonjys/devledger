@@ -203,6 +203,12 @@ person several addresses, accounts carry their login details, a secret can
 belong to an account (a login password) as well as to a project or resource,
 and the same variable name may exist once per environment.
 
+Schema v5 adds `custom_fields`: a label the user chose and its value, attached
+to a person, account, project or resource. The owner is polymorphic, so instead
+of a foreign key there are `AFTER DELETE` triggers on the four owner tables;
+they also fire when a row goes through another table's cascade, so deleting a
+person removes the fields on their accounts too.
+
 ## Lock lifecycle
 
 A `Vault` is either locked (a path and nothing else) or unlocked (an open

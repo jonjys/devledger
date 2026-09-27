@@ -144,6 +144,16 @@ the database or AEAD keys. `vault.json` holds only the KDF parameters and salt,
 which must be readable before a passphrase can be turned into a key; it contains
 no secret material.
 
+## Fields you name yourself
+
+A custom field ("Customer number", "Support PIN", "Forum username") is stored in
+the clear *inside* the SQLCipher database: encrypted at rest like the rest of
+the graph, but shown without a Reveal step and not sealed with the per-secret
+AEAD key. Anything that would let someone into an account belongs in a secret
+instead, and the field form offers exactly that: ticking "Hide value" stores it
+as a sealed secret on the same account or project. The audit log records a
+field's name, never its value.
+
 ## What the graph stores
 
 The entity graph (identities, accounts, organizations, resources, projects and

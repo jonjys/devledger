@@ -11,12 +11,15 @@ import type {
   Account,
   AccountDetails,
   BillingInterval,
+  CustomField,
+  EntityRef,
   DeletionImpact,
   EnvConflict,
   IdentityEmail,
   LedgerIdentity,
   NewSecret,
   ResourceEdit,
+  SecretListing,
   ConnectionSummary,
   ConnectOutcome,
   ConnectorDescriptor,
@@ -382,6 +385,24 @@ export const envConflicts = (projectId: string, environment: Environment | null)
 /** What deleting a project would take with it, asked before the fact. */
 export const projectDeletionImpact = (projectId: string) =>
   call<DeletionImpact>("project_deletion_impact", { projectId });
+
+/** Every secret in the vault, metadata only, each with what it belongs to. */
+export const listAllSecrets = () => call<SecretListing[]>("list_all_secrets");
+
+// --- fields the user names --------------------------------------------------
+
+/** Every field the user named on a person, account, project or resource. */
+export const customFields = (entity: EntityRef) =>
+  call<CustomField[]>("custom_fields", { entity });
+
+export const addCustomField = (entity: EntityRef, label: string, value: string) =>
+  call<CustomField>("add_custom_field", { entity, label, value });
+
+export const updateCustomField = (fieldId: string, label: string, value: string) =>
+  call<void>("update_custom_field", { fieldId, label, value });
+
+export const deleteCustomField = (fieldId: string) =>
+  call<void>("delete_custom_field", { fieldId });
 
 // --- Connect & Discover ----------------------------------------------------
 //

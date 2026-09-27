@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::model::{
-    Account, EntityKind, EntityRef, Environment, Evidence, Identity, IdentityEmail, Organization,
-    Project, Provider, Relation, RelationKind, SecretKind, SecretRecord, ServiceProject,
-    Subscription,
+    Account, CustomField, EntityKind, EntityRef, Environment, Evidence, Identity, IdentityEmail,
+    Organization, Project, Provider, Relation, RelationKind, SecretKind, SecretRecord,
+    ServiceProject, Subscription,
 };
 use crate::paste::ParsedSubscription;
 use crate::redact::Provenance;
@@ -118,6 +118,15 @@ pub struct SubscriptionSummary {
     pub account_label: String,
     /// Email of the identity behind that account, when known.
     pub identity_email: Option<String>,
+}
+
+/// A secret with a short label for what it belongs to, for vault-wide lists.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretListing {
+    /// The secret, metadata only.
+    pub entry: VaultEntry,
+    /// "Storefront", "Loopia · Domains", "Storefront via storefront-api".
+    pub owner: String,
 }
 
 /// What a secret belongs to.
@@ -1932,6 +1941,55 @@ impl Store {
         Ok(out)
     }
 
+    /// Every secret in the vault, each with a label for what it belongs to.
+    ///
+    /// The vault-wide Secrets page used to collect secrets project by project,
+    /// which missed a password filed on an account and a key on a resource no
+    /// project uses. This reads the table itself, so nothing is left out.
+    pub fn list_all_secrets(&self) -> Result<Vec<SecretListing>> {
+        let sql = format!(
+            "SELECT {} FROM secrets ORDER BY name, id",
+            Self::SECRET_COLUMNS
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let raw = stmt
+            .query_map([], Self::secret_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(raw.len());
+        for entry in raw {
+            let record = Self::finish_secret(entry)?;
+            let owner = self.secret_owner_label(&record)?;
+            out.push(SecretListing {
+                entry: self.decorate(record)?,
+                owner,
+            });
+        }
+        Ok(out)
+    }
+
+    fn secret_owner_label(&self, secret: &SecretRecord) -> Result<String> {
+        if let Some(id) = secret.project_id {
+            if let Some(p) = self.project(id)? {
+                return Ok(p.name);
+            }
+        }
+        if let Some(id) = secret.account_id {
+            if let Some(a) = self.account(id)? {
+                return Ok(format!("{} · {}", a.provider.label(), a.label));
+            }
+        }
+        if let Some(id) = secret.service_project_id {
+            if let Some(sp) = self.service_project(id)? {
+                let users = self.projects_using(id)?;
+                return Ok(match users.first() {
+                    Some(p) => format!("{} via {}", p.name, sp.name),
+                    None => sp.name,
+                });
+            }
+        }
+        Ok("Nothing".to_string())
+    }
+
     /// How many secrets a delete would take with it.
     ///
     /// Deleting cascades, and a count shown before the fact is the difference
@@ -2327,7 +2385,8 @@ impl Store {
         }
 
         let orphan_sql = format!(
-            "SELECT {} FROM secrets WHERE project_id IS NULL AND service_project_id IS NULL",
+            "SELECT {} FROM secrets
+              WHERE project_id IS NULL AND service_project_id IS NULL AND account_id IS NULL",
             Self::SECRET_COLUMNS
         );
         let mut stmt = self.conn().prepare(&orphan_sql)?;
@@ -2339,7 +2398,7 @@ impl Store {
             items.push(AttentionItem {
                 kind: AttentionKind::OrphanSecret,
                 title: format!("{} is filed against nothing", secret.name),
-                detail: "Attach it to a project or a service resource.".to_string(),
+                detail: "Attach it to a project, a resource or an account.".to_string(),
                 entity: EntityRef::new(EntityKind::Secret, secret.id),
             });
         }
@@ -2394,6 +2453,145 @@ impl Store {
         }
 
         Ok(items)
+    }
+
+    // ------------------------------------------------------------ custom field
+
+    /// Attach a field the user named to a person, account, project or resource.
+    ///
+    /// New fields go to the end of the entity's list.
+    pub fn create_custom_field(
+        &self,
+        entity: &EntityRef,
+        label: &str,
+        value: &str,
+    ) -> Result<CustomField> {
+        let kind = custom_field_kind(entity.kind)?;
+        let id = Uuid::new_v4();
+        let at = now_rfc3339()?;
+        let position: i64 = self.conn().query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM custom_fields
+              WHERE entity_kind = ?1 AND entity_id = ?2",
+            params![kind, entity.id.to_string()],
+            |r| r.get(0),
+        )?;
+        self.conn().execute(
+            "INSERT INTO custom_fields
+                (id, entity_kind, entity_id, label, value, position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![
+                id.to_string(),
+                kind,
+                entity.id.to_string(),
+                label,
+                value,
+                position,
+                at
+            ],
+        )?;
+        // The label is recorded, the value is not: a field is only a field
+        // because the user chose not to make it a secret, but that choice is
+        // theirs to make per field and the audit log is not the place to guess.
+        self.audit(
+            "field.create",
+            Some(kind),
+            Some(entity.id),
+            &format!("Added field {label}"),
+        )?;
+        Ok(CustomField {
+            id,
+            entity: entity.clone(),
+            label: label.to_string(),
+            value: value.to_string(),
+            position,
+            created_at: parse_rfc3339(&at)?,
+            updated_at: parse_rfc3339(&at)?,
+        })
+    }
+
+    /// Change a field's label or value.
+    pub fn update_custom_field(&self, id: Uuid, label: &str, value: &str) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE custom_fields SET label = ?2, value = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id.to_string(), label, value, now_rfc3339()?],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("field {id}")));
+        }
+        self.audit(
+            "field.update",
+            Some("field"),
+            Some(id),
+            &format!("Updated field {label}"),
+        )
+    }
+
+    /// Remove a field.
+    pub fn delete_custom_field(&self, id: Uuid) -> Result<()> {
+        let changed = self.conn().execute(
+            "DELETE FROM custom_fields WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("field {id}")));
+        }
+        self.audit("field.delete", Some("field"), Some(id), "Removed a field")
+    }
+
+    /// Every field attached to an entity, in display order.
+    pub fn custom_fields_for(&self, entity: &EntityRef) -> Result<Vec<CustomField>> {
+        let kind = custom_field_kind(entity.kind)?;
+        let mut stmt = self.conn().prepare(
+            "SELECT id, label, value, position, created_at, updated_at FROM custom_fields
+              WHERE entity_kind = ?1 AND entity_id = ?2
+              ORDER BY position, created_at",
+        )?;
+        let raw = stmt
+            .query_map(params![kind, entity.id.to_string()], |row| {
+                Ok((
+                    uuid_from(row, 0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(raw.len());
+        for (id, label, value, position, created, updated) in raw {
+            out.push(CustomField {
+                id,
+                entity: entity.clone(),
+                label,
+                value,
+                position,
+                created_at: parse_rfc3339(&created)?,
+                updated_at: parse_rfc3339(&updated)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Whether the row a field would attach to exists.
+    pub fn entity_exists(&self, entity: &EntityRef) -> Result<bool> {
+        let table = match entity.kind {
+            EntityKind::Identity => "identities",
+            EntityKind::Account => "accounts",
+            EntityKind::Project => "projects",
+            EntityKind::ServiceProject => "service_projects",
+            other => {
+                return Err(CoreError::Invalid(format!(
+                    "fields cannot be attached to a {other:?}"
+                )))
+            }
+        };
+        let found: i64 = self.conn().query_row(
+            &format!("SELECT count(*) FROM {table} WHERE id = ?1"),
+            params![entity.id.to_string()],
+            |r| r.get(0),
+        )?;
+        Ok(found > 0)
     }
 
     // ------------------------------------------------------------- provenance
@@ -2472,5 +2670,18 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+}
+
+/// The storage name for an entity that can carry custom fields.
+fn custom_field_kind(kind: EntityKind) -> Result<&'static str> {
+    match kind {
+        EntityKind::Identity => Ok("identity"),
+        EntityKind::Account => Ok("account"),
+        EntityKind::Project => Ok("project"),
+        EntityKind::ServiceProject => Ok("service_project"),
+        other => Err(CoreError::Invalid(format!(
+            "fields cannot be attached to a {other:?}"
+        ))),
     }
 }

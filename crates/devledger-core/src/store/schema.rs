@@ -21,10 +21,10 @@
 //! letting it look like a working vault.
 
 /// The schema version this build expects.
-pub const CURRENT_VERSION: i64 = 4;
+pub const CURRENT_VERSION: i64 = 5;
 
 /// Ordered migration steps. Index `n` upgrades the database to version `n + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 const V1: &str = r#"
 CREATE TABLE identities (
@@ -427,4 +427,60 @@ CREATE INDEX idx_secrets_account ON secrets (account_id);
 CREATE UNIQUE INDEX idx_secrets_unique_name
     ON secrets (COALESCE(project_id, ''), COALESCE(service_project_id, ''),
                 COALESCE(account_id, ''), name, environment);
+"#;
+
+/// v5 adds fields the user names themselves.
+///
+/// No schema can anticipate everything a person needs to remember about an
+/// account: a customer number, a support PIN, which project a hosting plan
+/// belongs to, the username on some forum. `custom_fields` holds a label the
+/// user chose and the value that goes with it, attached to a person, an
+/// account, a project or a resource.
+///
+/// Values here are shown in the clear, inside the encrypted database. Anything
+/// sensitive is stored as a secret instead, sealed like every other credential;
+/// the UI offers that choice when a field is added.
+///
+/// The owner is polymorphic, so there is no foreign key to cascade through.
+/// Triggers do that job instead: deleting a row -- directly, or through another
+/// table's cascade -- deletes the fields attached to it, so no field is left
+/// pointing at nothing.
+const V5: &str = r#"
+CREATE TABLE custom_fields (
+    id          TEXT PRIMARY KEY,
+    entity_kind TEXT NOT NULL,
+    entity_id   TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    CHECK (entity_kind IN ('identity', 'account', 'project', 'service_project'))
+);
+CREATE INDEX idx_custom_fields_entity ON custom_fields (entity_kind, entity_id);
+
+CREATE TRIGGER custom_fields_follow_identities
+AFTER DELETE ON identities
+BEGIN
+    DELETE FROM custom_fields WHERE entity_kind = 'identity' AND entity_id = OLD.id;
+END;
+
+CREATE TRIGGER custom_fields_follow_accounts
+AFTER DELETE ON accounts
+BEGIN
+    DELETE FROM custom_fields WHERE entity_kind = 'account' AND entity_id = OLD.id;
+END;
+
+CREATE TRIGGER custom_fields_follow_projects
+AFTER DELETE ON projects
+BEGIN
+    DELETE FROM custom_fields WHERE entity_kind = 'project' AND entity_id = OLD.id;
+END;
+
+CREATE TRIGGER custom_fields_follow_service_projects
+AFTER DELETE ON service_projects
+BEGIN
+    DELETE FROM custom_fields
+     WHERE entity_kind = 'service_project' AND entity_id = OLD.id;
+END;
 "#;
