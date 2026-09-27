@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-27
+Feature Built: Android release uploads now find the built APK and attach it, instead of missing the file under universal/release.
+Suggested Tweet:
+"You shipped the Android build. The release page had no APK.
+
+DevLedger now finds the real APK and uploads it. Downloads stop coming up empty.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
