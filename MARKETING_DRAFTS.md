@@ -20,3 +20,14 @@ DevLedger now has Indie vs Dev. Clean labels, or the raw env vars when you need 
 ⚡ Get Vibecoder OS (50% OFF auto-applied):
 https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
 ---
+---
+Date: 2026-09-27
+Feature Built: Skill tree Ledger — an orange identity core, with accounts around it, API keys in green and passwords in red, and a lit path back to the center.
+Suggested Tweet:
+"Still hunting one API key in a flat list?
+
+DevLedger now opens as a skill tree. Orange core. Accounts around it. Keys show green, passwords red.
+
+⚡ Get Vibecoder OS (50% OFF auto-applied):
+https://fieldworkstudio.gumroad.com/l/vibecoder-os/LAUNCH50?wanted=true"
+---
