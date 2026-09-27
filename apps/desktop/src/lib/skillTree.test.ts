@@ -260,3 +260,15 @@ describe("field colours", () => {
     expect(toneFor("jwt_secret")).toBe("secret");
   });
 });
+
+describe("the centre's label", () => {
+  it("does not repeat the address when the name is the address", () => {
+    const data = vault(null);
+    const me = data.people[0];
+    if (!me) throw new Error("fixture");
+    me.identity.label = "primary@example.com";
+    const root = buildTree(data, { categories: [], statuses: {} }, findPrimary(data));
+    expect(root?.label).toBe("primary@example.com");
+    expect(root?.sub).toBeNull();
+  });
+});

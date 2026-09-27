@@ -308,4 +308,24 @@ describe("Skill tree", () => {
     await menuPick(["Move all accounts to", "primary@example.com"]);
     await waitFor(() => expect(mocked.moveAccount).toHaveBeenCalledWith(IDS.loopia, IDS.me));
   });
+
+  it("gives every node a size to draw with before it is measured", async () => {
+    serve();
+    // A ResizeObserver that never reports: the node is never measured.
+    const measuring = globalThis.ResizeObserver;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    await renderTree();
+    // xyflow hides a node it has no size for; a late measurement used to leave
+    // the canvas empty. With an initial size the node is visible at once.
+    const wrapper = node("primary").closest(".react-flow__node") as HTMLElement;
+    vi.stubGlobal("ResizeObserver", measuring);
+    expect(wrapper.style.visibility).not.toBe("hidden");
+  });
 });

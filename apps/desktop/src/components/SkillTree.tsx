@@ -33,6 +33,7 @@ import {
   shortId,
   toggleLit,
   walk,
+  type NodeKind,
   type Primary,
   type SkillData,
   type Status,
@@ -67,6 +68,18 @@ interface Props {
 }
 
 const nodeTypes = { skill: SkillNode };
+// Fitting a tree of one node would otherwise zoom it to fill the screen.
+const FIT_MAX_ZOOM = 1.1;
+
+/** Roughly how big each kind of node draws, before it is measured. */
+const INITIAL_SIZE: Record<NodeKind, { width: number; height: number }> = {
+  primary: { width: 120, height: 120 },
+  identity: { width: 150, height: 40 },
+  category: { width: 150, height: 46 },
+  account: { width: 170, height: 40 },
+  field: { width: 150, height: 36 },
+  project: { width: 150, height: 44 },
+};
 const edgeTypes = { skill: SkillEdge };
 
 const SECRET_KIND: Record<"api" | "password" | "secret", SecretKind> = {
@@ -669,6 +682,11 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
         type: "skill" as const,
         position:
           drag && drag.id === p.item.key ? { x: drag.x, y: drag.y } : { x: p.x, y: p.y },
+        // A size to draw with until the node has been measured. xyflow hides
+        // a node it has no size for, and a measurement that lands late left
+        // the whole canvas empty -- rarely, but Fit could not find it either.
+        initialWidth: INITIAL_SIZE[p.item.kind].width,
+        initialHeight: INITIAL_SIZE[p.item.kind].height,
         draggable: p.item.kind === "account",
         selectable: false,
         data: {
@@ -770,7 +788,7 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
     if (entry.kind === "project") {
       setFilter(entry.key.slice("project:".length));
       setLit(null);
-      window.setTimeout(() => void flow.fitView({ duration: 400, padding: 0.2 }), 50);
+      window.setTimeout(() => void flow.fitView({ duration: 400, padding: 0.2, maxZoom: FIT_MAX_ZOOM }), 50);
       return;
     }
     setFilter(null);
@@ -849,12 +867,16 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
           minZoom={0.2}
           maxZoom={3}
           fitView
-          fitViewOptions={{ padding: 0.25 }}
+          fitViewOptions={{ padding: 0.25, maxZoom: FIT_MAX_ZOOM }}
           proOptions={{ hideAttribution: true }}
           colorMode="dark"
         >
           <Background variant={BackgroundVariant.Dots} color="#1A1A1A" bgColor="#0A0A0A" gap={22} size={1.6} />
-          <Controls showInteractive={false} position="bottom-left" />
+          <Controls
+            showInteractive={false}
+            position="bottom-left"
+            fitViewOptions={{ padding: 0.25, maxZoom: FIT_MAX_ZOOM }}
+          />
         </ReactFlow>
       )}
 

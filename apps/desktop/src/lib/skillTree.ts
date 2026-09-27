@@ -347,7 +347,7 @@ export function buildTree(
         key: `identity:${p.identity.id}`,
         kind: "identity",
         label: p.identity.email ?? p.identity.label,
-        sub: p.identity.email ? p.identity.label : "No email",
+        sub: !p.identity.email ? "No email" : p.identity.label !== p.identity.email ? p.identity.label : null,
         provider: null,
         tone: null,
         status: override(p.identity.id) ?? flags.get(p.identity.id) ?? worst(children.map((c) => c.status)),
@@ -394,7 +394,8 @@ export function buildTree(
     key: "primary",
     kind: "primary",
     label: me?.identity.email ?? me?.identity.label ?? "Primary",
-    sub: me?.identity.email ? me.identity.label : null,
+    // The name under the address, unless it is just the address again.
+    sub: me?.identity.email && me.identity.label !== me.identity.email ? me.identity.label : null,
     provider: null,
     tone: null,
     status: override(primary.identityId) ?? flags.get(primary.identityId) ?? "healthy",

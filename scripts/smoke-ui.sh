@@ -66,24 +66,32 @@ xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
 # Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window,
-# so adding a sidebar entry above Connections moves it down one 40px row: the
-# Ledger tab did exactly that, and this click silently landed on Stack instead.
-# Look at 03-connections.png after any change to the sidebar.
+# so adding or reordering sidebar entries moves the targets. Look at the
+# screenshots after any change to the sidebar or to these screens.
 xdotool mousemove --window "$WINDOW" 120 308 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-# The Supabase "Connect" button sits at the right of the first connector row.
-xdotool mousemove --window "$WINDOW" 1090 212 click 1; sleep 3
+# Supabase is the first card in the service grid; its Connect button sits at
+# the card's bottom right.
+xdotool mousemove --window "$WINDOW" 498 348 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 xdotool key Escape; sleep 1
-# Ledger: the email-to-project chain. Empty on a fresh vault.
-xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 3
+# Ledger opens as the skill tree. On a fresh vault it offers "Add your email".
+xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
-# Add a person by address: UI -> IPC -> SQLCipher -> ledger_overview and back.
-xdotool mousemove --window "$WINDOW" 1103 106 click 1; sleep 1
-xdotool key Tab
+# Add the primary identity from the tree: UI -> IPC -> SQLCipher -> back, and
+# the tree redraws with the address at its centre.
+xdotool mousemove --window "$WINDOW" 706 460 click 1; sleep 1.5
 xdotool type --delay 35 "smoke@example.com"
+xdotool key Return; sleep 4
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-tree.png"
+# The List view, where a person is added by name and address.
+xdotool mousemove --window "$WINDOW" 1136 92 click 1; sleep 3
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/08-ledger-list.png"
+xdotool mousemove --window "$WINDOW" 1102 138 click 1; sleep 1
+xdotool key Tab
+xdotool type --delay 35 "second@example.com"
 xdotool key Return; sleep 3
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-person.png"
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/09-ledger-person.png"
 # Phone-sized window. The shell must collapse the sidebar into a bottom bar.
 xdotool windowsize "$WINDOW" 390 844
 sleep 2
@@ -95,8 +103,8 @@ BIN="$PWD/$BIN" OUT="$PWD/$OUT" PASSPHRASE="$PASSPHRASE" XDG_DATA_HOME="$DATA/ap
   timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" "$DATA/drive.sh"
 
 shots=$(ls "$OUT"/*.png 2>/dev/null | wc -l)
-if [ "$shots" -lt 4 ]; then
-  echo "UI smoke FAILED: expected 4 screenshots, got $shots"
+if [ "$shots" -lt 9 ]; then
+  echo "UI smoke FAILED: expected 9 screenshots, got $shots"
   exit 1
 fi
 
@@ -112,15 +120,28 @@ for shot in "$OUT"/*.png; do
 done
 
 # The screenshots must represent distinct states. This proves the automation
-# reached the shell, changed to Connections, and opened a service dialog.
-for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dialog.png"; do
+# reached the shell, changed to Connections, opened the Supabase dialog, added
+# an address from the skill tree, and added a person from the list. A click
+# that lands on nothing changes almost no pixels -- a hover highlight at most --
+# so each step must change a real share of the window.
+for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dialog.png" \
+            "06-ledger.png 07-ledger-tree.png" "08-ledger-list.png 09-ledger-person.png"; do
   read -r before after <<<"$pair"
   changed=$(compare -metric AE "$OUT/$before" "$OUT/$after" null: 2>&1 || true)
-  if [ "${changed:-0}" -lt 1000 ]; then
+  if [ "${changed:-0}" -lt 20000 ]; then
     echo "UI smoke FAILED: $after did not visibly change from $before"
     exit 1
   fi
 done
+
+# The tree must actually draw its centre. An empty canvas still has its dot grid
+# and controls, so it passes the checks above; the primary node is a large
+# orange disc in the middle of the canvas, which lifts the brightness there.
+centre=$(convert "$OUT/07-ledger-tree.png" -crop 300x300+550+300 -format "%[fx:int(mean*255)]" info:)
+if [ "$centre" -lt 20 ]; then
+  echo "UI smoke FAILED: 07-ledger-tree.png has no primary node in the middle (brightness $centre)"
+  exit 1
+fi
 
 phone_w=$(identify -format "%w" "$OUT/05-phone.png")
 phone_h=$(identify -format "%h" "$OUT/05-phone.png")
