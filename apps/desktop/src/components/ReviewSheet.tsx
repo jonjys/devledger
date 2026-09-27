@@ -30,6 +30,8 @@ interface Props {
   onCancel: () => void;
   onSave: (submission: ReviewSubmission) => void;
   saving: boolean;
+  /** The project the paste was made in, if it was made inside one. */
+  targetProjectId?: string | null;
 }
 
 function endpointLabel(endpoint: ProposedEndpoint): string {
@@ -48,13 +50,19 @@ function endpointLabel(endpoint: ProposedEndpoint): string {
  * the proposed relations, and the redacted provenance excerpt that will be
  * stored alongside whatever is saved.
  */
-export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Props) {
+export default function ReviewSheet({
+  analysis,
+  onCancel,
+  onSave,
+  saving,
+  targetProjectId = null,
+}: Props) {
   const [choices, setChoices] = useState<Record<number, EntityChoice>>(() =>
     initialChoices(analysis),
   );
   const [relations, setRelations] = useState<Set<number>>(() => initialRelations(analysis));
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(() =>
-    initialAnswers(analysis),
+    initialAnswers(analysis, targetProjectId),
   );
   const [acknowledged, setAcknowledged] = useState(false);
 
@@ -105,7 +113,7 @@ export default function ReviewSheet({ analysis, onCancel, onSave, saving }: Prop
 
   function save() {
     onSave(
-      buildSubmission(analysis, choices, relations, acknowledged, null, answers),
+      buildSubmission(analysis, choices, relations, acknowledged, targetProjectId, answers),
     );
   }
 
