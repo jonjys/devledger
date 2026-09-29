@@ -30,10 +30,10 @@ export type Provider = KnownProvider | `other:${string}`;
 
 export type Environment = "development" | "staging" | "production" | "unknown";
 
-// The backend derives these with serde's snake_case, which splits GitHub and
-// OpenAI: it sends `git_hub_token` and `open_ai_api_key`. Both spellings are
-// listed so neither renders as a raw tag; `normalizeSecretKind` maps the
-// backend's to the canonical one.
+// The backend sends `github_token` and `openai_api_key`. Earlier builds
+// derived these with serde's snake_case and sent `git_hub_token` and
+// `open_ai_api_key`; those spellings are still listed so nothing renders as a
+// raw tag, and `normalizeSecretKind` maps them to the canonical ones.
 export type SecretKind =
   | "git_hub_token"
   | "open_ai_api_key"
