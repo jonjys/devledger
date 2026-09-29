@@ -907,7 +907,7 @@ function SkillTreeCanvas({ onNotify, onChanged, refreshKey, projectId }: Props) 
       {dialog && (
         <AddDialog
           kind={dialog.kind}
-          parentLabel={dialog.parent === EMPTY ? "your ledger" : dialog.parent.label}
+          parentLabel={dialog.parent === EMPTY ? null : dialog.parent.label}
           projectNames={projects.map((p) => p.name)}
           onCancel={() => setDialog(null)}
           onSubmit={(values) => add(dialog.kind, dialog.parent, values)}

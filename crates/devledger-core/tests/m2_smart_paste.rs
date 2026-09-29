@@ -39,7 +39,9 @@ fn detects_the_whole_supabase_env_block() {
         .find(|d| d.entity.label == "NEXT_PUBLIC_SUPABASE_URL")
         .expect("url detected");
     assert_eq!(url.entity.kind, DetectedKind::EnvVar);
-    assert!(url.secret_value.is_none());
+    assert_eq!(url.entity.secret_kind, None);
+    // Kept in Rust so the .env can be stored whole, but never masked as a key.
+    assert!(url.secret_value.is_some());
 
     let secrets = found.iter().filter(|d| d.entity.is_secret()).count();
     assert_eq!(secrets, 3, "anon key, service_role key and database URL");
@@ -376,14 +378,23 @@ fn secret_values_never_appear_in_the_serialized_analysis() {
         !json.contains("s3cr3t-pw"),
         "database password leaked into the analysis"
     );
-    for value in staged.values.iter().flatten() {
+    let secrets: Vec<_> = analysis
+        .entities
+        .iter()
+        .zip(&staged.values)
+        .filter(|(entity, _)| entity.is_secret())
+        .filter_map(|(_, value)| value.as_ref())
+        .collect();
+    for value in &secrets {
         assert!(
             !json.contains(value.expose()),
             "a staged secret value leaked into the serialized analysis"
         );
     }
-    // The staging area really does hold the three secrets.
-    assert_eq!(staged.values.iter().filter(|v| v.is_some()).count(), 3);
+    // The staging area really does hold the three secrets, plus the plain URL
+    // so it can be stored as a variable.
+    assert_eq!(secrets.len(), 3);
+    assert_eq!(staged.values.iter().filter(|v| v.is_some()).count(), 4);
 }
 
 #[test]
@@ -459,4 +470,41 @@ fn blind_index_normalisation_matches_the_detector_cleanup() {
         blind_index::blind_index(&key, blind_index::DOMAIN_SECRET_VALUE, a.expose()).unwrap(),
         blind_index::blind_index(&key, blind_index::DOMAIN_SECRET_VALUE, b.expose()).unwrap()
     );
+}
+
+#[test]
+fn another_providers_key_is_not_tied_to_the_supabase_project_it_was_pasted_with() {
+    // A typical app .env: a Supabase URL next to Stripe, OpenAI and Resend keys.
+    let text = "NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\n\
+                STRIPE_SECRET_KEY=sk_test_FAKEFAKEFAKEFAKEFAKEFAKE00\n\
+                OPENAI_API_KEY=sk-proj-FAKEFAKEFAKEFAKEFAKEFAKEFAKE\n\
+                RESEND_API_KEY=re_FAKE1234567890abcdef\n";
+    let (analysis, _) = analyze(
+        text,
+        SourceKind::SmartPaste,
+        &index_key(),
+        &EmptyLookup,
+        NOW,
+    )
+    .expect("analyze");
+    assert!(analysis.chain.service_project.is_some());
+
+    let tied: Vec<(&str, bool)> = analysis
+        .proposed_relations
+        .iter()
+        .filter(|r| r.kind == devledger_core::model::RelationKind::AuthenticatesTo)
+        .filter_map(|r| match &r.from {
+            devledger_core::paste::review::ProposedEndpoint::New {
+                entity_index: Some(i),
+                ..
+            } => Some((analysis.entities[*i].label.as_str(), r.selected_by_default)),
+            _ => None,
+        })
+        .collect();
+
+    // Stripe and OpenAI keys are known to be for something else: no link.
+    assert!(!tied.iter().any(|(label, _)| *label == "STRIPE_SECRET_KEY"));
+    assert!(!tied.iter().any(|(label, _)| *label == "OPENAI_API_KEY"));
+    // A key nothing attributes is offered, but not ticked.
+    assert_eq!(tied, vec![("RESEND_API_KEY", false)]);
 }

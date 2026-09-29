@@ -12,6 +12,7 @@ import {
   initialRelations,
   isActionable,
   matchesFor,
+  targetProjectLabel,
   unansweredRequired,
   type EntityChoice,
 } from "./review";
@@ -20,15 +21,15 @@ describe("review sheet state", () => {
   it("only offers decisions for entities that carry a value", () => {
     const analysis = analysisFixture();
     const actionable = analysis.entities.filter(isActionable);
-    expect(actionable.map((e) => e.index)).toEqual([1, 2]);
-    // The URL is context, not something to store as a secret.
-    expect(isActionable(analysis.entities[0]!)).toBe(false);
+    // The URL is a plain .env line: stored as a variable, not a secret.
+    expect(actionable.map((e) => e.index)).toEqual([0, 1, 2]);
+    expect(isActionable({ ...analysis.entities[0]!, kind: "email" })).toBe(false);
   });
 
   it("starts each row on the backend's recommendation", () => {
     const analysis = analysisFixture();
     const choices = initialChoices(analysis);
-    expect(Object.keys(choices)).toEqual(["1", "2"]);
+    expect(Object.keys(choices)).toEqual(["0", "1", "2"]);
     expect(choices[1]!.choice).toBe("save");
     expect(choices[2]!.choice).toBe("save");
   });
@@ -215,6 +216,9 @@ describe("open questions", () => {
     });
     const answers = buildAnswers(analysis, initialAnswers(analysis, inside));
     expect(answers[0]!.choice).toEqual({ sort: "existing", entity: { kind: "project", id: inside } });
+    // And the chain names it, rather than saying the project was not stated.
+    expect(targetProjectLabel(analysis, inside)).toBe("Open project");
+    expect(targetProjectLabel(analysis, null)).toBeNull();
   });
 
   it("carries a typed name through as new_named", () => {

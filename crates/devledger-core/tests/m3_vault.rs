@@ -391,7 +391,8 @@ fn a_rotated_value_updates_the_existing_secret() {
         .analyze_paste("Acme Storefront\nSupabase\nAPI_TOKEN=ghp_0123456789abcdefghij0123456789abcdefgh\nURL=https://abcdefghijklmnopqrst.supabase.co", SourceKind::SmartPaste)
         .expect("analyze");
     let outcome = vault.commit_review(&accept_all(&first)).expect("commit");
-    assert_eq!(outcome.secrets_created, 1);
+    // The token, and URL= kept as a plain variable.
+    assert_eq!(outcome.secrets_created, 2);
     let project_id = outcome.touched_project_ids[0];
 
     // Same name, different value.
@@ -442,7 +443,8 @@ fn a_critical_warning_blocks_save_until_acknowledged() {
     // and retry without re-pasting.
     submission.acknowledge_critical = true;
     let outcome = vault.commit_review(&submission).expect("commit");
-    assert_eq!(outcome.secrets_created, 1);
+    // The key, and URL= kept as a plain variable.
+    assert_eq!(outcome.secrets_created, 2);
 }
 
 #[test]
@@ -705,4 +707,54 @@ fn a_relation_whose_entity_was_skipped_is_dropped_with_it() {
             "relations must not outlive the entities they point at"
         );
     }
+}
+
+#[test]
+fn keys_for_other_services_are_filed_on_the_project_not_the_supabase_resource() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    let project = vault.create_project("acme-shop", None).expect("project");
+    let text = "NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\n\
+                SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3BxcnN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoyMDE1NTc2MDAwfQ.c2lnbmF0dXJlLXBsYWNlaG9sZGVy\n\
+                STRIPE_SECRET_KEY=sk_test_FAKEFAKEFAKEFAKEFAKEFAKE00\n\
+                RESEND_API_KEY=re_FAKE1234567890abcdef\n";
+    let analysis = vault
+        .analyze_paste(text, SourceKind::SmartPaste)
+        .expect("analyze");
+    let mut submission = accept_all(&analysis);
+    submission.target_project_id = Some(project.id);
+    vault.commit_review(&submission).expect("commit");
+
+    let via: Vec<(String, Option<String>)> = vault
+        .list_secrets(project.id)
+        .expect("list")
+        .into_iter()
+        .map(|e| (e.secret.name, e.service_project_name))
+        .collect();
+    let resource_of = |name: &str| {
+        via.iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name} was saved"))
+            .1
+            .clone()
+    };
+
+    assert_eq!(
+        resource_of("SUPABASE_SERVICE_ROLE_KEY").as_deref(),
+        Some("abcdefghijklmnopqrst")
+    );
+    assert_eq!(resource_of("STRIPE_SECRET_KEY"), None);
+    assert_eq!(resource_of("RESEND_API_KEY"), None);
+
+    // The plain URL is kept too, as a variable, so Copy .env gives the file back.
+    let url = vault
+        .list_secrets(project.id)
+        .expect("list")
+        .into_iter()
+        .find(|e| e.secret.name == "NEXT_PUBLIC_SUPABASE_URL")
+        .expect("the URL was stored");
+    assert_eq!(url.secret.kind, devledger_core::model::SecretKind::EnvVar);
+    assert_eq!(
+        vault.reveal_secret(url.secret.id).expect("reveal").expose(),
+        "https://abcdefghijklmnopqrst.supabase.co"
+    );
 }

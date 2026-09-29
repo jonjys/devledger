@@ -89,6 +89,13 @@ describe("the primary identity", () => {
     expect(findPrimary(data)).toMatchObject({ identityId: IDS.me, marked: false });
   });
 
+  it("is never an entry with no email", () => {
+    const data = vault(null);
+    data.people = data.people.filter((p) => !p.identity.email);
+    expect(data.people.length).toBeGreaterThan(0);
+    expect(findPrimary(data)).toBeNull();
+  });
+
   it("does not exist in an empty vault", () => {
     const data = vault(null);
     data.people = [];

@@ -415,7 +415,8 @@ export function AddDialog({
   onSubmit,
 }: {
   kind: AddKind;
-  parentLabel: string;
+  /** What the new node goes under; null for the first email, which is the centre. */
+  parentLabel: string | null;
   projectNames: string[];
   onCancel: () => void;
   onSubmit: (values: AddValues) => Promise<void>;
@@ -488,8 +489,14 @@ export function AddDialog({
         <header>
           <h2>{ADD_TITLE[kind]}</h2>
           <p>
-            Under <strong>{parentLabel}</strong>
-            {secret ? ". Stored encrypted in your vault; it is never shown here again." : "."}
+            {parentLabel === null ? (
+              "It becomes the centre of your tree. Everything you add hangs off it."
+            ) : (
+              <>
+                Under <strong>{parentLabel}</strong>
+                {secret ? ". Stored encrypted in your vault; it is never shown here again." : "."}
+              </>
+            )}
           </p>
         </header>
         <div className="scroll">

@@ -886,12 +886,27 @@ fn propose_relations(
                     "secret.self_declared_ref",
                     format!("The value itself names reference {}", sp.label),
                 )
-            } else {
+            } else if &det.entity.provider == provider {
                 Evidence::new(
                     EvidenceLevel::Heuristic,
                     "secret.colocated",
                     format!("Pasted alongside credentials for {}", sp.label),
                 )
+            } else if det.entity.provider == Provider::Unknown {
+                // A key nothing attributes, e.g. RESEND_API_KEY in a Supabase
+                // .env: offered, but left for the user to tick.
+                Evidence::new(
+                    EvidenceLevel::Weak,
+                    "secret.colocated_unattributed",
+                    format!(
+                        "Pasted in the same block as {}; nothing says it is for it",
+                        sp.label
+                    ),
+                )
+            } else {
+                // A Stripe or OpenAI key does not authenticate to a Supabase
+                // project just because it sits in the same .env.
+                continue;
             };
             push(
                 ProposedEndpoint::New {
