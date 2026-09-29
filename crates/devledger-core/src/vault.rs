@@ -408,7 +408,10 @@ impl Vault {
                 .name_override
                 .clone()
                 .unwrap_or_else(|| entity.label.clone());
-            let kind = entity.secret_kind.unwrap_or(SecretKind::GenericApiKey);
+            let kind = entity.secret_kind.unwrap_or(match entity.kind {
+                crate::paste::detect::DetectedKind::EnvVar => SecretKind::EnvVar,
+                _ => SecretKind::GenericApiKey,
+            });
 
             match effective {
                 RecommendedAction::Skip { .. } => outcome.entities_skipped += 1,
@@ -418,9 +421,11 @@ impl Vault {
                     outcome.secrets_updated += 1;
                 }
                 RecommendedAction::Create => {
-                    // A secret goes against the provider resource when there is
-                    // one, because that is what it authenticates to. Otherwise
-                    // it is filed directly against the project.
+                    // A secret goes against the provider resource when it is
+                    // that provider's credential, because that is what it
+                    // authenticates to. Anything else in the paste -- a Stripe
+                    // key next to a Supabase URL -- is filed directly against
+                    // the project.
                     if resolved.service_project.is_none() && resolved.project.is_none() {
                         return Err(CoreError::Invalid(
                             "choose a project before saving: these credentials have nothing to \
@@ -428,13 +433,21 @@ impl Vault {
                                 .into(),
                         ));
                     }
+                    let names_resource =
+                        analysis.chain.service_project.as_ref().is_some_and(|sp| {
+                            entity.project_ref.as_deref() == Some(sp.label.as_str())
+                        });
+                    let on_resource = resolved.service_project.is_some()
+                        && (resolved.project.is_none()
+                            || names_resource
+                            || entity.provider == analysis.provider);
                     let record = self.insert_secret(
-                        if resolved.service_project.is_some() {
-                            None
+                        if on_resource { None } else { resolved.project },
+                        if on_resource {
+                            resolved.service_project
                         } else {
-                            resolved.project
+                            None
                         },
-                        resolved.service_project,
                         kind,
                         &name,
                         entity.environment,

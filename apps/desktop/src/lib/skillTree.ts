@@ -176,7 +176,10 @@ export function findPrimary(data: SkillData): Primary | null {
     );
     if (field) return { identityId: person.identity.id, marked: true, field };
   }
-  const fallback = data.people.find((p) => p.identity.email) ?? data.people[0];
+  // An entry with no email -- what a paste leaves when it names no one -- is
+  // never the centre: the tree asks for the user's address instead, and the
+  // entry then hangs off it, waiting to be moved.
+  const fallback = data.people.find((p) => p.identity.email);
   return fallback ? { identityId: fallback.identity.id, marked: false, field: null } : null;
 }
 

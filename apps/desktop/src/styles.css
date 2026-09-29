@@ -1471,6 +1471,9 @@ select option { background: var(--panel); color: var(--text); }
 .nav-badge.pulse { animation: attention-pulse 1.6s ease-in-out infinite; }
 .finding.critical.pulse { animation: attention-pulse 1.8s ease-in-out infinite; border-color: #EF4444; }
 .attention-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12.5px; }
+.attention-actions input {
+  width: 220px; background: #0A0A0A; border-color: #2A2A2A; border-radius: 6px; padding: 5px 8px;
+}
 .attention-actions select {
   background: #0A0A0A; color: #E5E5E5; border: 1px solid #2A2A2A; border-radius: 6px;
   padding: 5px 8px; font: inherit; color-scheme: dark;

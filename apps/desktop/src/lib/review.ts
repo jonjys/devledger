@@ -28,9 +28,13 @@ export interface EntityChoice {
   nameOverride: string | null;
 }
 
-/** Entities the user can actually decide about: the ones carrying a value. */
+/**
+ * Entities the user can actually decide about: the ones carrying a value.
+ * Plain .env lines count, so a pasted .env is stored whole as the project's
+ * variables.
+ */
 export function isActionable(entity: DetectedEntity): boolean {
-  return entity.kind === "secret";
+  return entity.kind === "secret" || entity.kind === "env_var";
 }
 
 /**
@@ -145,6 +149,23 @@ export function initialAnswers(
     };
   }
   return state;
+}
+
+/**
+ * The name of the project a paste was made inside, when "which project?"
+ * offers it. The chain only knows what the text itself said.
+ */
+export function targetProjectLabel(
+  analysis: PasteAnalysis,
+  targetProjectId: string | null,
+): string | null {
+  if (!targetProjectId) return null;
+  for (const question of analysis.questions) {
+    if (question.kind !== "which_project") continue;
+    const hit = question.candidates.find((c) => c.existing?.id === targetProjectId);
+    if (hit) return hit.label;
+  }
+  return null;
 }
 
 function toAnswerChoice(

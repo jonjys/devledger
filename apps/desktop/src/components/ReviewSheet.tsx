@@ -10,6 +10,7 @@ import {
   initialRelations,
   isActionable,
   matchesFor,
+  targetProjectLabel,
   unansweredRequired,
   type AnswerState,
   type Choice,
@@ -136,7 +137,7 @@ export default function ReviewSheet({
         </header>
 
         <div className="scroll">
-          <ChainSummary analysis={analysis} />
+          <ChainSummary analysis={analysis} pastedInto={targetProjectLabel(analysis, targetProjectId)} />
 
           {analysis.questions.length > 0 && (
             <section className="section">
@@ -166,7 +167,7 @@ export default function ReviewSheet({
 
           {actionable.length > 0 && (
             <section className="section">
-              <h3>Detected credentials</h3>
+              <h3>To save</h3>
               {actionable.map((entity) => (
                 <EntityRow
                   key={entity.index}
@@ -311,7 +312,9 @@ function EntityRow({ entity, analysis, choice, onChoice, onTarget }: RowProps) {
       <div className="head">
         <span className="label">{entity.label}</span>
         <span className="value">{entity.value_preview}</span>
-        <span className="tag secret">{secretKindLabel(entity.secret_kind)}</span>
+        <span className="tag secret">
+          {entity.kind === "env_var" ? "Variable" : secretKindLabel(entity.secret_kind)}
+        </span>
         {unsafe && <span className="tag unsafe">server only</span>}
         <span className={`tag ${entity.evidence.level}`}>{entity.evidence.level}</span>
       </div>
@@ -362,7 +365,13 @@ function EntityRow({ entity, analysis, choice, onChoice, onTarget }: RowProps) {
 }
 
 /** The Identity → Account → Organization → Resource → Project chain. */
-function ChainSummary({ analysis }: { analysis: PasteAnalysis }) {
+function ChainSummary({
+  analysis,
+  pastedInto,
+}: {
+  analysis: PasteAnalysis;
+  pastedInto: string | null;
+}) {
   const rungs: [string, ChainNode | null][] = [
     ["identity", analysis.chain.identity],
     ["account", analysis.chain.account],
@@ -384,6 +393,11 @@ function ChainSummary({ analysis }: { analysis: PasteAnalysis }) {
                 <span className="val">{node.label}</span>
                 <span className={`tag ${node.evidence.level}`}>{node.evidence.level}</span>
                 <span className="why">{node.evidence.reason}</span>
+              </>
+            ) : role === "project" && pastedInto ? (
+              <>
+                <span className="val">{pastedInto}</span>
+                <span className="why">You pasted it inside this project</span>
               </>
             ) : (
               <span className="val muted">not stated</span>

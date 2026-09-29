@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import * as api from "../lib/api";
 import { plural } from "../lib/format";
-import type { AttentionItem, Identity } from "../lib/types";
+import type { AttentionItem, Identity, Organization } from "../lib/types";
 
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
@@ -70,6 +70,13 @@ export default function AttentionView({ onNotify, refreshKey, onChanged }: Props
                 onNotify={onNotify}
                 onChanged={changed}
               />
+            ) : item.kind === "unassigned_organization" ? (
+              <NoOrganization
+                key={`${item.entity.id}-${item.kind}-${i}`}
+                item={item}
+                onNotify={onNotify}
+                onChanged={changed}
+              />
             ) : (
               <div key={`${item.entity.id}-${item.kind}-${i}`} className="finding warning">
                 <div className="t">{item.title}</div>
@@ -120,6 +127,10 @@ function Unidentified({
     try {
       const accounts = await api.accountsForIdentity(item.entity.id);
       for (const account of accounts) await api.moveAccount(account.id, to.id);
+      // The entry was only a placeholder for those accounts: once it holds
+      // nothing, it goes too, so one click settles it.
+      const left = await api.accountsForIdentity(item.entity.id);
+      if (left.length === 0) await api.deleteIdentity(item.entity.id);
       onNotify(`Moved ${plural(accounts.length, "account")} to ${to.email ?? to.label}`);
       await onChanged();
     } catch (e: unknown) {
@@ -174,6 +185,109 @@ function Unidentified({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const NEW_ORG = "__new__";
+
+/**
+ * A provider resource with no organization. The fix is naming the one that
+ * owns it: pick one the account already has, or type a new name.
+ */
+function NoOrganization({
+  item,
+  onNotify,
+  onChanged,
+}: {
+  item: AttentionItem;
+  onNotify: Props["onNotify"];
+  onChanged: () => Promise<void>;
+}) {
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [choice, setChoice] = useState(NEW_ORG);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const resources = await api.listServiceProjects();
+      const resource = resources.find((r) => r.service_project.id === item.entity.id);
+      if (!resource || !live) return;
+      const account = resource.service_project.account_id;
+      const existing = await api.organizationsForAccount(account);
+      if (!live) return;
+      setAccountId(account);
+      setOrgs(existing);
+      setChoice(existing[0]?.id ?? NEW_ORG);
+    })().catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [item.entity.id]);
+
+  const typed = name.trim();
+  const ready = accountId !== null && (choice !== NEW_ORG || typed.length > 0);
+
+  async function save() {
+    if (!ready || busy || !accountId) return;
+    setBusy(true);
+    try {
+      const org = choice === NEW_ORG ? await api.createOrganization(accountId, typed) : null;
+      const orgId = org?.id ?? choice;
+      await api.assignOrganization(item.entity.id, orgId);
+      onNotify(`Filed under ${org?.name ?? orgs.find((o) => o.id === orgId)?.name ?? "the organization"}`);
+      await onChanged();
+    } catch (e: unknown) {
+      onNotify(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="finding warning">
+      <div className="t">{item.title}</div>
+      <div className="d">{item.detail}</div>
+      {accountId && (
+        <form
+          className="attention-actions"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <label htmlFor={`org-${item.entity.id}`}>Organization</label>
+          {orgs.length > 0 && (
+            <select
+              id={`org-${item.entity.id}`}
+              value={choice}
+              onChange={(e) => setChoice(e.target.value)}
+            >
+              {orgs.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+              <option value={NEW_ORG}>New organization…</option>
+            </select>
+          )}
+          {choice === NEW_ORG && (
+            <input
+              id={orgs.length > 0 ? undefined : `org-${item.entity.id}`}
+              aria-label="Organization name"
+              placeholder="Organization name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          )}
+          <button type="submit" className="primary" disabled={!ready || busy}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </form>
+      )}
     </div>
   );
 }

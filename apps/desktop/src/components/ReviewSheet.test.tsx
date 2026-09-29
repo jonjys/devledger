@@ -56,11 +56,13 @@ describe("ReviewSheet", () => {
     const user = userEvent.setup();
     const { onSave } = renderSheet();
 
-    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 3$/ }));
 
     expect(onSave).toHaveBeenCalledTimes(1);
     const submission = onSave.mock.calls[0]![0];
     expect(submission.decisions).toEqual([
+      // The URL is a plain .env line, stored as a variable.
+      { entity_index: 0, decision: { sort: "accept" }, name_override: null },
       { entity_index: 1, decision: { sort: "accept" }, name_override: null },
       { entity_index: 2, decision: { sort: "accept" }, name_override: null },
     ]);
@@ -76,7 +78,7 @@ describe("ReviewSheet", () => {
     expect(row).not.toBeNull();
     await user.click(within(row as HTMLElement).getByRole("button", { name: "Skip" }));
 
-    await user.click(screen.getByRole("button", { name: /^Save 1$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
     const submission = onSave.mock.calls[0]![0];
     expect(submission.decisions).toContainEqual({
       entity_index: 2,
@@ -91,7 +93,7 @@ describe("ReviewSheet", () => {
 
     const row = screen.getByText("SUPABASE_SERVICE_ROLE_KEY").closest(".entity");
     await user.click(within(row as HTMLElement).getByRole("button", { name: "Change" }));
-    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 3$/ }));
 
     const submission = onSave.mock.calls[0]![0];
     expect(submission.decisions).toContainEqual({
@@ -126,7 +128,7 @@ describe("ReviewSheet", () => {
     const { onSave } = renderSheet(analysis);
 
     expect(screen.getByText(/exposed to the browser/)).toBeInTheDocument();
-    const save = screen.getByRole("button", { name: /^Save 2$/ });
+    const save = screen.getByRole("button", { name: /^Save 3$/ });
     expect(save).toBeDisabled();
 
     await user.click(screen.getByRole("checkbox", { name: /understand the risk/i }));
@@ -191,7 +193,7 @@ describe("ReviewSheet chain and questions", () => {
     const user = userEvent.setup();
     const { onSave } = renderSheet();
 
-    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 3$/ }));
 
     const submission = onSave.mock.calls[0]![0];
     expect(submission.answers).toEqual([
@@ -213,7 +215,7 @@ describe("ReviewSheet chain and questions", () => {
       within(orgBlock).getByText(/appear under Needs attention/i),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 3$/ }));
     const submission = onSave.mock.calls[0]![0];
     expect(submission.answers).toContainEqual({
       question_id: "organization",
@@ -236,7 +238,7 @@ describe("ReviewSheet chain and questions", () => {
       "Curl-to-Buy",
     );
 
-    await user.click(screen.getByRole("button", { name: /^Save 2$/ }));
+    await user.click(screen.getByRole("button", { name: /^Save 3$/ }));
     const submission = onSave.mock.calls[0]![0];
     expect(submission.answers).toContainEqual({
       question_id: "project",
@@ -267,7 +269,7 @@ describe("ReviewSheet chain and questions", () => {
       screen.getByLabelText("Which project is this for?"),
       "Some Project",
     );
-    expect(screen.getByRole("button", { name: /^Save 2$/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Save 3$/ })).toBeEnabled();
   });
 
   it("reads a relation as a sentence with its verb", () => {

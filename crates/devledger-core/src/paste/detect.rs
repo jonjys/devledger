@@ -515,7 +515,9 @@ fn detect_env_assignments(
                             "Plain environment variable assignment",
                         ),
                     },
-                    secret_value: None,
+                    // Not a secret, but kept so a pasted .env can be stored as
+                    // the project's variables and copied back out whole.
+                    secret_value: Some(SecretString::new(cleaned)),
                     span,
                 });
             }

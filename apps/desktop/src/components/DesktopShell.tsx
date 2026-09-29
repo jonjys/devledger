@@ -304,7 +304,12 @@ function DesktopShellInner({ onLock }: Props) {
                     type="button"
                     className={`nav-item${view === item.id ? " active" : ""}`}
                     aria-current={view === item.id}
-                    onClick={() => setView(item.id)}
+                    onClick={() => {
+                      // Projects in the sidebar always means the list, even
+                      // from inside a project.
+                      if (item.id === "projects") setSelected(null);
+                      setView(item.id);
+                    }}
                   >
                     <span className="nav-icon">
                       <Icon name={item.icon} />

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "../lib/api";
-import type { Account, AttentionItem, Identity } from "../lib/types";
+import type { Account, AttentionItem, Identity, ServiceProjectSummary } from "../lib/types";
 import AttentionView from "./AttentionView";
 
 vi.mock("../lib/api");
@@ -76,5 +76,70 @@ describe("Needs attention", () => {
     render(<AttentionView onNotify={vi.fn()} refreshKey={0} />);
     await user.click(await screen.findByRole("button", { name: "Delete empty entry" }));
     await waitFor(() => expect(mocked.deleteIdentity).toHaveBeenCalledWith("id-none"));
+  });
+
+  it("removes the entry itself once its accounts have moved", async () => {
+    const user = userEvent.setup();
+    mocked.needsAttention.mockResolvedValue([NO_EMAIL]);
+    mocked.listIdentities.mockResolvedValue([identity("id-none", null), identity("id-me", "primary@example.com")]);
+    // Before the move: one account. After it: none left.
+    mocked.accountsForIdentity
+      .mockResolvedValueOnce([account("a1")])
+      .mockResolvedValueOnce([account("a1")])
+      .mockResolvedValue([]);
+
+    render(<AttentionView onNotify={vi.fn()} refreshKey={0} />);
+    await user.click(await screen.findByRole("button", { name: "Move 1 account" }));
+    await waitFor(() => expect(mocked.deleteIdentity).toHaveBeenCalledWith("id-none"));
+    expect(mocked.moveAccount).toHaveBeenCalledWith("a1", "id-me");
+  });
+
+  it("files a resource with no organization under a newly named one", async () => {
+    const user = userEvent.setup();
+    mocked.needsAttention.mockResolvedValue([
+      {
+        kind: "unassigned_organization",
+        title: "abcdefghijklmnopqrst has no organization",
+        detail: "",
+        entity: { kind: "service_project", id: "sp1" },
+      },
+    ]);
+    mocked.listIdentities.mockResolvedValue([]);
+    mocked.listServiceProjects.mockResolvedValue([
+      {
+        service_project: {
+          id: "sp1",
+          account_id: "acc1",
+          organization_id: null,
+          provider: "supabase",
+          provider_ref: "abcdefghijklmnopqrst",
+          name: "abcdefghijklmnopqrst",
+          region: null,
+          environment: "unknown",
+          url: null,
+          notes: null,
+          created_at: AT,
+        },
+        account_label: "Supabase",
+        identity_email: null,
+        organization_name: null,
+        secret_count: 1,
+        used_by: [],
+      } satisfies ServiceProjectSummary,
+    ]);
+    mocked.organizationsForAccount.mockResolvedValue([]);
+    mocked.createOrganization.mockResolvedValue({
+      id: "org1",
+      account_id: "acc1",
+      provider_org_id: null,
+      name: "Acme Org",
+      created_at: AT,
+    });
+
+    render(<AttentionView onNotify={vi.fn()} refreshKey={0} />);
+    await user.type(await screen.findByLabelText("Organization name"), "Acme Org");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocked.assignOrganization).toHaveBeenCalledWith("sp1", "org1"));
+    expect(mocked.createOrganization).toHaveBeenCalledWith("acc1", "Acme Org");
   });
 });
