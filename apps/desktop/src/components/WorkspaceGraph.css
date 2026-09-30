@@ -1,0 +1,82 @@
+/* Workspace graph: projects, identities and service accounts are peers on a canvas.
+   Moving a node is visual only. Relationships change only through explicit connectors. */
+
+.wg-shell { position: relative; height: calc(100vh - 74px); min-height: 560px; background: #09090b; overflow: hidden; }
+.wg-toolbar { height: 64px; display: flex; align-items: center; gap: 8px; padding: 0 14px 0 18px; border-bottom: 1px solid #27272a; background: rgba(12,12,14,.96); }
+.wg-title { display: flex; flex-direction: column; min-width: 0; }
+.wg-title strong { font-size: 14px; color: #fafafa; }
+.wg-title span { margin-top: 3px; font-size: 11px; color: #71717a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wg-toolbar .ghost { height: 34px; padding: 0 11px; }
+.wg-lock { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid #3f3f46; font-weight: 650; font-size: 12px; }
+.wg-lock.editing { color: #ff9f32; border-color: #7c4a14; background: #21160c; }
+.wg-lock.locked { color: #d4d4d8; background: #18181b; }
+.wg-body { display: grid; grid-template-columns: minmax(0,1fr) 252px; height: calc(100% - 64px); }
+.wg-canvas { position: relative; min-width: 0; background: #09090b; }
+.wg-canvas .react-flow { width: 100%; height: 100%; }
+.wg-canvas .react-flow__controls { border: 1px solid #27272a; box-shadow: none; border-radius: 8px; overflow: hidden; }
+.wg-canvas .react-flow__controls-button { background: #18181b; color: #d4d4d8; border-bottom-color: #27272a; }
+.wg-canvas .react-flow__controls-button:hover { background: #27272a; }
+.wg-canvas .react-flow__controls-button svg { fill: currentColor; }
+.wg-node { width: 220px; min-height: 66px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #3f3f46; border-radius: 12px; background: #141416; box-shadow: 0 8px 30px rgba(0,0,0,.22); transition: border-color 120ms ease, box-shadow 120ms ease; }
+.wg-node:hover { border-color: #52525b; }
+.wg-node.selected { border-color: #ff8a00; box-shadow: 0 0 0 1px rgba(255,138,0,.25), 0 10px 34px rgba(0,0,0,.28); }
+.wg-node.project { border-color: #6b461e; background: linear-gradient(145deg,#1b1510,#121214 70%); }
+.wg-node.project.selected { border-color: #ff8a00; }
+.wg-node.identity { border-style: dashed; }
+.wg-node.locked { cursor: default; }
+.wg-node-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 9px; background: #202024; color: #d4d4d8; font-weight: 800; }
+.wg-node.project .wg-node-icon { background: #ff8a00; color: #09090b; box-shadow: 0 0 18px rgba(255,138,0,.24); }
+.wg-node.identity .wg-node-icon { background: #11262a; color: #5eead4; }
+.wg-node-copy { min-width: 0; flex: 1; }
+.wg-node-kind { color: #71717a; font-size: 9px; line-height: 1; text-transform: uppercase; letter-spacing: .11em; font-weight: 700; }
+.wg-node-label { margin-top: 5px; color: #fafafa; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wg-node-sub { margin-top: 3px; color: #a1a1aa; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wg-handle.react-flow__handle { width: 10px; height: 10px; min-width: 10px; min-height: 10px; border: 2px solid #09090b; background: #ff8a00; opacity: .25; transition: opacity 120ms ease, transform 120ms ease; }
+.wg-node:hover .wg-handle.react-flow__handle, .wg-node.selected .wg-handle.react-flow__handle { opacity: 1; transform: scale(1.15); }
+.wg-node.locked .wg-handle.react-flow__handle { display: none; }
+.react-flow__edge.wg-edge .react-flow__edge-path { stroke-width: 1.6; }
+.react-flow__edge.wg-edge.owns .react-flow__edge-path { stroke: #3f3f46; stroke-dasharray: 4 5; }
+.react-flow__edge.wg-edge.project-link .react-flow__edge-path { stroke: #b86a14; stroke-width: 2.2; }
+.react-flow__edge.wg-edge.project-link:hover .react-flow__edge-path { stroke: #ff8a00; stroke-width: 3; }
+.react-flow__connection-path { stroke: #ff8a00; stroke-width: 2; }
+.wg-library { min-width: 0; border-left: 1px solid #27272a; background: #111113; padding: 14px 12px 12px; overflow-y: auto; }
+.wg-library-head { display: flex; flex-direction: column; margin: 1px 4px 12px; }
+.wg-library-head strong { color: #fafafa; font-size: 13px; }
+.wg-library-head span { color: #71717a; font-size: 10px; margin-top: 3px; }
+.wg-library-main { width: 100%; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 9px; padding: 9px; margin-bottom: 7px; text-align: left; border: 1px solid #27272a; border-radius: 10px; background: #171719; }
+.wg-library-main:hover:not(:disabled) { border-color: #52525b; background: #1d1d20; }
+.wg-library-main > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; }
+.wg-library-main strong { font-size: 11px; color: #f4f4f5; }
+.wg-library-main small { margin-top: 2px; font-size: 9px; color: #71717a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wg-library-main b, .wg-provider-list b { color: #71717a; font-weight: 500; }
+.wg-library-symbol { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; font-weight: 800; }
+.wg-library-symbol.project { background: #ff8a00; color: #09090b; }
+.wg-library-symbol.identity { background: #11262a; color: #5eead4; }
+.wg-library-section { margin-top: 16px; }
+.wg-library-label { margin: 0 4px 7px; color: #71717a; font-size: 9px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+.wg-library-section input { width: 100%; height: 32px; padding: 0 9px; margin-bottom: 7px; font-size: 10px; border-radius: 8px; }
+.wg-provider-list { display: flex; flex-direction: column; gap: 3px; }
+.wg-provider-list button { width: 100%; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 6px; height: 32px; padding: 0 8px; text-align: left; border: 0; border-radius: 7px; background: transparent; color: #d4d4d8; font-size: 10px; }
+.wg-provider-list button:hover:not(:disabled) { background: #202024; color: #fff; }
+.wg-custom { width: 100%; height: 31px; margin-top: 6px; border: 1px dashed #3f3f46; border-radius: 7px; background: transparent; color: #a1a1aa; font-size: 10px; }
+.wg-custom:hover:not(:disabled) { border-color: #71717a; color: #fafafa; }
+.wg-library button:disabled { opacity: .38; cursor: default; }
+.wg-library-foot { display: flex; flex-direction: column; gap: 4px; margin: 14px 4px 0; padding-top: 10px; border-top: 1px solid #27272a; color: #52525b; font-size: 9px; line-height: 1.4; }
+.wg-empty { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; color: #a1a1aa; pointer-events: none; }
+.wg-empty strong { color: #f4f4f5; font-size: 14px; }
+.wg-empty span { max-width: 430px; font-size: 11px; }
+.wg-empty div { display: flex; gap: 7px; margin-top: 8px; pointer-events: auto; }
+.wg-selection { position: absolute; z-index: 6; left: 16px; bottom: 16px; max-width: 430px; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid #27272a; border-radius: 8px; background: rgba(17,17,19,.92); box-shadow: 0 8px 28px rgba(0,0,0,.3); pointer-events: none; }
+.wg-selection strong { color: #e4e4e7; font-size: 10px; }
+.wg-selection span { color: #71717a; font-size: 9px; }
+.wg-dialog { display: flex; flex-direction: column; gap: 12px; }
+.wg-dialog h2 { margin: 0; color: #fafafa; font-size: 18px; }
+.wg-dialog > p { margin: -4px 0 2px; color: #a1a1aa; font-size: 11px; line-height: 1.5; }
+.wg-dialog label { display: flex; flex-direction: column; gap: 5px; color: #d4d4d8; font-size: 10px; font-weight: 600; }
+.wg-dialog input, .wg-dialog select { width: 100%; min-height: 36px; }
+.wg-dialog-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wg-dialog .muted { color: #71717a; font-weight: 400; }
+.wg-dialog-warning { padding: 10px; border: 1px solid #713f12; border-radius: 8px; background: #1c1409; color: #fbbf24; font-size: 10px; line-height: 1.45; }
+.wg-dialog-note { padding: 9px 10px; border: 1px solid #27272a; border-radius: 8px; background: #141416; color: #a1a1aa; font-size: 10px; line-height: 1.45; }
+@media (max-width: 980px) { .wg-body { grid-template-columns: minmax(0,1fr) 210px; } .wg-node { width: 190px; } .wg-title span { display: none; } }
+@media (max-width: 760px) { .wg-shell { height: calc(100vh - 64px); } .wg-body { grid-template-columns: 1fr; height: calc(100% - 54px); } .wg-library { display: none; } .wg-toolbar { height: 54px; padding-left: 10px; } .wg-toolbar .ghost { display: none; } .wg-node { width: 176px; min-height: 60px; padding: 8px 10px; } .wg-dialog-row { grid-template-columns: 1fr; } }
