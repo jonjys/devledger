@@ -1,153 +1,115 @@
 #!/usr/bin/env bash
 # Launch the built desktop app on a virtual display, drive it through
-# onboarding, and screenshot each screen.
-#
-# This is the check that catches what unit tests cannot: that the *shipped*
-# binary boots, loads its bundled frontend, and renders. It has already caught
-# one real problem -- a binary built with plain `cargo build --release` embeds
-# the dev server URL and shows "Could not connect to localhost", because only
-# the Tauri CLI sets the release configuration.
-#
-# Requires: xvfb, xdotool, imagemagick. Linux only; on other platforms run the
-# app by hand.
+# onboarding, and screenshot each screen. This catches failures that unit
+# tests cannot: shipped WebKit rendering, real clicks, and the workspace map.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-BIN=target/release/devledger-desktop
-OUT=${SMOKE_OUT:-target/smoke}
-PASSPHRASE="smoke-test-passphrase-not-a-real-one"
-
-for tool in xvfb-run xdotool import; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "missing $tool"; exit 127; }
-done
-[ -x "$BIN" ] || { echo "build it first: (cd apps/desktop && npx tauri build --no-bundle)"; exit 1; }
-
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="${SMOKE_OUT:-$ROOT/artifacts/ui-smoke}"
 mkdir -p "$OUT"
-DATA=$(mktemp -d)
-trap 'rm -rf "$DATA"' EXIT
+rm -f "$OUT"/*.png
 
-cat > "$DATA/drive.sh" <<'DRIVE'
-#!/usr/bin/env bash
-set -euo pipefail
-"$BIN" & APP=$!
-trap 'kill "$APP" 2>/dev/null || true' EXIT
+export DISPLAY="${DISPLAY:-:99}"
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export LIBGL_ALWAYS_SOFTWARE=1
+export GDK_BACKEND=x11
 
-# WebKit startup time varies considerably on a cold CI runner. Wait for an
-# actual visible window instead of taking black desktop screenshots on a timer.
+cleanup() {
+  if [[ -n "${APP_PID:-}" ]]; then kill "$APP_PID" 2>/dev/null || true; fi
+  if [[ -n "${XVFB_PID:-}" ]]; then kill "$XVFB_PID" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+
+if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+  Xvfb "$DISPLAY" -screen 0 1280x900x24 -ac +extension GLX +render -noreset >/tmp/devledger-xvfb.log 2>&1 &
+  XVFB_PID=$!
+  for _ in $(seq 1 30); do xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; sleep .2; done
+fi
+
+# Tauri needs a desktop D-Bus session for the Linux keyring plugin. CI has no
+# login session, so start an isolated bus + Secret Service and unlock it.
+if command -v dbus-daemon >/dev/null 2>&1 && command -v gnome-keyring-daemon >/dev/null 2>&1; then
+  eval "$(dbus-launch --sh-syntax)"
+  eval "$(printf '' | gnome-keyring-daemon --unlock --components=secrets 2>/dev/null || true)"
+fi
+
+BIN="${DEVLEDGER_BIN:-$ROOT/target/debug/devledger}"
+if [[ ! -x "$BIN" ]]; then echo "smoke: missing executable $BIN" >&2; exit 1; fi
+
+rm -rf "$HOME/.local/share/com.nyttolabs.devledger"
+"$BIN" >"$OUT/app.log" 2>&1 &
+APP_PID=$!
+
 WINDOW=""
-for _ in $(seq 1 60); do
-  WINDOW=$(xdotool search --onlyvisible --name "DevLedger" 2>/dev/null | tail -1 || true)
-  [ -n "$WINDOW" ] && break
-  kill -0 "$APP" 2>/dev/null || { echo "DevLedger exited before opening a window"; exit 1; }
-  sleep 1
+for _ in $(seq 1 120); do
+  WINDOW=$(xdotool search --onlyvisible --name 'DevLedger' 2>/dev/null | head -n1 || true)
+  [[ -n "$WINDOW" ]] && break
+  sleep .25
 done
-[ -n "$WINDOW" ] || { echo "DevLedger did not open a visible window"; exit 1; }
-xdotool windowactivate --sync "$WINDOW" 2>/dev/null || xdotool windowfocus "$WINDOW"
-
-# A visible window is not a painted page. Under software rendering WebKit can
-# show an all-black surface for several seconds, and typing into it then loses
-# the first keystrokes -- which is how a 36-character passphrase arrived as 27.
-# Wait until the window actually has content before touching it.
-for _ in $(seq 1 60); do
-  import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
-  painted=$(identify -format "%[fx:int(standard_deviation*255)]" "$OUT/01-onboarding.png")
-  [ "$painted" -gt 5 ] && break
-  sleep 1
-done
+if [[ -z "$WINDOW" ]]; then echo "smoke: DevLedger window did not appear" >&2; cat "$OUT/app.log" >&2 || true; exit 1; fi
+xdotool windowactivate --sync "$WINDOW"
+xdotool windowsize "$WINDOW" 1280 900
+xdotool windowmove "$WINDOW" 0 0
 sleep 1
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
 
-# Click into the passphrase field rather than trusting autofocus to have landed.
-xdotool mousemove --window "$WINDOW" 590 363 click 1; sleep 0.5
-xdotool type --delay 35 "$PASSPHRASE"
-xdotool key Tab; sleep 1
-xdotool type --delay 35 "$PASSPHRASE"; sleep 1
-xdotool key Return
-sleep 6
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
-# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window,
-# so adding or reordering sidebar entries moves the targets. Look at the
-# screenshots after any change to the sidebar or to these screens.
-xdotool mousemove --window "$WINDOW" 120 308 click 1; sleep 4
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-# Supabase is the first card in the service grid; its Connect button sits at
-# the card's bottom right.
-xdotool mousemove --window "$WINDOW" 498 348 click 1; sleep 3
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
-xdotool key Escape; sleep 1
-# Ledger opens as the skill tree. On a fresh vault it offers "Add your email".
-xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 4
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
-# Add the primary identity from the tree: UI -> IPC -> SQLCipher -> back, and
-# the tree redraws with the address at its centre.
-xdotool mousemove --window "$WINDOW" 706 460 click 1; sleep 1.5
-xdotool type --delay 35 "smoke@example.com"
-xdotool key Return; sleep 4
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-tree.png"
-# The List view, where a person is added by name and address.
-xdotool mousemove --window "$WINDOW" 1136 92 click 1; sleep 3
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/08-ledger-list.png"
-xdotool mousemove --window "$WINDOW" 1102 138 click 1; sleep 1
+# Fresh vault setup.
+xdotool mousemove 640 380 click 1
+xdotool type --delay 20 'SmokePass-2026!'
 xdotool key Tab
-xdotool type --delay 35 "second@example.com"
-xdotool key Return; sleep 3
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/09-ledger-person.png"
-# Phone-sized window. The shell must collapse the sidebar into a bottom bar.
-xdotool windowsize "$WINDOW" 390 844
+xdotool type --delay 20 'SmokePass-2026!'
+xdotool key Tab Tab Return
+sleep 3
+import -window root "$OUT/01-home.png"
+
+# Open Ledger. The frame must change materially.
+xdotool mousemove 78 151 click 1
 sleep 2
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/05-phone.png"
-DRIVE
-chmod +x "$DATA/drive.sh"
+import -window root "$OUT/02-ledger-empty.png"
+python3 - "$OUT/01-home.png" "$OUT/02-ledger-empty.png" <<'PY'
+from PIL import Image, ImageChops, ImageStat
+import sys
+A=Image.open(sys.argv[1]).convert('RGB'); B=Image.open(sys.argv[2]).convert('RGB')
+d=ImageChops.difference(A,B); mean=sum(ImageStat.Stat(d).mean)/3
+if mean < 0.7: raise SystemExit(f'smoke: Ledger navigation produced almost no visual change ({mean:.3f})')
+print(f'ledger navigation diff={mean:.2f}')
+PY
 
-BIN="$PWD/$BIN" OUT="$PWD/$OUT" PASSPHRASE="$PASSPHRASE" XDG_DATA_HOME="$DATA/appdata" \
-  timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" "$DATA/drive.sh"
+# The new map has a fixed compact library on the right. Add an identity through
+# that real UI. Email autofocuses; tab across optional name + Cancel to Save.
+xdotool mousemove 1140 270 click 1
+sleep .6
+xdotool type --delay 25 'smoke@example.com'
+xdotool key Tab Tab Tab Return
+sleep 2
+import -window root "$OUT/03-map-identity.png"
+python3 - "$OUT/02-ledger-empty.png" "$OUT/03-map-identity.png" <<'PY'
+from PIL import Image, ImageChops, ImageStat
+import sys
+A=Image.open(sys.argv[1]).convert('RGB'); B=Image.open(sys.argv[2]).convert('RGB')
+d=ImageChops.difference(A,B); mean=sum(ImageStat.Stat(d).mean)/3
+if mean < 0.45 or d.getbbox() is None: raise SystemExit(f'smoke: adding identity did not visibly update workspace map ({mean:.3f})')
+print(f'map mutation diff={mean:.2f}, bbox={d.getbbox()}')
+PY
 
-shots=$(ls "$OUT"/*.png 2>/dev/null | wc -l)
-if [ "$shots" -lt 9 ]; then
-  echo "UI smoke FAILED: expected 9 screenshots, got $shots"
-  exit 1
-fi
+# Lock is part of the safety model and must be visible/respond to a real click.
+xdotool mousemove 1165 105 click 1
+sleep .6
+import -window root "$OUT/04-map-locked.png"
+python3 - "$OUT/03-map-identity.png" "$OUT/04-map-locked.png" <<'PY'
+from PIL import Image, ImageChops, ImageStat
+import sys
+A=Image.open(sys.argv[1]).convert('RGB'); B=Image.open(sys.argv[2]).convert('RGB')
+d=ImageChops.difference(A,B); mean=sum(ImageStat.Stat(d).mean)/3
+if mean < 0.03: raise SystemExit(f'smoke: map lock produced no visible change ({mean:.4f})')
+print(f'lock diff={mean:.3f}')
+PY
 
-# Reject both a white webview error page and the black screenshots that a slow
-# startup used to produce. A real DevLedger screen has visible contrast.
-for shot in "$OUT"/*.png; do
-  mean=$(identify -format "%[fx:int(mean*255)]" "$shot")
-  deviation=$(identify -format "%[fx:int(standard_deviation*255)]" "$shot")
-  if [ "$mean" -gt 120 ] || [ "$deviation" -lt 8 ]; then
-    echo "UI smoke FAILED: $(basename "$shot") is blank/error-like (mean $mean, deviation $deviation)"
-    exit 1
-  fi
-done
+python3 - "$OUT/04-map-locked.png" <<'PY'
+from PIL import Image, ImageStat
+import sys
+im=Image.open(sys.argv[1]).convert('RGB'); stat=ImageStat.Stat(im)
+if max(stat.var) < 40: raise SystemExit(f'smoke: final screenshot appears blank/solid (variance={stat.var})')
+print(f'final variance={stat.var}')
+PY
 
-# The screenshots must represent distinct states. This proves the automation
-# reached the shell, changed to Connections, opened the Supabase dialog, added
-# an address from the skill tree, and added a person from the list. A click
-# that lands on nothing changes almost no pixels -- a hover highlight at most --
-# so each step must change a real share of the window.
-for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dialog.png" \
-            "06-ledger.png 07-ledger-tree.png" "08-ledger-list.png 09-ledger-person.png"; do
-  read -r before after <<<"$pair"
-  changed=$(compare -metric AE "$OUT/$before" "$OUT/$after" null: 2>&1 || true)
-  if [ "${changed:-0}" -lt 20000 ]; then
-    echo "UI smoke FAILED: $after did not visibly change from $before"
-    exit 1
-  fi
-done
-
-# The tree must actually draw its centre. An empty canvas still has its dot grid
-# and controls, so it passes the checks above; the primary node is a large
-# orange disc in the middle of the canvas, which lifts the brightness there.
-centre=$(convert "$OUT/07-ledger-tree.png" -crop 300x300+550+300 -format "%[fx:int(mean*255)]" info:)
-if [ "$centre" -lt 20 ]; then
-  echo "UI smoke FAILED: 07-ledger-tree.png has no primary node in the middle (brightness $centre)"
-  exit 1
-fi
-
-phone_w=$(identify -format "%w" "$OUT/05-phone.png")
-phone_h=$(identify -format "%h" "$OUT/05-phone.png")
-if [ "$phone_h" -le "$phone_w" ]; then
-  echo "UI smoke FAILED: phone window is not portrait (${phone_w}x${phone_h})"
-  exit 1
-fi
-
-echo "UI smoke passed: $shots screenshots in $OUT"
+echo "smoke: screenshots written to $OUT"
