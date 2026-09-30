@@ -10,6 +10,8 @@
 .wg-lock { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid #3f3f46; font-weight: 650; font-size: 12px; }
 .wg-lock.editing { color: #ff9f32; border-color: #7c4a14; background: #21160c; }
 .wg-lock.locked { color: #d4d4d8; background: #18181b; }
+/* Keep Map/List as a compact view switch, but do not let it cover map controls. */
+.ledger-view.map .ledger-switch { top: 17px; right: 272px; z-index: 9; }
 .wg-body { display: grid; grid-template-columns: minmax(0,1fr) 252px; height: calc(100% - 64px); }
 .wg-canvas { position: relative; min-width: 0; background: #09090b; }
 .wg-canvas .react-flow { width: 100%; height: 100%; }
@@ -78,5 +80,5 @@
 .wg-dialog .muted { color: #71717a; font-weight: 400; }
 .wg-dialog-warning { padding: 10px; border: 1px solid #713f12; border-radius: 8px; background: #1c1409; color: #fbbf24; font-size: 10px; line-height: 1.45; }
 .wg-dialog-note { padding: 9px 10px; border: 1px solid #27272a; border-radius: 8px; background: #141416; color: #a1a1aa; font-size: 10px; line-height: 1.45; }
-@media (max-width: 980px) { .wg-body { grid-template-columns: minmax(0,1fr) 210px; } .wg-node { width: 190px; } .wg-title span { display: none; } }
-@media (max-width: 760px) { .wg-shell { height: calc(100vh - 64px); } .wg-body { grid-template-columns: 1fr; height: calc(100% - 54px); } .wg-library { display: none; } .wg-toolbar { height: 54px; padding-left: 10px; } .wg-toolbar .ghost { display: none; } .wg-node { width: 176px; min-height: 60px; padding: 8px 10px; } .wg-dialog-row { grid-template-columns: 1fr; } }
+@media (max-width: 980px) { .wg-body { grid-template-columns: minmax(0,1fr) 210px; } .wg-node { width: 190px; } .wg-title span { display: none; } .ledger-view.map .ledger-switch { right: 230px; } }
+@media (max-width: 760px) { .wg-shell { height: calc(100vh - 64px); } .wg-body { grid-template-columns: 1fr; height: calc(100% - 54px); } .wg-library { display: none; } .wg-toolbar { height: 54px; padding-left: 10px; padding-right: 122px; } .wg-toolbar .ghost { display: none; } .wg-node { width: 176px; min-height: 60px; padding: 8px 10px; } .wg-dialog-row { grid-template-columns: 1fr; } .ledger-view.map .ledger-switch { top: 11px; right: 10px; } }
