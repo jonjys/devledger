@@ -2,14 +2,8 @@
 # Launch the built desktop app on a virtual display, drive it through
 # onboarding, and screenshot each screen.
 #
-# This is the check that catches what unit tests cannot: that the *shipped*
-# binary boots, loads its bundled frontend, and renders. It has already caught
-# one real problem -- a binary built with plain `cargo build --release` embeds
-# the dev server URL and shows "Could not connect to localhost", because only
-# the Tauri CLI sets the release configuration.
-#
-# Requires: xvfb, xdotool, imagemagick. Linux only; on other platforms run the
-# app by hand.
+# This catches what unit tests cannot: that the shipped binary boots, loads its
+# bundled frontend, renders, and accepts real clicks through the workspace map.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,8 +26,6 @@ set -euo pipefail
 "$BIN" & APP=$!
 trap 'kill "$APP" 2>/dev/null || true' EXIT
 
-# WebKit startup time varies considerably on a cold CI runner. Wait for an
-# actual visible window instead of taking black desktop screenshots on a timer.
 WINDOW=""
 for _ in $(seq 1 60); do
   WINDOW=$(xdotool search --onlyvisible --name "DevLedger" 2>/dev/null | tail -1 || true)
@@ -44,10 +36,6 @@ done
 [ -n "$WINDOW" ] || { echo "DevLedger did not open a visible window"; exit 1; }
 xdotool windowactivate --sync "$WINDOW" 2>/dev/null || xdotool windowfocus "$WINDOW"
 
-# A visible window is not a painted page. Under software rendering WebKit can
-# show an all-black surface for several seconds, and typing into it then loses
-# the first keystrokes -- which is how a 36-character passphrase arrived as 27.
-# Wait until the window actually has content before touching it.
 for _ in $(seq 1 60); do
   import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
   painted=$(identify -format "%[fx:int(standard_deviation*255)]" "$OUT/01-onboarding.png")
@@ -57,7 +45,6 @@ done
 sleep 1
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/01-onboarding.png"
 
-# Click into the passphrase field rather than trusting autofocus to have landed.
 xdotool mousemove --window "$WINDOW" 590 363 click 1; sleep 0.5
 xdotool type --delay 35 "$PASSPHRASE"
 xdotool key Tab; sleep 1
@@ -65,34 +52,32 @@ xdotool type --delay 35 "$PASSPHRASE"; sleep 1
 xdotool key Return
 sleep 6
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
-# Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window,
-# so adding or reordering sidebar entries moves the targets. Look at the
-# screenshots after any change to the sidebar or to these screens.
+
 xdotool mousemove --window "$WINDOW" 120 308 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
-# Supabase is the first card in the service grid; its Connect button sits at
-# the card's bottom right.
 xdotool mousemove --window "$WINDOW" 498 348 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 xdotool key Escape; sleep 1
-# Ledger opens as the skill tree. On a fresh vault it offers "Add your email".
+
+# Ledger now opens as the free workspace map, not the old email-rooted tree.
 xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
-# Add the primary identity from the tree: UI -> IPC -> SQLCipher -> back, and
-# the tree redraws with the address at its centre.
-xdotool mousemove --window "$WINDOW" 706 460 click 1; sleep 1.5
+
+# Add an identity through the compact right-side library.
+xdotool mousemove --window "$WINDOW" 1140 270 click 1; sleep 1
 xdotool type --delay 35 "smoke@example.com"
-xdotool key Return; sleep 4
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-tree.png"
-# The List view, where a person is added by name and address.
-xdotool mousemove --window "$WINDOW" 1136 92 click 1; sleep 3
+xdotool key Tab Tab Tab Return; sleep 4
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-map.png"
+
+# Map/List floats at the top edge of the canvas, clear of the map lock controls.
+xdotool mousemove --window "$WINDOW" 980 150 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/08-ledger-list.png"
 xdotool mousemove --window "$WINDOW" 1102 138 click 1; sleep 1
 xdotool key Tab
 xdotool type --delay 35 "second@example.com"
 xdotool key Return; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/09-ledger-person.png"
-# Phone-sized window. The shell must collapse the sidebar into a bottom bar.
+
 xdotool windowsize "$WINDOW" 390 844
 sleep 2
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/05-phone.png"
@@ -103,51 +88,23 @@ BIN="$PWD/$BIN" OUT="$PWD/$OUT" PASSPHRASE="$PASSPHRASE" XDG_DATA_HOME="$DATA/ap
   timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" "$DATA/drive.sh"
 
 shots=$(ls "$OUT"/*.png 2>/dev/null | wc -l)
-if [ "$shots" -lt 9 ]; then
-  echo "UI smoke FAILED: expected 9 screenshots, got $shots"
-  exit 1
-fi
+if [ "$shots" -lt 9 ]; then echo "UI smoke FAILED: expected 9 screenshots, got $shots"; exit 1; fi
 
-# Reject both a white webview error page and the black screenshots that a slow
-# startup used to produce. A real DevLedger screen has visible contrast.
 for shot in "$OUT"/*.png; do
   mean=$(identify -format "%[fx:int(mean*255)]" "$shot")
   deviation=$(identify -format "%[fx:int(standard_deviation*255)]" "$shot")
-  if [ "$mean" -gt 120 ] || [ "$deviation" -lt 8 ]; then
-    echo "UI smoke FAILED: $(basename "$shot") is blank/error-like (mean $mean, deviation $deviation)"
-    exit 1
-  fi
+  if [ "$mean" -gt 120 ] || [ "$deviation" -lt 8 ]; then echo "UI smoke FAILED: $(basename "$shot") is blank/error-like (mean $mean, deviation $deviation)"; exit 1; fi
 done
 
-# The screenshots must represent distinct states. This proves the automation
-# reached the shell, changed to Connections, opened the Supabase dialog, added
-# an address from the skill tree, and added a person from the list. A click
-# that lands on nothing changes almost no pixels -- a hover highlight at most --
-# so each step must change a real share of the window.
 for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dialog.png" \
-            "06-ledger.png 07-ledger-tree.png" "08-ledger-list.png 09-ledger-person.png"; do
+            "06-ledger.png 07-ledger-map.png" "08-ledger-list.png 09-ledger-person.png"; do
   read -r before after <<<"$pair"
   changed=$(compare -metric AE "$OUT/$before" "$OUT/$after" null: 2>&1 || true)
-  if [ "${changed:-0}" -lt 20000 ]; then
-    echo "UI smoke FAILED: $after did not visibly change from $before"
-    exit 1
-  fi
+  if [ "${changed:-0}" -lt 20000 ]; then echo "UI smoke FAILED: $after did not visibly change from $before"; exit 1; fi
 done
-
-# The tree must actually draw its centre. An empty canvas still has its dot grid
-# and controls, so it passes the checks above; the primary node is a large
-# orange disc in the middle of the canvas, which lifts the brightness there.
-centre=$(convert "$OUT/07-ledger-tree.png" -crop 300x300+550+300 -format "%[fx:int(mean*255)]" info:)
-if [ "$centre" -lt 20 ]; then
-  echo "UI smoke FAILED: 07-ledger-tree.png has no primary node in the middle (brightness $centre)"
-  exit 1
-fi
 
 phone_w=$(identify -format "%w" "$OUT/05-phone.png")
 phone_h=$(identify -format "%h" "$OUT/05-phone.png")
-if [ "$phone_h" -le "$phone_w" ]; then
-  echo "UI smoke FAILED: phone window is not portrait (${phone_w}x${phone_h})"
-  exit 1
-fi
+if [ "$phone_h" -le "$phone_w" ]; then echo "UI smoke FAILED: phone window is not portrait (${phone_w}x${phone_h})"; exit 1; fi
 
 echo "UI smoke passed: $shots screenshots in $OUT"

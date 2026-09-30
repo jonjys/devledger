@@ -1,0 +1,13 @@
+/* The global Ledger view switch predates the workspace toolbar. Keep it on the
+   canvas edge so it never covers Fit / Auto layout / Lock. */
+.ledger-view.map .ledger-switch {
+  top: 76px !important;
+  right: 272px !important;
+  z-index: 9;
+}
+@media (max-width: 980px) {
+  .ledger-view.map .ledger-switch { right: 230px !important; }
+}
+@media (max-width: 760px) {
+  .ledger-view.map .ledger-switch { top: 62px !important; right: 10px !important; }
+}
