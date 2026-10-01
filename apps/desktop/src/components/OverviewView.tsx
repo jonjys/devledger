@@ -63,8 +63,8 @@ export default function OverviewView({
       setProjects(p);
       setIdentities(g);
       setSubs(s);
-      // The skill tree saves its categories in a hidden field on every change.
-      // That is housekeeping, not something the user did to their ledger.
+      // The Ledger map saves where each ball sits in a hidden field whenever one
+      // is moved. That is housekeeping, not something the user did to their ledger.
       setAudit(a.filter((e) => !/\bfield _/.test(e.detail)).slice(0, 8));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);

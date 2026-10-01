@@ -301,8 +301,8 @@ function PersonCard({
         <div className="ledger-label">Projects</div>
         {projects.length === 0 ? (
           <div className="muted">
-            None of this person's accounts are linked to a project yet. Link a resource to a
-            project from the Identities map.
+            None of this person's accounts are used by a project yet. On the Ledger map, draw a
+            line from a project to the services it runs on.
           </div>
         ) : (
           <div className="ledger-projects">

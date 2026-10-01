@@ -40,7 +40,7 @@ interface MoveOption {
 }
 
 /**
- * The map, as an interactive skill tree.
+ * Identities as a collapsible tree.
  *
  * Identity → account → organization → resource, each node collapsible and each
  * able to grow a child or be re-parented. It answers "which of my accounts is
@@ -155,7 +155,7 @@ export default function MapView({ projects, onNotify, onChanged }: Props) {
       )}
 
       <section className="section">
-        <h3>Skill tree</h3>
+        <h3>Accounts by email</h3>
         {graph.map((node) => (
           <IdentityBranch key={node.identity.id} node={node} ctx={ctx} />
         ))}

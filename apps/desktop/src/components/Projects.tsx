@@ -10,7 +10,7 @@ import ProjectVault from "./ProjectVault";
 import ProviderIcon from "./ProviderIcon";
 import type { WordKind } from "./AddAnythingDialog";
 
-const SkillTree = lazy(() => import("./SkillTree"));
+const LedgerCanvas = lazy(() => import("./LedgerCanvas"));
 
 interface Props {
   projects: ProjectSummary[];
@@ -76,9 +76,8 @@ function hue(name: string): number {
 
 /**
  * Projects, laid out the way a deploy dashboard does it: find or switch at the
- * top, a card per project, the latest few on the side. Opening one shows its
- * slice of the skill tree, a paste box that files straight into it, and its
- * variables.
+ * top, a card per project, the latest few on the side. Opening one shows what
+ * it runs on, a paste box that files straight into it, and its variables.
  */
 export default function Projects(props: Props) {
   const { projects, openId } = props;
@@ -347,9 +346,9 @@ function ProjectDetail({
             </div>
           </section>
 
-          <section className="vp-tree" aria-label={`${name} in the skill tree`}>
+          <section className="vp-tree" aria-label={`What ${name} runs on`}>
             <Suspense fallback={<div className="empty">Loading…</div>}>
-              <SkillTree
+              <LedgerCanvas
                 onNotify={onNotify}
                 onChanged={onChanged}
                 refreshKey={refreshKey}

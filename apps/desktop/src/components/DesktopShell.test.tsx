@@ -6,7 +6,7 @@ import * as api from "../lib/api";
 import DesktopShell from "./DesktopShell";
 
 vi.mock("../lib/api");
-vi.mock("./SkillTree", () => ({ default: () => <div data-testid="tree" /> }));
+vi.mock("./LedgerCanvas", () => ({ default: () => <div data-testid="tree" /> }));
 
 const mocked = vi.mocked(api);
 

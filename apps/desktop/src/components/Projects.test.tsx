@@ -8,7 +8,7 @@ import Projects, { recentProjects } from "./Projects";
 
 vi.mock("../lib/api");
 // The tree has its own tests; here it only needs to be told which project.
-vi.mock("./SkillTree", () => ({
+vi.mock("./LedgerCanvas", () => ({
   default: ({ projectId }: { projectId?: string | null }) => <div data-testid="tree">tree:{projectId}</div>,
 }));
 
