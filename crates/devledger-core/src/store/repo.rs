@@ -2347,7 +2347,14 @@ impl Store {
         let mut items = Vec::new();
 
         for sp in self.list_service_projects()? {
-            if sp.organization_id.is_none() {
+            // A missing organization is only a gap where there is one to name:
+            // every Supabase project sits in an organization, and an account
+            // that already has organizations should say which. A GitHub repo
+            // or Vercel project on a personal account has none, and drawing
+            // that a project uses it must not raise an alarm.
+            let expected = matches!(sp.provider, Provider::Supabase)
+                || !self.organizations_for_account(sp.account_id)?.is_empty();
+            if sp.organization_id.is_none() && expected {
                 items.push(AttentionItem {
                     kind: AttentionKind::UnassignedOrganization,
                     title: format!("{} has no organization", sp.name),

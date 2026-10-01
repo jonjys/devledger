@@ -1082,3 +1082,47 @@ fn the_vault_wide_list_includes_account_passwords_and_unlinked_resources() {
         ]
     );
 }
+
+#[test]
+fn a_resource_on_an_account_without_organizations_is_not_flagged_for_one() {
+    let (_dir, vault) = common::unlocked_vault();
+    let me = vault
+        .create_identity_manual("me", Some("dev-a@example.com"))
+        .expect("identity");
+    let github = vault
+        .create_account_manual(me.id, Provider::GitHub, "GitHub")
+        .expect("account");
+    let project = vault.create_project("make-it-real", None).expect("project");
+    // What drawing "make-it-real uses GitHub" on the map records.
+    let repo = vault
+        .create_service_project_manual(
+            github.id,
+            None,
+            Provider::GitHub,
+            "make-it-real",
+            None,
+            Environment::Unknown,
+        )
+        .expect("resource");
+    vault
+        .link_service_project(repo.id, project.id)
+        .expect("link");
+
+    let flagged = |vault: &Vault| {
+        vault
+            .needs_attention()
+            .expect("attention")
+            .iter()
+            .any(|a| a.kind == AttentionKind::UnassignedOrganization)
+    };
+    assert!(
+        !flagged(&vault),
+        "a personal GitHub repo has no organization to name"
+    );
+
+    // Once the account has organizations, which one owns the repo is a real gap.
+    vault
+        .create_organization(github.id, "acme-org")
+        .expect("organization");
+    assert!(flagged(&vault));
+}

@@ -1,7 +1,6 @@
-// Synthetic vault contents for the skill tree tests. No real addresses or keys.
+// Synthetic vault contents for the Ledger canvas tests. No real addresses or keys.
 
-import type { SkillData } from "../lib/skillTree";
-import { STATE_FIELD } from "../lib/skillTree";
+import { PRIMARY_FIELD, type CanvasData } from "../lib/canvas";
 import type {
   Account,
   AccountNode,
@@ -96,7 +95,7 @@ export function secret(
 
 export function field(
   id: string,
-  entity: { kind: "identity" | "account"; id: string },
+  entity: { kind: "identity" | "account" | "project"; id: string },
   label: string,
   value: string,
 ): CustomField {
@@ -134,6 +133,7 @@ export function resource(
 export const IDS = {
   me: uuid("1d000001"),
   other: uuid("1d000002"),
+  work: uuid("1d000003"),
   github: uuid("ac000001"),
   stripe: uuid("ac000002"),
   supabase: uuid("ac000003"),
@@ -142,47 +142,46 @@ export const IDS = {
   stripeKey: uuid("5e000002"),
   projectVar: uuid("5e000003"),
   project: uuid("9a000001"),
+  blog: uuid("9a000002"),
   resource: uuid("5b000001"),
-  stateField: uuid("cf000001"),
-  supabaseNote: uuid("cf000002"),
+  primaryField: uuid("cf000001"),
+  githubPos: uuid("cf000002"),
 };
 
 /**
- * One primary person with three accounts, two of them in categories, and a
- * second person without an email holding a Loopia account.
+ * Two people with an email and one without. "shop" uses Supabase through a
+ * resource; "blog" uses nothing yet. GitHub has been moved by hand.
  */
-export function vault(state: string | null = null): SkillData {
+export function canvasVault(opts: { pinned?: boolean } = {}): CanvasData {
   const me = person(IDS.me, "primary@example.com", "Primary Person", [
     accountNode(IDS.github, IDS.me, "github", "GitHub", { username: "octo-example" }),
     accountNode(IDS.stripe, IDS.me, "stripe", "Stripe"),
     accountNode(IDS.supabase, IDS.me, "supabase", "Supabase"),
   ]);
+  const work = person(IDS.work, "work@example.com", "work@example.com", []);
   const other = person(IDS.other, null, "Unidentified", [
     accountNode(IDS.loopia, IDS.other, "other:Loopia", "Loopia"),
   ]);
-  const identityFields = new Map<string, CustomField[]>();
-  if (state !== null) {
-    identityFields.set(IDS.me, [field(IDS.stateField, { kind: "identity", id: IDS.me }, STATE_FIELD, state)]);
+  const fields = new Map<string, CustomField[]>();
+  fields.set(`account:${IDS.github}`, [
+    field(IDS.githubPos, { kind: "account", id: IDS.github }, "_pos", "320,-40"),
+  ]);
+  if (opts.pinned) {
+    fields.set(`email:${IDS.work}`, [field(IDS.primaryField, { kind: "identity", id: IDS.work }, PRIMARY_FIELD, "{}")]);
   }
   return {
-    people: [me, other],
+    people: [other, me, work],
     secrets: [
       secret(IDS.ghPassword, { account_id: IDS.github }, "password", "Password"),
       secret(IDS.stripeKey, { account_id: IDS.stripe }, "stripe_secret_key", "STRIPE_SECRET_KEY"),
       secret(IDS.projectVar, { project_id: IDS.project }, "env_var", "DATABASE_URL"),
     ],
-    accountFields: new Map([
-      [
-        IDS.supabase,
-        [
-          field(IDS.supabaseNote, { kind: "account", id: IDS.supabase }, "Region", "eu-north-1"),
-          field(uuid("cf000003"), { kind: "account", id: IDS.supabase }, "_internal", "x"),
-        ],
-      ],
-    ]),
-    identityFields,
+    fields,
     attention: [],
     resources: [resource(IDS.resource, IDS.supabase, "shop-db", [{ id: IDS.project, name: "shop" }])],
-    projects: [{ id: IDS.project, name: "shop" }],
+    projects: [
+      { id: IDS.project, name: "shop" },
+      { id: IDS.blog, name: "blog" },
+    ],
   };
 }

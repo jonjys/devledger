@@ -1,7 +1,7 @@
 // What DevLedger knows about each service it can file by hand: display name,
 // logo, and what a key for it looks like.
 //
-// One registry, so the catalog, the icons and the skill tree all agree. A
+// One registry, so the catalog, the icons and the Ledger map all agree. A
 // service DevLedger has no built-in provider for is stored as `other:<Name>`.
 // That tag must be sent explicitly: the backend turns a bare `unknown` into
 // `other:<label>`, so a catalog card that sent `unknown` used to file a

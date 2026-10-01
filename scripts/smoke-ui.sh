@@ -75,17 +75,17 @@ import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
 xdotool mousemove --window "$WINDOW" 498 348 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/04-connect-dialog.png"
 xdotool key Escape; sleep 1
-# Ledger opens as the skill tree. On a fresh vault it offers "Add your email".
+# Ledger opens as the map. On a fresh vault a guide offers "Add your email".
 xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
-# Add the primary identity from the tree: UI -> IPC -> SQLCipher -> back, and
-# the tree redraws with the address at its centre.
-xdotool mousemove --window "$WINDOW" 706 460 click 1; sleep 1.5
+# Add the first email from the guide: UI -> IPC -> SQLCipher -> back, and the
+# map redraws with the address as a ball in the middle.
+xdotool mousemove --window "$WINDOW" 427 518 click 1; sleep 1.5
 xdotool type --delay 35 "smoke@example.com"
 xdotool key Return; sleep 4
-import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-tree.png"
+import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-map.png"
 # The List view, where a person is added by name and address.
-xdotool mousemove --window "$WINDOW" 1136 92 click 1; sleep 3
+xdotool mousemove --window "$WINDOW" 848 92 click 1; sleep 3
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/08-ledger-list.png"
 xdotool mousemove --window "$WINDOW" 1102 138 click 1; sleep 1
 xdotool key Tab
@@ -121,11 +121,11 @@ done
 
 # The screenshots must represent distinct states. This proves the automation
 # reached the shell, changed to Connections, opened the Supabase dialog, added
-# an address from the skill tree, and added a person from the list. A click
+# an address from the map, and added a person from the list. A click
 # that lands on nothing changes almost no pixels -- a hover highlight at most --
 # so each step must change a real share of the window.
 for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dialog.png" \
-            "06-ledger.png 07-ledger-tree.png" "08-ledger-list.png 09-ledger-person.png"; do
+            "06-ledger.png 07-ledger-map.png" "08-ledger-list.png 09-ledger-person.png"; do
   read -r before after <<<"$pair"
   changed=$(compare -metric AE "$OUT/$before" "$OUT/$after" null: 2>&1 || true)
   if [ "${changed:-0}" -lt 20000 ]; then
@@ -134,12 +134,12 @@ for pair in "02-shell.png 03-connections.png" "03-connections.png 04-connect-dia
   fi
 done
 
-# The tree must actually draw its centre. An empty canvas still has its dot grid
-# and controls, so it passes the checks above; the primary node is a large
-# orange disc in the middle of the canvas, which lifts the brightness there.
-centre=$(convert "$OUT/07-ledger-tree.png" -crop 300x300+550+300 -format "%[fx:int(mean*255)]" info:)
+# The map must actually draw the new ball. An empty canvas still has its dot
+# grid and controls, so it passes the checks above; the main email is a large
+# orange ball in the middle of the canvas, which lifts the brightness there.
+centre=$(convert "$OUT/07-ledger-map.png" -crop 300x300+412+281 -format "%[fx:int(mean*255)]" info:)
 if [ "$centre" -lt 20 ]; then
-  echo "UI smoke FAILED: 07-ledger-tree.png has no primary node in the middle (brightness $centre)"
+  echo "UI smoke FAILED: 07-ledger-map.png has no email ball in the middle (brightness $centre)"
   exit 1
 fi
 

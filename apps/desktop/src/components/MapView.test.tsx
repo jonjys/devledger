@@ -71,10 +71,10 @@ beforeEach(() => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
-describe("Skill tree map", () => {
+describe("Identities", () => {
   it("renders identities and their provider accounts", async () => {
     renderMap();
-    expect(await screen.findByRole("heading", { name: "Skill tree" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Accounts by email" })).toBeInTheDocument();
     expect(screen.getByText("test")).toBeInTheDocument();
     expect(screen.getByText("GitHub")).toBeInTheDocument();
   });

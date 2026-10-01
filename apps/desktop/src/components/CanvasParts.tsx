@@ -1,46 +1,55 @@
-// The pieces the skill tree is drawn with: its nodes and edges, the right-click
-// menu, the Cmd+K palette and the add dialog. SkillTree.tsx wires them to data.
+// The pieces the Ledger canvas is drawn with: its balls and lines, the
+// right-click menu, the Cmd+K finder and the add dialog. LedgerCanvas.tsx
+// wires them to data.
 
 import { BaseEdge, Handle, Position, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import type { Ball, BallKind, LineKind } from "../lib/canvas";
 import { knownServiceNames } from "../lib/providers";
-import type { NodeKind, Status, TreeItem } from "../lib/skillTree";
 
 import Modal from "./Modal";
 import ProviderIcon from "./ProviderIcon";
 
-// --- nodes -------------------------------------------------------------------------
-
-export interface SkillNodeData extends Record<string, unknown> {
-  item: TreeItem;
-  lit: boolean;
-  selected: boolean;
-  renaming: boolean;
-  /** Pulses red: a person with no email, whose accounts need a home. */
-  pulsing: boolean;
-  onRename: (key: string, value: string | null) => void;
-}
-
-export type SkillFlowNode = Node<SkillNodeData, "skill">;
-
-const STATUS_LABEL: Record<Status, string> = {
-  healthy: "Healthy",
-  missing: "Missing",
-  attention: "Needs attention",
-};
-
-const KIND_LABEL: Record<NodeKind, string> = {
-  primary: "Primary",
-  identity: "Identity",
-  category: "Category",
-  account: "Account",
-  field: "Field",
+export const KIND_LABEL: Record<BallKind, string> = {
+  email: "Email",
+  account: "Service",
   project: "Project",
 };
 
-// Every edge meets a node at its centre. xyflow draws edges between handles, so
-// each node carries one invisible handle of each type, pinned to the middle.
+/** How big each kind of ball draws: its node is exactly the ball. */
+export const BALL_SIZE: Record<BallKind, number> = { email: 76, account: 60, project: 68 };
+export const PRIMARY_SIZE = 96;
+
+export function ballSize(ball: Ball): number {
+  return ball.primary ? PRIMARY_SIZE : BALL_SIZE[ball.kind];
+}
+
+/** A stable hue per name, for a project's ball. */
+export function hue(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+// --- balls ------------------------------------------------------------------------
+
+export interface BallData extends Record<string, unknown> {
+  ball: Ball;
+  selected: boolean;
+  /** Not connected to what is selected: drawn faint. */
+  dim: boolean;
+  renaming: boolean;
+  locked: boolean;
+  onRename: (key: string, value: string | null) => void;
+}
+
+export type BallNode = Node<BallData, "ball">;
+
+// Lines run from centre to centre, so every ball has an invisible handle of
+// each type pinned to its middle. The visible port on the right edge is where
+// a new line is dragged from; the centre target catches it anywhere on the
+// ball, because the canvas snaps to the nearest handle within reach.
 const CENTRE = {
   top: "50%",
   left: "50%",
@@ -54,17 +63,8 @@ const CENTRE = {
   pointerEvents: "none" as const,
 };
 
-function Anchors() {
-  return (
-    <>
-      <Handle type="target" position={Position.Top} style={CENTRE} isConnectable={false} />
-      <Handle type="source" position={Position.Top} style={CENTRE} isConnectable={false} />
-    </>
-  );
-}
-
-function RenameInput({ item, onRename }: { item: TreeItem; onRename: SkillNodeData["onRename"] }) {
-  const [value, setValue] = useState(item.kind === "primary" ? (item.sub ?? "") : item.label);
+function RenameInput({ ball, onRename }: { ball: Ball; onRename: BallData["onRename"] }) {
+  const [value, setValue] = useState(ball.kind === "email" ? (ball.sub && !ball.noEmail ? ball.sub : "") : ball.label);
   const ref = useRef<HTMLInputElement>(null);
   // autoFocus is not reliable inside the canvas under WebKit: the double-click
   // that opened this is still settling when it mounts. Take focus once the
@@ -89,112 +89,93 @@ function RenameInput({ item, onRename }: { item: TreeItem; onRename: SkillNodeDa
   return (
     <input
       ref={ref}
-      className="st-rename nodrag nopan"
-      aria-label={`Rename ${item.label}`}
+      className="cv-rename nodrag nopan"
+      aria-label={`Rename ${ball.label}`}
+      placeholder={ball.kind === "email" ? "Your name" : undefined}
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter") onRename(item.key, value);
-        if (e.key === "Escape") onRename(item.key, null);
+        if (e.key === "Enter") onRename(ball.key, value);
+        if (e.key === "Escape") onRename(ball.key, null);
       }}
-      onBlur={() => onRename(item.key, value)}
+      onBlur={() => onRename(ball.key, value)}
     />
   );
 }
 
-function StatusDot({ status }: { status: Status }) {
-  return <span className={`st-dot ${status}`} title={STATUS_LABEL[status]} aria-label={STATUS_LABEL[status]} />;
+function Glyph({ ball }: { ball: Ball }) {
+  if (ball.kind === "account" && ball.provider) return <ProviderIcon provider={ball.provider} name={ball.label} size={26} />;
+  if (ball.kind === "project") return <span className="cv-initial">{ball.label.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "?"}</span>;
+  if (ball.noEmail) return <span className="cv-initial">?</span>;
+  return ball.primary ? <span className="cv-tag">YOU</span> : <span className="cv-initial">@</span>;
 }
 
-/** One node of the tree. Memoised: panning re-renders the viewport, not these. */
-export const SkillNode = memo(function SkillNode({ data }: NodeProps<SkillFlowNode>) {
-  const { item, lit, selected, renaming, pulsing, onRename } = data;
+/** One ball. Memoised: panning re-renders the viewport, not these. */
+export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
+  const { ball, selected, dim, renaming, locked, onRename } = data;
+  const size = ballSize(ball);
   const cls = [
-    "st-node",
-    `st-${item.kind}`,
-    item.tone ? `tone-${item.tone}` : "",
-    lit ? "lit" : "",
+    "cv-ball",
+    `cv-${ball.kind}`,
+    ball.primary ? "primary" : "",
     selected ? "selected" : "",
-    pulsing ? "pulse" : "",
-    item.children.length > 0 ? "has-children" : "",
+    dim ? "dim" : "",
+    ball.noEmail ? "pulse" : "",
+    ball.attention ? "attention" : "",
   ]
     .filter(Boolean)
     .join(" ");
-
-  if (item.kind === "primary") {
-    return (
-      <div className={cls} data-testid={item.key}>
-        <Anchors />
-        <div className="st-core">
-          <span className="st-core-tag">PRIMARY</span>
-        </div>
-        <div className="st-core-label">
-          {renaming ? <RenameInput item={item} onRename={onRename} /> : <strong>{item.label}</strong>}
-          {item.sub && !renaming && <span>{item.sub}</span>}
-        </div>
-      </div>
-    );
-  }
+  const style =
+    ball.kind === "project" ? ({ "--hue": hue(ball.label), width: size, height: size } as React.CSSProperties) : { width: size, height: size };
 
   return (
-    <div className={cls} data-testid={item.key} title={item.sub ?? undefined}>
-      <Anchors />
-      {item.kind === "account" && item.provider && <ProviderIcon provider={item.provider} size={16} />}
-      <span className="st-text">
-        {renaming ? (
-          <RenameInput item={item} onRename={onRename} />
-        ) : (
-          <span className="st-label">{item.label}</span>
-        )}
-        {item.sub && !renaming && (
-          <span className={`st-sub${item.kind === "field" && item.source === "secret" ? " mono" : ""}`}>
-            {item.sub}
-          </span>
-        )}
-      </span>
-      <StatusDot status={item.status} />
-      {item.children.length > 0 && !lit && <span className="st-more">+{item.children.length}</span>}
+    <div className={cls} style={style} data-testid={ball.key} title={ball.sub ?? undefined}>
+      <Handle type="target" id="in" position={Position.Top} style={CENTRE} isConnectableStart={false} />
+      <Handle type="source" id="c" position={Position.Top} style={CENTRE} isConnectable={false} />
+      <div className="cv-orb">
+        <Glyph ball={ball} />
+      </div>
+      <div className="cv-label">
+        {renaming ? <RenameInput ball={ball} onRename={onRename} /> : <strong>{ball.label}</strong>}
+        {ball.sub && !renaming && <span>{ball.sub}</span>}
+      </div>
+      {!locked && (
+        <Handle
+          type="source"
+          id="out"
+          position={Position.Right}
+          className="cv-port"
+          title="Drag to another ball to connect"
+          aria-label={`Connect ${ball.label}`}
+        />
+      )}
     </div>
   );
 });
 
-// --- edges ------------------------------------------------------------------------
+// --- lines ------------------------------------------------------------------------
 
-export interface SkillEdgeData extends Record<string, unknown> {
+export interface LineData extends Record<string, unknown> {
+  kind: LineKind;
   lit: boolean;
+  dim: boolean;
+  selected: boolean;
 }
 
-/**
- * A curve from parent to child that leaves the parent heading away from the
- * centre and arrives the same way, which is what makes the tree read as rings
- * rather than a hairball. Lit edges get a soft second stroke as their glow:
- * cheaper than an SVG filter, so panning stays smooth.
- */
-export function SkillEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
-  const lit = Boolean((data as SkillEdgeData | undefined)?.lit);
-  const path = useMemo(() => {
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-    const dist = Math.hypot(dx, dy) || 1;
-    const out = (x: number, y: number, fx: number, fy: number) => {
-      const r = Math.hypot(x, y);
-      return r < 1 ? [fx / dist, fy / dist] : [x / r, y / r];
-    };
-    const [sx, sy] = out(sourceX, sourceY, dx, dy);
-    const [tx, ty] = out(targetX, targetY, dx, dy);
-    const k = dist * 0.38;
-    return `M ${sourceX},${sourceY} C ${sourceX + (sx ?? 0) * k},${sourceY + (sy ?? 0) * k} ${
-      targetX - (tx ?? 0) * k
-    },${targetY - (ty ?? 0) * k} ${targetX},${targetY}`;
-  }, [sourceX, sourceY, targetX, targetY]);
-
+/** A straight line from ball to ball. Lit lines get a soft second stroke as their glow. */
+export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
+  const d = data as LineData | undefined;
+  const path = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+  const cls = ["cv-line", d?.kind ?? "", d?.lit ? "lit" : "", d?.dim ? "dim" : "", d?.selected ? "selected" : ""]
+    .filter(Boolean)
+    .join(" ");
   return (
     <>
-      {lit && <path d={path} className="st-edge-glow" fill="none" />}
-      <BaseEdge id={id} path={path} className={lit ? "st-edge lit" : "st-edge"} />
+      {(d?.lit || d?.selected) && <path d={path} className="cv-line-glow" fill="none" />}
+      <BaseEdge id={id} path={path} className={cls} interactionWidth={18} />
     </>
   );
 }
@@ -243,7 +224,7 @@ export function ContextMenu({
 
   // Keep the menu on screen near the right and bottom edges.
   const left = Math.min(x, window.innerWidth - 240);
-  const top = Math.min(y, window.innerHeight - 40 * (items.length + 1));
+  const top = Math.max(8, Math.min(y, window.innerHeight - 36 * (items.length + 1)));
 
   const run = (item: MenuItem) => {
     if (item.disabled || item.items) return;
@@ -255,11 +236,7 @@ export function ContextMenu({
     <div ref={ref} className="st-menu" role="menu" aria-label={title} style={{ left, top }}>
       <div className="st-menu-title">{title}</div>
       {items.map((item) => (
-        <div
-          key={item.label}
-          className="st-menu-row"
-          onMouseEnter={() => setOpen(item.items ? item.label : null)}
-        >
+        <div key={item.label} className="st-menu-row" onMouseEnter={() => setOpen(item.items ? item.label : null)}>
           <button
             type="button"
             role="menuitem"
@@ -298,31 +275,29 @@ export function ContextMenu({
   );
 }
 
-// --- the palette ----------------------------------------------------------------------
+// --- the finder ---------------------------------------------------------------------
 
-export interface PaletteEntry {
+export interface FindEntry {
   key: string;
-  kind: NodeKind;
+  kind: BallKind;
   label: string;
   sub: string | null;
 }
 
-export function Palette({
+export function Finder({
   entries,
   onPick,
   onClose,
 }: {
-  entries: PaletteEntry[];
-  onPick: (entry: PaletteEntry) => void;
+  entries: FindEntry[];
+  onPick: (entry: FindEntry) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const hits = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matched = q
-      ? entries.filter((e) => `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q))
-      : entries.filter((e) => e.kind === "project");
+    const matched = q ? entries.filter((e) => `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)) : entries;
     return matched.slice(0, 30);
   }, [entries, query]);
 
@@ -333,8 +308,8 @@ export function Palette({
       <div className="st-palette">
         <input
           autoFocus
-          aria-label="Find project, account or field"
-          placeholder="Find Project, account, field…"
+          aria-label="Find an email, service or project"
+          placeholder="Find an email, service or project…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -375,60 +350,64 @@ export function Palette({
 
 // --- adding ---------------------------------------------------------------------------
 
-export type AddKind = "category" | "account" | "api" | "password" | "secret" | "field" | "project" | "identity";
+export type AddKind = "email" | "project" | "service" | "api" | "password" | "secret" | "field";
 
 const ADD_TITLE: Record<AddKind, string> = {
-  category: "Add category",
-  account: "Add account",
+  email: "Add an email",
+  project: "Add a project",
+  service: "Add a service",
   api: "Add API key",
   password: "Add password",
   secret: "Add secret",
   field: "Add field",
-  project: "Add project",
-  identity: "Add your email",
 };
 
-const DEFAULT_NAME: Partial<Record<AddKind, string>> = {
-  api: "API key",
-  password: "Password",
-  secret: "Secret",
+const ADD_HELP: Record<AddKind, string> = {
+  email: "An address you sign up to services with. Services you use hang off it.",
+  project: "Something you build, e.g. make-it-real. Draw a line from it to each service it runs on.",
+  service: "An account you have with a service: GitHub, Vercel, Claude, your domain host…",
+  api: "Stored encrypted in your vault; it is never shown here again.",
+  password: "Stored encrypted in your vault; it is never shown here again.",
+  secret: "Stored encrypted in your vault; it is never shown here again.",
+  field: "Any detail worth keeping: region, customer id, plan…",
 };
+
+const DEFAULT_NAME: Partial<Record<AddKind, string>> = { api: "API key", password: "Password", secret: "Secret" };
 
 export interface AddValues {
   name: string;
   value: string;
-  /** Account label, or the identity's name. */
+  /** The person's name for an email, or a label for a service. */
   label: string;
 }
 
 /**
- * One small form for everything the tree can add.
+ * One small form for everything the canvas can add.
  *
  * Secret values are typed into a password field and handed straight to the
  * save call; the dialog keeps nothing once it closes.
  */
 export function AddDialog({
   kind,
-  parentLabel,
-  projectNames,
+  under,
+  initialName = "",
   onCancel,
   onSubmit,
 }: {
   kind: AddKind;
-  /** What the new node goes under; null for the first email, which is the centre. */
-  parentLabel: string | null;
-  projectNames: string[];
+  /** What it is added to, when that is worth saying. */
+  under: string | null;
+  initialName?: string;
   onCancel: () => void;
   onSubmit: (values: AddValues) => Promise<void>;
 }) {
-  const [name, setName] = useState(DEFAULT_NAME[kind] ?? "");
+  const [name, setName] = useState(initialName || DEFAULT_NAME[kind] || "");
   const [value, setValue] = useState("");
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const secret = kind === "api" || kind === "password" || kind === "secret";
   const needsValue = secret || kind === "field";
-
   const ready = name.trim().length > 0 && (!needsValue || value.length > 0);
 
   async function submit() {
@@ -445,35 +424,21 @@ export function AddDialog({
   }
 
   const nameLabel: Record<AddKind, string> = {
-    category: "Category name",
-    account: "Service",
+    email: "Email address",
+    project: "Project name",
+    service: "Service",
     api: "Name",
     password: "Name",
     secret: "Name",
     field: "Field name",
-    project: "Project name",
-    identity: "Email address",
   };
 
   let extra: ReactNode = null;
-  if (kind === "account") {
+  if (kind === "email") {
     extra = (
       <div className="field">
-        <label htmlFor="st-add-label">Label (optional)</label>
-        <input
-          id="st-add-label"
-          placeholder="e.g. work account"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-      </div>
-    );
-  }
-  if (kind === "identity") {
-    extra = (
-      <div className="field">
-        <label htmlFor="st-add-label">Your name (optional)</label>
-        <input id="st-add-label" value={label} onChange={(e) => setLabel(e.target.value)} />
+        <label htmlFor="cv-add-label">Your name (optional)</label>
+        <input id="cv-add-label" value={label} onChange={(e) => setLabel(e.target.value)} />
       </div>
     );
   }
@@ -489,14 +454,12 @@ export function AddDialog({
         <header>
           <h2>{ADD_TITLE[kind]}</h2>
           <p>
-            {parentLabel === null ? (
-              "It becomes the centre of your tree. Everything you add hangs off it."
-            ) : (
+            {under && (
               <>
-                Under <strong>{parentLabel}</strong>
-                {secret ? ". Stored encrypted in your vault; it is never shown here again." : "."}
+                On <strong>{under}</strong>.{" "}
               </>
             )}
+            {ADD_HELP[kind]}
           </p>
         </header>
         <div className="scroll">
@@ -506,25 +469,21 @@ export function AddDialog({
             </div>
           )}
           <div className="field">
-            <label htmlFor="st-add-name">{nameLabel[kind]}</label>
+            <label htmlFor="cv-add-name">{nameLabel[kind]}</label>
             <input
-              id="st-add-name"
+              id="cv-add-name"
               autoFocus
-              list={kind === "account" ? "st-services" : kind === "project" ? "st-projects" : undefined}
-              placeholder={kind === "account" ? "e.g. Resend, Claude, GitHub" : undefined}
+              type={kind === "email" ? "email" : "text"}
+              list={kind === "service" ? "cv-services" : undefined}
+              placeholder={
+                kind === "service" ? "e.g. GitHub, Vercel, Claude" : kind === "project" ? "e.g. make-it-real" : undefined
+              }
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            {kind === "account" && (
-              <datalist id="st-services">
+            {kind === "service" && (
+              <datalist id="cv-services">
                 {knownServiceNames().map((n) => (
-                  <option key={n} value={n} />
-                ))}
-              </datalist>
-            )}
-            {kind === "project" && (
-              <datalist id="st-projects">
-                {projectNames.map((n) => (
                   <option key={n} value={n} />
                 ))}
               </datalist>
@@ -533,9 +492,9 @@ export function AddDialog({
           {extra}
           {needsValue && (
             <div className="field">
-              <label htmlFor="st-add-value">Value</label>
+              <label htmlFor="cv-add-value">Value</label>
               <input
-                id="st-add-value"
+                id="cv-add-value"
                 type={secret ? "password" : "text"}
                 autoComplete="off"
                 spellCheck={false}
@@ -558,5 +517,3 @@ export function AddDialog({
     </Modal>
   );
 }
-
-export { KIND_LABEL, STATUS_LABEL };

@@ -394,7 +394,15 @@ function DesktopShellInner({ onLock }: Props) {
           )}
 
           {view === "ledger" && (
-            <LedgerView onNotify={notify} onChanged={refresh} refreshKey={refreshKey} />
+            <LedgerView
+              onNotify={notify}
+              onChanged={refresh}
+              refreshKey={refreshKey}
+              onOpenProject={(id) => {
+                setSelected(id);
+                setView("projects");
+              }}
+            />
           )}
 
           {view === "identities" && (

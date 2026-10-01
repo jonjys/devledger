@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "../lib/api";
-import { isHiddenField } from "../lib/skillTree";
+import { isHiddenField } from "../lib/canvas";
 import type { CustomField, EntityRef, SecretOwner } from "../lib/types";
 
 interface Props {
@@ -48,7 +48,8 @@ export default function FieldsEditor({ entity, secretOwner, onNotify, onSecretSt
   const load = useCallback(async () => {
     try {
       // A field whose name starts with "_" is DevLedger's own bookkeeping --
-      // the skill tree's categories live in one -- and is not the user's to edit.
+      // where a ball sits on the Ledger map, which email is the main one -- and
+      // is not the user's to edit.
       setFields((await api.customFields({ kind, id })).filter((f) => !isHiddenField(f.label)));
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
