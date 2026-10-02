@@ -1126,3 +1126,70 @@ fn a_resource_on_an_account_without_organizations_is_not_flagged_for_one() {
         .expect("organization");
     assert!(flagged(&vault));
 }
+
+#[test]
+fn an_organization_can_be_renamed_but_not_to_nothing() {
+    let (_dir, vault) = common::unlocked_vault();
+    let (_me, supabase) = person(&vault, "dev-a@example.com", "supabase", "Supabase");
+    let org = vault
+        .create_organization(supabase, "acme's Org")
+        .expect("organization");
+
+    vault
+        .rename_organization(org.id, "  Acme  ")
+        .expect("rename");
+    let names = |vault: &Vault| {
+        vault
+            .organizations_for_account(supabase)
+            .expect("list")
+            .into_iter()
+            .map(|o| o.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&vault), ["Acme"]);
+
+    assert!(matches!(
+        vault.rename_organization(org.id, "   "),
+        Err(CoreError::Invalid(_))
+    ));
+    assert_eq!(names(&vault), ["Acme"]);
+}
+
+#[test]
+fn a_resource_written_down_by_hand_is_not_flagged_for_being_unused() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    let (_me, supabase) = person(&vault, "dev-a@example.com", "supabase", "Supabase");
+    let org = vault
+        .create_organization(supabase, "acme's Org")
+        .expect("organization");
+    let paused = vault
+        .create_service_project_manual(
+            supabase,
+            Some(org.id),
+            Provider::Supabase,
+            "paused-app",
+            None,
+            Environment::Unknown,
+        )
+        .expect("resource");
+    let unused = |vault: &Vault| {
+        vault
+            .needs_attention()
+            .expect("attention")
+            .iter()
+            .any(|a| a.kind == AttentionKind::UnlinkedServiceProject)
+    };
+    assert!(!unused(&vault), "a record of a project is not a problem");
+
+    // Keys stored on it that no project uses are.
+    vault
+        .create_manual_secret(
+            None,
+            Some(paused.id),
+            "SERVICE_ROLE_KEY",
+            Environment::Unknown,
+            &SecretString::from("synthetic-value-1"),
+        )
+        .expect("secret");
+    assert!(unused(&vault));
+}

@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { CanvasData } from "../lib/canvas";
 import type { CustomField, EntityRef, ProjectSummary } from "../lib/types";
-import { AT, IDS, canvasVault } from "../test/canvas-fixtures";
+import { AT, IDS, canvasVault, resource } from "../test/canvas-fixtures";
 import LedgerCanvas from "./LedgerCanvas";
 
 vi.mock("../lib/api");
@@ -55,7 +55,7 @@ function serve(data: CanvasData = canvasVault()) {
   mocked.listAllSecrets.mockImplementation(async () => data.secrets);
   mocked.needsAttention.mockImplementation(async () => data.attention);
   mocked.customFields.mockImplementation(async (entity: EntityRef): Promise<CustomField[]> => {
-    const kind = entity.kind === "identity" ? "email" : entity.kind;
+    const kind = { identity: "email", organization: "org", service_project: "resource" }[entity.kind as string] ?? entity.kind;
     return data.fields.get(`${kind}:${entity.id}`) ?? [];
   });
   return data;
@@ -328,10 +328,10 @@ describe("a project's own page", () => {
   it("uses the service you have when it is picked from the full list", async () => {
     serve();
     mocked.createServiceProjectManual.mockResolvedValue({
-      id: "res-stripe",
-      account_id: IDS.stripe,
+      id: "res-github",
+      account_id: IDS.github,
       organization_id: null,
-      provider: "stripe",
+      provider: "github",
       provider_ref: null,
       name: "shop",
       region: null,
@@ -342,8 +342,8 @@ describe("a project's own page", () => {
     });
     await renderMap({ projectId: IDS.project });
     await screen.findByTestId(`project:${IDS.project}`);
-    click(within(shelf()).getByRole("button", { name: /Stripe.*On your map/ }));
-    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-stripe", IDS.project));
+    click(within(shelf()).getByRole("button", { name: /GitHub.*On your map/ }));
+    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-github", IDS.project));
     expect(mocked.createAccountManual).not.toHaveBeenCalled();
   });
 
@@ -352,5 +352,199 @@ describe("a project's own page", () => {
     await renderMap({ projectId: IDS.project });
     await screen.findByTestId(`project:${IDS.project}`);
     expect(mocked.updateCustomField).not.toHaveBeenCalled();
+  });
+});
+
+describe("inside a service", () => {
+  const made = {
+    id: "res-new",
+    account_id: IDS.supabase,
+    organization_id: IDS.org,
+    provider: "supabase" as const,
+    provider_ref: null,
+    name: "make it real",
+    region: null,
+    environment: "unknown" as const,
+    url: null,
+    notes: null,
+    created_at: AT,
+  };
+
+  it("draws an organization and the projects in it", async () => {
+    serve();
+    await renderMap();
+    expect(await screen.findByTestId(`org:${IDS.org}`)).toHaveTextContent("acme's Org");
+    expect(screen.getByTestId(`resource:${IDS.resource}`)).toHaveTextContent("shop-db");
+  });
+
+  it("adds an organization to a service from its menu", async () => {
+    serve();
+    mocked.createOrganization.mockResolvedValue({
+      id: "org-new",
+      account_id: IDS.supabase,
+      provider_org_id: null,
+      name: "Second Org",
+      created_at: AT,
+    });
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`account:${IDS.supabase}`));
+    await user.hover(screen.getByRole("menuitem", { name: /^Add/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Organization…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an organization" });
+    await user.type(within(dialog).getByLabelText("Organization name"), "Second Org");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocked.createOrganization).toHaveBeenCalledWith(IDS.supabase, "Second Org"));
+    expect(mocked.addCustomField).toHaveBeenCalledWith({ kind: "organization", id: "org-new" }, "_pos", expect.any(String));
+  });
+
+  it("will not add a second organization of the same name to a service", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`account:${IDS.supabase}`));
+    await user.hover(screen.getByRole("menuitem", { name: /^Add/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Organization…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an organization" });
+    await user.type(within(dialog).getByLabelText("Organization name"), "ACME's org");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("already has an organization");
+    expect(mocked.createOrganization).not.toHaveBeenCalled();
+  });
+
+  it("adds a project inside an organization, with its region", async () => {
+    serve();
+    mocked.createServiceProjectManual.mockResolvedValue(made);
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`org:${IDS.org}`));
+    await user.click(screen.getByRole("menuitem", { name: "Add project in acme's Org…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a Supabase project" });
+    await user.type(within(dialog).getByLabelText("Project name"), "make it real");
+    await user.type(within(dialog).getByLabelText("Region (optional)"), "eu-west-1");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(mocked.createServiceProjectManual).toHaveBeenCalledWith(
+        IDS.supabase,
+        IDS.org,
+        "supabase",
+        "make it real",
+        null,
+        "unknown",
+      ),
+    );
+    await waitFor(() =>
+      expect(mocked.updateResource).toHaveBeenCalledWith("res-new", expect.objectContaining({ region: "eu-west-1" })),
+    );
+  });
+
+  it("shows an organization's projects as cards, with what uses each", async () => {
+    serve();
+    await renderMap();
+    fireEvent.click(await screen.findByTestId(`org:${IDS.org}`));
+    const details = screen.getByRole("complementary", { name: "Details" });
+    expect(within(details).getByText("Supabase organization")).toBeInTheDocument();
+    expect(within(details).getByRole("heading", { name: "Projects in acme's Org" })).toBeInTheDocument();
+    expect(within(details).getByRole("button", { name: /shop-db.*Used by shop/ })).toBeInTheDocument();
+  });
+
+  it("links your project to a project inside a service from its menu", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`resource:${IDS.resource}`));
+    await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
+    await user.click(screen.getByRole("menuitem", { name: "blog" }));
+    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith(IDS.resource, IDS.blog));
+    expect(mocked.createServiceProjectManual).not.toHaveBeenCalled();
+  });
+
+  it("takes a project out of its organization, keeping it under the service", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`resource:${IDS.resource}`));
+    await user.hover(screen.getByRole("menuitem", { name: /Move to organization/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Out of acme's Org" }));
+    await waitFor(() => expect(mocked.assignOrganization).toHaveBeenCalledWith(IDS.resource, null));
+    expect(mocked.moveServiceProject).not.toHaveBeenCalled();
+  });
+
+  it("renames an organization", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.doubleClick(await screen.findByTestId(`org:${IDS.org}`));
+    const input = await screen.findByLabelText("Rename acme's Org");
+    await user.clear(input);
+    await user.type(input, "Acme{Enter}");
+    await waitFor(() => expect(mocked.renameOrganization).toHaveBeenCalledWith(IDS.org, "Acme"));
+  });
+
+  it("deletes an organization only after saying its projects stay", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`org:${IDS.org}`));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("stay, directly under Supabase"));
+    await waitFor(() => expect(mocked.deleteOrganization).toHaveBeenCalledWith(IDS.org));
+  });
+});
+
+describe("fields", () => {
+  it("can be added to every kind of ball", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    const cases: [string, string, EntityRef][] = [
+      [`email:${IDS.me}`, "Email", { kind: "identity", id: IDS.me }],
+      [`account:${IDS.github}`, "Service", { kind: "account", id: IDS.github }],
+      [`org:${IDS.org}`, "Organization", { kind: "organization", id: IDS.org }],
+      [`resource:${IDS.resource}`, "Resource", { kind: "service_project", id: IDS.resource }],
+      [`project:${IDS.blog}`, "Project", { kind: "project", id: IDS.blog }],
+    ];
+    for (const [key, name, entity] of cases) {
+      fireEvent.click(await screen.findByTestId(key));
+      const details = screen.getByRole("complementary", { name: "Details" });
+      await user.click(within(details).getByRole("button", { name: "+ Field" }));
+      const dialog = screen.getByRole("dialog", { name: "Add field" });
+      await user.type(within(dialog).getByLabelText("Field name"), `${name} note`);
+      await user.type(within(dialog).getByLabelText("Value"), "x");
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(mocked.addCustomField).toHaveBeenCalledWith(entity, `${name} note`, "x"));
+      fireEvent.click(await screen.findByTestId(key));
+    }
+  });
+});
+
+describe("a project moving onto a project inside a service", () => {
+  it("drops the empty line straight to the service it replaces", async () => {
+    // "shop" already uses Stripe through the resource drawing that line made.
+    const data = canvasVault();
+    data.resources.push(resource("r-pay", IDS.stripe, "payments", [], { provider: "stripe" }));
+    serve(data);
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId("resource:r-pay"));
+    await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
+    await user.click(screen.getByRole("menuitem", { name: "shop" }));
+    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("r-pay", IDS.project));
+    await waitFor(() => expect(mocked.deleteServiceProject).toHaveBeenCalledWith(IDS.stripeShop));
+  });
+
+  it("keeps it when keys are stored on it", async () => {
+    const data = canvasVault();
+    const made = data.resources[1];
+    if (made) made.secret_count = 1;
+    data.resources.push(resource("r-pay", IDS.stripe, "payments", [], { provider: "stripe" }));
+    serve(data);
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId("resource:r-pay"));
+    await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
+    await user.click(screen.getByRole("menuitem", { name: "shop" }));
+    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("r-pay", IDS.project));
+    expect(mocked.deleteServiceProject).not.toHaveBeenCalled();
   });
 });

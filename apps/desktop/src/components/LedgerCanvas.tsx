@@ -12,6 +12,7 @@ import {
   useReactFlow,
   type Connection,
   type Edge,
+  type FinalConnectionState,
   type NodeChange,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import {
   POS_FIELD,
   PRIMARY_FIELD,
   ballKey,
+  besideSpot,
   buildCanvas,
   connectIntent,
   focusLayout,
@@ -43,7 +45,17 @@ import {
 } from "../lib/canvas";
 import { normalizeSecretKind, providerLabel } from "../lib/format";
 import { PROVIDERS, providerForName, providerInfo } from "../lib/providers";
-import type { Account, CustomField, EntityRef, Provider, SecretKind, SecretListing } from "../lib/types";
+import type {
+  Account,
+  CustomField,
+  EntityRef,
+  Organization,
+  Provider,
+  SecretKind,
+  SecretListing,
+  SecretOwner,
+  ServiceProjectSummary,
+} from "../lib/types";
 
 import {
   AddDialog,
@@ -78,7 +90,7 @@ const edgeTypes = { line: LineView };
 // would otherwise zoom it to fill the screen.
 const FIT = { padding: 0.15, maxZoom: 1.1 };
 const LOCK_KEY = "devledger.mapLocked";
-const KIND_ORDER: Record<Ball["kind"], number> = { account: 0, project: 1, email: 2 };
+const KIND_ORDER: Record<Ball["kind"], number> = { account: 0, org: 1, resource: 2, project: 3, email: 4 };
 /** Services offered first, in the right-click menu. */
 const COMMON: Provider[] = ["github", "vercel", "supabase", "stripe", "openai", "anthropic", "other:Resend", "other:Cloudflare"];
 
@@ -108,13 +120,33 @@ function writeLocked(locked: boolean) {
   }
 }
 
-const entityOf = (ball: Ball): EntityRef => ({
-  kind: ball.kind === "email" ? "identity" : ball.kind,
-  id: ball.id,
-});
+const ENTITY: Record<Ball["kind"], EntityRef["kind"]> = {
+  email: "identity",
+  account: "account",
+  org: "organization",
+  resource: "service_project",
+  project: "project",
+};
+
+const entityOf = (ball: Ball): EntityRef => ({ kind: ENTITY[ball.kind], id: ball.id });
+
+/** The service's own name for a ball that has one: "Supabase". */
+function serviceName(ball: Ball): string {
+  return ball.provider ? (providerInfo(ball.provider)?.name ?? providerLabel(ball.provider)) : "";
+}
+
+/** What a ball is, in words: "Service", "Supabase organization", "Vercel project". */
+function kindLabel(ball: Ball): string {
+  if (ball.primary) return "Main email";
+  if (ball.kind === "org") return `${serviceName(ball)} organization`;
+  if (ball.kind === "resource") return `${serviceName(ball)} project`;
+  return KIND_LABEL[ball.kind];
+}
 
 interface Loaded extends CanvasData {
   accounts: Map<string, Account>;
+  orgs: Map<string, Organization>;
+  resourceById: Map<string, ServiceProjectSummary>;
 }
 
 async function load(): Promise<Loaded> {
@@ -127,15 +159,23 @@ async function load(): Promise<Loaded> {
   ]);
   const fields = new Map<string, CustomField[]>();
   const accounts = new Map<string, Account>();
+  const orgs = new Map<string, Organization>();
   const fetches: Promise<unknown>[] = [];
   const fetch = (key: string, entity: EntityRef) =>
     fetches.push(api.customFields(entity).then((f) => fields.set(key, f)));
   for (const p of people) {
     fetch(ballKey("email", p.identity.id), { kind: "identity", id: p.identity.id });
-    for (const { account } of p.accounts) {
+    for (const { account, organizations } of p.accounts) {
       accounts.set(account.id, account);
       fetch(ballKey("account", account.id), { kind: "account", id: account.id });
+      for (const { organization } of organizations) {
+        orgs.set(organization.id, organization);
+        fetch(ballKey("org", organization.id), { kind: "organization", id: organization.id });
+      }
     }
+  }
+  for (const r of resources) {
+    fetch(ballKey("resource", r.service_project.id), { kind: "service_project", id: r.service_project.id });
   }
   for (const p of projects) fetch(ballKey("project", p.project.id), { kind: "project", id: p.project.id });
   await Promise.all(fetches);
@@ -147,6 +187,8 @@ async function load(): Promise<Loaded> {
     attention,
     fields,
     accounts,
+    orgs,
+    resourceById: new Map(resources.map((r) => [r.service_project.id, r])),
   };
 }
 
@@ -176,8 +218,18 @@ export default function LedgerCanvas(props: Props) {
   );
 }
 
-type Dialog = { kind: AddKind; ball: Ball | null; at: Point | null; name?: string };
-type Menu = { x: number; y: number; at: Point; ball: string | null; line: string | null };
+type Dialog = { kind: AddKind; ball: Ball | null; at: Point | null; name?: string; title?: string };
+/** A right-click on a ball, a line or the background, or a line dragged from `drop` into empty space. */
+type Menu = {
+  x: number;
+  y: number;
+  at: Point;
+  ball: string | null;
+  line: string | null;
+  /** A menu built in advance, e.g. for a line dragged into empty space. */
+  title?: string;
+  items?: MenuItem[];
+};
 
 function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProject }: Props) {
   const flow = useReactFlow();
@@ -348,7 +400,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   /** Put a ball that was just created where it was dropped. */
   async function placeNew(entity: EntityRef, at: Point | null) {
     if (!at || projectKey) return;
-    await api.addCustomField(entity, POS_FIELD, formatPos(at));
+    try {
+      await api.addCustomField(entity, POS_FIELD, formatPos(at));
+    } catch {
+      // It was made; it just lands in its column instead of where it was dropped.
+    }
   }
 
   // --- lookups ----------------------------------------------------------------------
@@ -357,6 +413,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     (ball: Ball): SecretListing[] => {
       if (!data) return [];
       if (ball.kind === "project") return data.secrets.filter((s) => s.entry.secret.project_id === ball.id);
+      if (ball.kind === "resource") return data.secrets.filter((s) => s.entry.secret.service_project_id === ball.id);
       if (ball.kind !== "account") return [];
       const mine = new Set(
         data.resources.filter((r) => r.service_project.account_id === ball.id).map((r) => r.service_project.id),
@@ -378,6 +435,8 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const emails = useMemo(() => model.balls.filter((b) => b.kind === "email" && !b.noEmail), [model]);
   const projectBalls = useMemo(() => model.balls.filter((b) => b.kind === "project"), [model]);
   const accountBalls = useMemo(() => model.balls.filter((b) => b.kind === "account"), [model]);
+  const orgBalls = useMemo(() => model.balls.filter((b) => b.kind === "org"), [model]);
+  const resourceBalls = useMemo(() => model.balls.filter((b) => b.kind === "resource"), [model]);
   const ownerOf = (accountId: string) => {
     const owner = data?.accounts.get(accountId)?.identity_id;
     return owner ? byKey.get(ballKey("email", owner)) ?? null : null;
@@ -403,12 +462,41 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         return;
       }
       if (intent.kind === "none") return;
-      if (intent.kind === "own") {
-        await api.moveAccount(intent.accountId, intent.identityId);
-        const account = data.accounts.get(intent.accountId);
-        onNotify(`${account?.label ?? "The service"} now belongs to ${byKey.get(ballKey("email", intent.identityId))?.label}`);
-      } else {
-        await use(intent.accountId, intent.projectId);
+      const name = (kind: Ball["kind"], id: string) => byKey.get(ballKey(kind, id))?.label ?? "";
+      switch (intent.kind) {
+        case "own":
+          await api.moveAccount(intent.accountId, intent.identityId);
+          onNotify(`${name("account", intent.accountId)} now belongs to ${name("email", intent.identityId)}`);
+          break;
+        case "use":
+          await use(intent.accountId, intent.projectId);
+          break;
+        case "link": {
+          await api.linkServiceProject(intent.resourceId, intent.projectId);
+          // The line straight to the service said less than this one does. If
+          // nothing is stored on what that line stood for, it goes.
+          const account = data.resourceById.get(intent.resourceId)?.service_project.account_id;
+          for (const r of account ? resourcesToUnlink(data, account, intent.projectId) : []) {
+            if (r.remove) await api.deleteServiceProject(r.id);
+          }
+          onNotify(`${name("project", intent.projectId)} now runs on ${name("resource", intent.resourceId)}`);
+          break;
+        }
+        case "moveOrg":
+          await api.moveOrganization(intent.organizationId, intent.accountId);
+          onNotify(`${name("org", intent.organizationId)} is now under ${name("account", intent.accountId)}`);
+          break;
+        case "place": {
+          const r = data.resourceById.get(intent.resourceId)?.service_project;
+          if (r && r.account_id === intent.accountId) {
+            await api.assignOrganization(intent.resourceId, intent.organizationId);
+          } else {
+            await api.moveServiceProject(intent.resourceId, intent.accountId, intent.organizationId);
+          }
+          const into = intent.organizationId ? name("org", intent.organizationId) : name("account", intent.accountId);
+          onNotify(`${name("resource", intent.resourceId)} is now in ${into}`);
+          break;
+        }
       }
       await changed();
     } catch (e: unknown) {
@@ -439,23 +527,47 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       onNotify("A service always belongs to one email. Draw a line from it to another email to move it.");
       return;
     }
-    const project = parseKey(line.source);
-    const account = parseKey(line.target);
-    if (!project || !account) return;
+    const from = parseKey(line.source);
+    const to = parseKey(line.target);
+    if (!from || !to) return;
+    const a = byKey.get(line.source)?.label;
+    const b = byKey.get(line.target)?.label;
+    if (line.kind === "holds" && from.kind !== "org") {
+      onNotify(
+        to.kind === "org"
+          ? `${b} always belongs to a service. Draw it to another account to move it, or delete it.`
+          : `${b} always belongs to a service. Draw it to an organization to put it there, or delete it.`,
+      );
+      return;
+    }
     try {
-      for (const r of resourcesToUnlink(data, account.id, project.id)) {
-        if (r.remove) await api.deleteServiceProject(r.id);
-        else await api.unlinkServiceProject(r.id, project.id);
+      if (line.kind === "holds") {
+        await api.assignOrganization(to.id, null);
+        onNotify(`${b} is no longer in ${a}; it stays under ${serviceName(byKey.get(line.target) as Ball)}`);
+      } else if (to.kind === "resource") {
+        await api.unlinkServiceProject(to.id, from.id);
+        onNotify(`${a} no longer runs on ${b}`);
+      } else {
+        for (const r of resourcesToUnlink(data, to.id, from.id)) {
+          if (r.remove) await api.deleteServiceProject(r.id);
+          else await api.unlinkServiceProject(r.id, from.id);
+        }
+        onNotify(`${a} no longer uses ${b}`);
       }
       setSelectedLine(null);
-      onNotify(`${byKey.get(line.source)?.label} no longer uses ${byKey.get(line.target)?.label}`);
       await changed();
     } catch (e: unknown) {
       onNotify(message(e), true);
     }
   }
 
-  async function addService(provider: Provider, typed: string, at: Point | null, owner: Ball | null = null) {
+  async function addService(
+    provider: Provider,
+    typed: string,
+    at: Point | null,
+    owner: Ball | null = null,
+    forProject: string | null = projectId,
+  ) {
     if (locked) return;
     const spot = at ?? spotInView();
     const to = owner ?? nearestEmail(emails, place, spot);
@@ -468,7 +580,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       const label = serviceLabel(typed, provider);
       const account = await api.createAccountManual(to.id, provider, label);
       await placeNew({ kind: "account", id: account.id }, spot);
-      if (projectId) await use(account.id, projectId, account);
+      if (forProject) await use(account.id, forProject, account);
       else onNotify(`Added ${label} under ${to.label} · draw a line to another email to move it`);
       // The list stays open, so several services can be added in a row.
       await changed();
@@ -490,7 +602,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         if (existing) throw new Error(`There is already a project called ${existing.name}.`);
         const project = await api.createProject(values.name, null);
         await placeNew({ kind: "project", id: project.id }, d.at);
-        if (d.ball?.kind === "account") {
+        if (d.ball?.kind === "resource") {
+          await api.linkServiceProject(d.ball.id, project.id);
+        } else if (d.ball?.kind === "account") {
           await reload();
           const resource = await api.createServiceProjectManual(
             d.ball.id,
@@ -507,16 +621,67 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       }
       case "service":
         setDialog(null);
-        await addService(providerForName(values.name), values.name, d.at, d.ball?.kind === "email" ? d.ball : null);
+        await addService(
+          providerForName(values.name),
+          values.name,
+          d.at,
+          d.ball?.kind === "email" ? d.ball : null,
+          d.ball?.kind === "project" ? d.ball.id : projectId,
+        );
         return;
+      case "org": {
+        const account = d.ball ? data?.accounts.get(d.ball.id) : undefined;
+        if (!account) return;
+        const taken = [...(data?.orgs.values() ?? [])].find(
+          (o) => o.account_id === account.id && o.name.toLowerCase() === values.name.toLowerCase(),
+        );
+        if (taken) throw new Error(`${account.label} already has an organization called ${taken.name}.`);
+        const org = await api.createOrganization(account.id, values.name);
+        await placeNew({ kind: "organization", id: org.id }, d.at);
+        onNotify(`Added ${org.name} in ${account.label} · drag from it to add its projects`);
+        break;
+      }
+      case "resource": {
+        const org = d.ball?.kind === "org" ? data?.orgs.get(d.ball.id) : undefined;
+        const account = data?.accounts.get(org?.account_id ?? d.ball?.id ?? "");
+        if (!account) return;
+        const taken = data?.resources.find(
+          (r) =>
+            r.service_project.account_id === account.id &&
+            r.service_project.name.toLowerCase() === values.name.toLowerCase(),
+        );
+        if (taken) throw new Error(`${account.label} already has a project called ${taken.service_project.name}.`);
+        const resource = await api.createServiceProjectManual(
+          account.id,
+          org?.id ?? null,
+          account.provider,
+          values.name,
+          null,
+          "unknown",
+        );
+        if (values.label) {
+          await api.updateResource(resource.id, {
+            name: resource.name,
+            provider_ref: null,
+            region: values.label,
+            environment: resource.environment,
+            url: null,
+            notes: null,
+          });
+        }
+        await placeNew({ kind: "service_project", id: resource.id }, d.at);
+        onNotify(`Added ${resource.name} in ${org?.name ?? account.label} · draw a line from your project to it`);
+        break;
+      }
       case "api":
       case "password":
       case "secret": {
         if (!d.ball) return;
-        const owner =
-          d.ball.kind === "project"
-            ? { project_id: d.ball.id, service_project_id: null, account_id: null }
-            : { project_id: null, service_project_id: null, account_id: d.ball.id };
+        const owner: SecretOwner = {
+          project_id: d.ball.kind === "project" ? d.ball.id : null,
+          service_project_id: d.ball.kind === "resource" ? d.ball.id : null,
+          account_id: d.ball.kind === "account" ? d.ball.id : null,
+        };
         const kind = d.kind === "api" ? "generic_api_key" : d.kind === "password" ? "password" : "env_var";
         await api.storeSecret({ owner, kind, name: values.name, environment: "unknown", notes: null }, values.value);
         onNotify(`Saved ${values.name} · encrypted in your vault`);
@@ -558,6 +723,20 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           url: account.url,
           notes: account.notes,
         });
+      } else if (ball.kind === "org") {
+        if (value === ball.label) return;
+        await api.renameOrganization(ball.id, value);
+      } else if (ball.kind === "resource") {
+        const r = data?.resourceById.get(ball.id)?.service_project;
+        if (!r || value === r.name) return;
+        await api.updateResource(r.id, {
+          name: value,
+          provider_ref: r.provider_ref,
+          region: r.region,
+          environment: r.environment,
+          url: r.url,
+          notes: r.notes,
+        });
       } else {
         if (value === ball.label) return;
         await api.updateProject(ball.id, value, null);
@@ -583,6 +762,16 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         const what = n > 0 ? ` and the ${n === 1 ? "key" : `${n} keys`} stored under it` : "";
         if (!window.confirm(`Delete ${ball.label}${what}? This cannot be undone.`)) return;
         await api.deleteAccount(ball.id);
+      } else if (ball.kind === "org") {
+        const n = resourceBalls.filter((r) => r.parent === ball.key).length;
+        const what = n > 0 ? ` The ${n === 1 ? "project" : `${n} projects`} in it stay, directly under ${serviceName(ball)}.` : "";
+        if (!window.confirm(`Delete the organization ${ball.label}?${what}`)) return;
+        await api.deleteOrganization(ball.id);
+      } else if (ball.kind === "resource") {
+        const n = secretsOf(ball).length;
+        const what = n > 0 ? ` and the ${n === 1 ? "key" : `${n} keys`} stored on it` : "";
+        if (!window.confirm(`Delete ${ball.label}${what} from your vault? This cannot be undone.`)) return;
+        await api.deleteServiceProject(ball.id);
       } else {
         if (!window.confirm(`Delete the project ${ball.label} and its own variables? This cannot be undone.`)) return;
         await api.deleteProject(ball.id);
@@ -664,51 +853,102 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     return { title: "Map", items };
   }
 
+  /** The add dialog for a project inside a service or organization. */
+  const resourceDialog = (holder: Ball, at: Point | null): Dialog => ({
+    kind: "resource",
+    ball: holder,
+    at,
+    title: `Add a ${serviceName(holder)} project`,
+  });
+
+  /** Projects of yours not yet running on `target`, to pick from. */
+  function useIn(target: Ball, at: Point): MenuItem {
+    const using = new Set(model.lines.filter((l) => l.target === target.key).map((l) => l.source));
+    return {
+      label: "Use in project",
+      items: [
+        ...projectBalls.filter((p) => !using.has(p.key)).map((p) => ({ label: p.label, onSelect: () => void connect(target, p) })),
+        { label: "New project…", onSelect: () => setDialog({ kind: "project", ball: target, at }) },
+      ],
+    };
+  }
+
   function ballMenu(ball: Ball): { title: string; items: MenuItem[] } {
     const edit = !locked;
     const items: MenuItem[] = [{ label: "Show details", onSelect: () => setSelected(ball.key) }];
     const del: MenuItem = { label: "Delete", danger: true, onSelect: () => void remove(ball) };
     const rename_: MenuItem = { label: "Rename", hint: "double-click", onSelect: () => setRenaming(ball.key) };
+    const field: MenuItem = { label: "Field…", onSelect: () => setDialog({ kind: "field", ball, at: null }) };
     const near = place.get(ball.key) ?? { x: 0, y: 0 };
+    const beside = () => besideSpot(near, place.values());
+    const keys = secretsOf(ball);
+    if (keys.length > 0) {
+      items.push({
+        label: "Copy",
+        items: keys.map((k) => ({ label: k.entry.secret.name, hint: k.entry.secret.preview, onSelect: () => void copySecret(k) })),
+      });
+    }
     if (ball.kind === "email") {
       if (!ball.noEmail) items.push({ label: "Copy email", onSelect: () => void copyText("the address", ball.label) });
       if (edit) {
         items.push({ label: "Add service", items: serviceItems(freeSpot({ x: near.x + 220, y: near.y }, place.values()), ball) });
+        items.push({ label: "Add", items: [field] });
         if (!ball.primary && !ball.noEmail) items.push({ label: "Make main email", onSelect: () => void makePrimary(ball) });
         items.push(rename_, del);
       }
     } else if (ball.kind === "account") {
-      const keys = secretsOf(ball);
-      if (keys.length > 0) {
-        items.push({
-          label: "Copy",
-          items: keys.map((k) => ({ label: k.entry.secret.name, hint: k.entry.secret.preview, onSelect: () => void copySecret(k) })),
-        });
-      }
       if (edit) {
         items.push({
           label: "Add",
           items: [
-            { label: "API key", onSelect: () => setDialog({ kind: "api", ball, at: null }) },
-            { label: "Password", onSelect: () => setDialog({ kind: "password", ball, at: null }) },
-            { label: "Field", onSelect: () => setDialog({ kind: "field", ball, at: null }) },
+            { label: "Organization…", onSelect: () => setDialog({ kind: "org", ball, at: beside() }) },
+            { label: `Project in ${ball.label}…`, onSelect: () => setDialog(resourceDialog(ball, beside())) },
+            { label: "API key…", onSelect: () => setDialog({ kind: "api", ball, at: null }) },
+            { label: "Password…", onSelect: () => setDialog({ kind: "password", ball, at: null }) },
+            field,
           ],
         });
-        const using = new Set(model.lines.filter((l) => l.target === ball.key).map((l) => l.source));
-        items.push({
-          label: "Use in project",
-          items: [
-            ...projectBalls
-              .filter((p) => !using.has(p.key))
-              .map((p) => ({ label: p.label, onSelect: () => void connect(ball, p) })),
-            { label: "New project…", onSelect: () => setDialog({ kind: "project", ball, at: freeSpot({ x: near.x + 260, y: near.y }, place.values()) }) },
-          ],
-        });
+        items.push(useIn(ball, freeSpot({ x: near.x + 260, y: near.y }, place.values())));
         const owner = ownerOf(ball.id);
         items.push({
           label: "Move to email",
           items: emails.filter((e) => e.key !== owner?.key).map((e) => ({ label: e.label, onSelect: () => void connect(ball, e) })),
         });
+        items.push(rename_, del);
+      }
+    } else if (ball.kind === "org") {
+      if (edit) {
+        items.push({ label: `Add project in ${ball.label}…`, onSelect: () => setDialog(resourceDialog(ball, beside())) });
+        items.push({ label: "Add", items: [field] });
+        const others = accountBalls.filter((a) => a.provider === ball.provider && a.key !== ball.parent);
+        if (others.length > 0) {
+          items.push({
+            label: "Move to account",
+            items: others.map((a) => ({ label: a.label, hint: ownerOf(a.id)?.label, onSelect: () => void connect(ball, a) })),
+          });
+        }
+        items.push(rename_, del);
+      }
+    } else if (ball.kind === "resource") {
+      if (edit) {
+        items.push(useIn(ball, freeSpot({ x: near.x + 240, y: near.y }, place.values())));
+        items.push({
+          label: "Add",
+          items: [
+            { label: "API key…", onSelect: () => setDialog({ kind: "api", ball, at: null }) },
+            { label: "Variable…", onSelect: () => setDialog({ kind: "secret", ball, at: null }) },
+            field,
+          ],
+        });
+        const holder = ball.parent ? byKey.get(ball.parent) : undefined;
+        const account = holder?.kind === "org" ? (holder.parent ? byKey.get(holder.parent) : undefined) : holder;
+        const moves: MenuItem[] = orgBalls
+          .filter((o) => o.provider === ball.provider && o.key !== ball.parent)
+          .map((o) => ({ label: o.label, hint: byKey.get(o.parent ?? "")?.label, onSelect: () => void connect(ball, o) }));
+        if (holder?.kind === "org" && account) {
+          moves.push({ label: `Out of ${holder.label}`, onSelect: () => void connect(ball, account) });
+        }
+        if (moves.length > 0) items.push({ label: "Move to organization", items: moves });
         items.push(rename_, del);
       }
     } else {
@@ -717,15 +957,58 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         const used = new Set(model.lines.filter((l) => l.source === ball.key).map((l) => l.target));
         items.push({
           label: "Use a service",
-          items: accountBalls
+          items: [...accountBalls, ...resourceBalls]
             .filter((a) => !used.has(a.key))
-            .map((a) => ({ label: a.label, hint: ownerOf(a.id)?.label, onSelect: () => void connect(ball, a) })),
+            .map((a) => ({
+              label: a.label,
+              hint: a.kind === "account" ? ownerOf(a.id)?.label : byKey.get(a.parent ?? "")?.label,
+              onSelect: () => void connect(ball, a),
+            })),
         });
-        items.push({ label: "Add variable", onSelect: () => setDialog({ kind: "secret", ball, at: null }) });
+        items.push({
+          label: "Add",
+          items: [{ label: "Variable…", onSelect: () => setDialog({ kind: "secret", ball, at: null }) }, field],
+        });
         items.push(rename_, { ...del, label: "Delete project" });
       }
     }
-    return { title: `${KIND_LABEL[ball.kind]} · ${ball.label}`, items };
+    return { title: `${kindLabel(ball)} · ${ball.label}`, items };
+  }
+
+  /**
+   * A line dragged from a ball into empty space: what to add there. Where only
+   * one thing makes sense, its form opens straight away.
+   */
+  function dropOn(from: Ball, at: Point, client: Point) {
+    const open = (title: string, items: MenuItem[]) =>
+      setMenu({ x: client.x, y: client.y, at, ball: null, line: null, title, items });
+    switch (from.kind) {
+      case "email":
+        open(`New service for ${from.label}`, serviceItems(at, from));
+        break;
+      case "account":
+        open(`Add to ${from.label}`, [
+          { label: "Organization…", onSelect: () => setDialog({ kind: "org", ball: from, at }) },
+          { label: `Project in ${from.label}…`, onSelect: () => setDialog(resourceDialog(from, at)) },
+          { label: "A project of yours that uses it…", onSelect: () => setDialog({ kind: "project", ball: from, at }) },
+        ]);
+        break;
+      case "org":
+        setDialog(resourceDialog(from, at));
+        break;
+      case "resource":
+        setDialog({ kind: "project", ball: from, at, title: `Your project that runs on ${from.label}` });
+        break;
+      case "project":
+        open(`A service ${from.label} runs on`, [
+          ...COMMON.map((p) => {
+            const info = providerInfo(p);
+            return { label: info?.name ?? p, onSelect: () => void addService(p, info?.name ?? p, at, null, from.id) };
+          }),
+          { label: "Other…", onSelect: () => setDialog({ kind: "service", ball: from, at }) },
+        ]);
+        break;
+    }
   }
 
   function lineMenu(line: Line): { title: string; items: MenuItem[] } {
@@ -745,6 +1028,17 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
                   items: emails.filter((e) => e.key !== line.source).map((e) => ({ label: e.label, onSelect: () => void connect(ball, e) })),
                 },
               ],
+      };
+    }
+    if (line.kind === "holds") {
+      const inOrg = parseKey(line.source)?.kind === "org";
+      return {
+        title: `${b} is in ${a}`,
+        items: locked
+          ? [{ label: "Unlock the map to change this", disabled: true }]
+          : inOrg
+            ? [{ label: `Take out of ${a}`, danger: true, onSelect: () => void removeLine(line) }]
+            : [{ label: `Drag ${b} to another ${inOrg ? "organization" : "account"} to move it`, disabled: true }],
       };
     }
     return {
@@ -791,7 +1085,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
 
   const selectedBall = selected ? byKey.get(selected) ?? null : null;
   const builtMenu = menu
-    ? menu.line
+    ? menu.items
+      ? { title: menu.title ?? "", items: menu.items }
+      : menu.line
       ? lineMenu(model.lines.find((l) => l.key === menu.line) as Line)
       : menu.ball && byKey.get(menu.ball)
         ? ballMenu(byKey.get(menu.ball) as Ball)
@@ -845,6 +1141,15 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             const a = byKey.get(c.source);
             const b = byKey.get(c.target);
             if (a && b) void connect(a, b);
+          }}
+          onConnectEnd={(event, state: FinalConnectionState) => {
+            // Let go over empty space: offer what can be added there.
+            if (locked || state.isValid || state.toNode || !state.fromNode) return;
+            const from = byKey.get(state.fromNode.id);
+            const point = "changedTouches" in event ? event.changedTouches[0] : event;
+            if (!from || !point) return;
+            const client = { x: point.clientX, y: point.clientY };
+            dropOn(from, flow.screenToFlowPosition(client), client);
           }}
           isValidConnection={(c) => c.source !== c.target}
           connectionRadius={70}
@@ -913,11 +1218,21 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           ball={selectedBall}
           locked={locked}
           owner={selectedBall.kind === "account" ? ownerOf(selectedBall.id) : null}
+          holder={
+            selectedBall.kind === "org" || selectedBall.kind === "resource"
+              ? (byKey.get(selectedBall.parent ?? "") ?? null)
+              : null
+          }
+          inside={resourceBalls
+            .filter((r) => r.parent === selectedBall.key)
+            .sort((a, b) => a.label.localeCompare(b.label))}
+          resourceOf={(id) => data.resourceById.get(id)}
           account={selectedBall.kind === "account" ? (data.accounts.get(selectedBall.id) ?? null) : null}
           secrets={secretsOf(selectedBall)}
           fields={namedFields(selectedBall)}
           connected={[...neighbourhood(model.lines, selectedBall.key)]
-            .filter((k) => k !== selectedBall.key)
+            // The projects inside it are shown as cards instead.
+            .filter((k) => k !== selectedBall.key && !(k.startsWith("resource:") && byKey.get(k)?.parent === selectedBall.key))
             .map((k) => byKey.get(k))
             .filter((b): b is Ball => Boolean(b))
             // Services first, then projects, then emails; by name within each.
@@ -926,7 +1241,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           onPick={focusOn}
           onCopySecret={(s) => void copySecret(s)}
           onCopyText={(label, text) => void copyText(label, text)}
-          onAdd={(kind) => setDialog({ kind, ball: selectedBall, at: null })}
+          onAdd={(kind) => {
+            const beside = besideSpot(place.get(selectedBall.key) ?? { x: 0, y: 0 }, place.values());
+            if (kind === "resource") setDialog(resourceDialog(selectedBall, beside));
+            else setDialog({ kind, ball: selectedBall, at: kind === "org" ? beside : null });
+          }}
           onOpenProject={
             onOpenProject && !projectKey && selectedBall.kind === "project"
               ? () => onOpenProject(selectedBall.id)
@@ -939,10 +1258,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           focus={focusProject}
           existing={
             focusProject
-              ? accountBalls.filter((a) => !lines.some((l) => l.source === focusProject.key && l.target === a.key))
+              ? [...resourceBalls, ...accountBalls].filter(
+                  (a) => !lines.some((l) => l.source === focusProject.key && l.target === a.key),
+                )
               : []
           }
-          ownerOf={(id) => ownerOf(id)?.label ?? null}
+          whereIs={(b) => (b.kind === "account" ? ownerOf(b.id)?.label : byKey.get(b.parent ?? "")?.label) ?? null}
           have={new Set(accountBalls.map((a) => a.provider ?? ""))}
           canvas={wrapRef}
           onPlace={(item, client) => {
@@ -951,7 +1272,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             else if (item.kind === "project") setDialog({ kind: "project", ball: null, at: at ?? spotInView() });
             else if (item.kind === "other") setDialog({ kind: "service", ball: null, at: at ?? spotInView(), name: item.name });
             else if (item.kind === "existing" && focusProject) {
-              const a = byKey.get(ballKey("account", item.accountId));
+              const a = byKey.get(item.key);
               if (a) void connect(focusProject, a);
             } else if (item.kind === "service") {
               // A click on a service you already have means that one; dragging
@@ -989,6 +1310,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       {dialog && (
         <AddDialog
           kind={dialog.kind}
+          title={dialog.title}
           under={dialog.ball?.label ?? null}
           initialName={dialog.name}
           onCancel={() => setDialog(null)}
@@ -1014,6 +1336,10 @@ function Guide({ onEmail }: { onEmail: () => void }) {
           the email it is dropped next to.
         </li>
         <li>
+          <strong>Inside a service</strong> — drag from Supabase&apos;s dot to an empty spot to add an organization or
+          the projects you have there.
+        </li>
+        <li>
           <strong>Projects</strong> — e.g. <em>make-it-real</em>. Draw a line from the project to each service it runs on.
         </li>
       </ol>
@@ -1035,7 +1361,12 @@ function HowItWorks({ onClose }: { onClose: () => void }) {
           <strong>Service → email</strong>: who owns it. <strong>Project → service</strong>: what it runs on.
         </li>
         <li>
-          <strong>Add</strong>: drag from the list on the right, or right-click anywhere.
+          <strong>Add something new</strong>: drag from a ball&apos;s dot to an empty spot. From a service you get an
+          organization or a project in it; from an organization, a project in it.
+        </li>
+        <li>
+          <strong>Add</strong>: drag from the list on the right, or right-click anywhere. Every ball takes fields with
+          names of your own.
         </li>
         <li>
           <strong>Edit</strong>: right-click a ball or a line; double-click to rename.
@@ -1058,13 +1389,13 @@ export type ShelfItem =
   | { kind: "project" }
   | { kind: "service"; provider: Provider; name: string }
   | { kind: "other"; name: string }
-  | { kind: "existing"; accountId: string };
+  | { kind: "existing"; key: string };
 
 function Shelf({
   locked,
   focus,
   existing,
-  ownerOf,
+  whereIs,
   have,
   canvas,
   onPlace,
@@ -1072,8 +1403,10 @@ function Shelf({
 }: {
   locked: boolean;
   focus: Ball | null;
+  /** On a project's page: services and projects in services it does not use yet. */
   existing: Ball[];
-  ownerOf: (accountId: string) => string | null;
+  /** The email a service belongs to, or what a project in a service is in. */
+  whereIs: (ball: Ball) => string | null;
   /** Providers there is already an account for. */
   have: Set<string>;
   canvas: React.RefObject<HTMLDivElement | null>;
@@ -1163,10 +1496,15 @@ function Shelf({
 
       {focus && existing.length > 0 && (
         <>
-          <div className="cv-shelf-title">Your services</div>
+          <div className="cv-shelf-title">Already in your vault</div>
           <div className="cv-shelf-list">
             {existing.map((a) =>
-              chip({ kind: "existing", accountId: a.id }, a.label, a.provider ? <ProviderIcon provider={a.provider} name={a.label} size={18} /> : null, ownerOf(a.id)),
+              chip(
+                { kind: "existing", key: a.key },
+                a.label,
+                a.provider ? <ProviderIcon provider={a.provider} name={a.label} size={18} /> : null,
+                a.kind === "resource" ? `${serviceName(a)} project · ${whereIs(a) ?? ""}` : whereIs(a),
+              ),
             )}
           </div>
         </>
@@ -1208,10 +1546,13 @@ function Details({
   ball,
   locked,
   owner,
+  holder,
   account,
   secrets,
   fields,
   connected,
+  inside,
+  resourceOf,
   onClose,
   onPick,
   onCopySecret,
@@ -1222,10 +1563,15 @@ function Details({
   ball: Ball;
   locked: boolean;
   owner: Ball | null;
+  /** What an organization or a project in a service sits in. */
+  holder: Ball | null;
   account: Account | null;
   secrets: SecretListing[];
   fields: CustomField[];
   connected: Ball[];
+  /** The projects in a service or organization. */
+  inside: Ball[];
+  resourceOf: (id: string) => ServiceProjectSummary | undefined;
   onClose: () => void;
   onPick: (key: string) => void;
   onCopySecret: (s: SecretListing) => void;
@@ -1239,12 +1585,30 @@ function Details({
     if (k === "env_var") return "plain";
     return "api";
   };
+  const resource = ball.kind === "resource" ? resourceOf(ball.id)?.service_project : undefined;
+  const holdsSecrets = ball.kind === "account" || ball.kind === "project" || ball.kind === "resource";
+  const addButtons: [AddKind, string][] =
+    ball.kind === "account"
+      ? [["api", "+ API key"], ["password", "+ Password"], ["field", "+ Field"]]
+      : ball.kind === "project"
+        ? [["secret", "+ Variable"], ["field", "+ Field"]]
+        : ball.kind === "resource"
+          ? [["api", "+ API key"], ["secret", "+ Variable"], ["field", "+ Field"]]
+          : [["field", "+ Field"]];
+  const row = (term: string, value: string | null | undefined) =>
+    value ? (
+      <>
+        <dt>{term}</dt>
+        <dd>{value}</dd>
+      </>
+    ) : null;
+
   return (
     <aside className="st-info cv-details" aria-label="Details">
       <div className="st-info-head">
         {ball.provider && <ProviderIcon provider={ball.provider} name={ball.label} size={22} />}
         <div>
-          <div className="st-info-kind">{ball.primary ? "Main email" : KIND_LABEL[ball.kind]}</div>
+          <div className="st-info-kind">{kindLabel(ball)}</div>
           <div className="st-info-name">{ball.label}</div>
         </div>
         <span className="spacer" />
@@ -1254,36 +1618,14 @@ function Details({
       </div>
 
       <dl className="st-info-list">
-        {ball.provider && (
-          <>
-            <dt>Service</dt>
-            <dd>{providerLabel(ball.provider)}</dd>
-          </>
-        )}
-        {owner && (
-          <>
-            <dt>Email</dt>
-            <dd>{owner.label}</dd>
-          </>
-        )}
-        {account?.username && (
-          <>
-            <dt>Username</dt>
-            <dd>{account.username}</dd>
-          </>
-        )}
-        {account?.url && (
-          <>
-            <dt>Sign in at</dt>
-            <dd>{account.url}</dd>
-          </>
-        )}
-        {ball.kind === "email" && ball.sub && !ball.noEmail && (
-          <>
-            <dt>Name</dt>
-            <dd>{ball.sub}</dd>
-          </>
-        )}
+        {ball.kind === "account" && row("Service", ball.provider ? providerLabel(ball.provider) : null)}
+        {row("In", holder?.label)}
+        {row("Email", owner?.label)}
+        {row("Username", account?.username)}
+        {row("Sign in at", account?.url)}
+        {row("Region", resource?.region)}
+        {row("Id", resource?.provider_ref)}
+        {ball.kind === "email" && !ball.noEmail && row("Name", ball.sub)}
       </dl>
 
       {onOpenProject && (
@@ -1292,70 +1634,95 @@ function Details({
         </button>
       )}
 
+      {(ball.kind === "account" || ball.kind === "org") && (
+        <>
+          <h4>Projects in {ball.label}</h4>
+          {inside.length === 0 && (
+            <p className="muted-p">
+              None yet. {locked ? "" : `Drag from the dot on ${ball.label} to an empty spot to add one.`}
+            </p>
+          )}
+          <div className="cv-cards">
+            {inside.map((b) => {
+              const r = resourceOf(b.id);
+              const usedBy = r?.used_by.map((u) => u.name).join(", ");
+              return (
+                <button key={b.key} type="button" className="cv-card" onClick={() => onPick(b.key)}>
+                  <strong>{b.label}</strong>
+                  {r?.service_project.region && <small>{r.service_project.region}</small>}
+                  <small className={usedBy ? "used" : undefined}>{usedBy ? `Used by ${usedBy}` : "Not in use"}</small>
+                </button>
+              );
+            })}
+          </div>
+          {!locked && (
+            <div className="st-info-actions">
+              {ball.kind === "account" && (
+                <button type="button" onClick={() => onAdd("org")}>
+                  + Organization
+                </button>
+              )}
+              <button type="button" onClick={() => onAdd("resource")}>
+                + Project
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
       <h4>Connected to</h4>
       {connected.length === 0 && (
         <p className="muted-p">
-          Nothing yet. Drag from the dot on this ball to {ball.kind === "project" ? "a service it runs on" : ball.kind === "account" ? "its email" : "a service"}.
+          Nothing yet. Drag from the dot on this ball to{" "}
+          {ball.kind === "project" ? "a service it runs on" : ball.kind === "account" ? "its email" : "another ball"}.
         </p>
       )}
       <div className="cv-connected">
         {connected.map((b) => (
           <button key={b.key} type="button" className="cv-chip" onClick={() => onPick(b.key)}>
             <span className="cv-chip-icon">
-              {b.provider ? <ProviderIcon provider={b.provider} name={b.label} size={16} /> : <span className={`cv-chip-glyph ${b.kind}`}>{b.kind === "email" ? "@" : "P"}</span>}
+              {b.provider ? (
+                <ProviderIcon provider={b.provider} name={b.label} size={16} />
+              ) : (
+                <span className={`cv-chip-glyph ${b.kind}`}>{b.kind === "email" ? "@" : "P"}</span>
+              )}
             </span>
             <span className="cv-chip-text">
               <span>{b.label}</span>
-              <small>{KIND_LABEL[b.kind]}</small>
+              <small>{kindLabel(b)}</small>
             </span>
           </button>
         ))}
       </div>
 
-      {(ball.kind === "account" || ball.kind === "project") && (
-        <>
-          <h4>{ball.kind === "project" ? "Variables" : "Keys and fields"}</h4>
-          {secrets.length === 0 && fields.length === 0 && <p className="muted-p">Nothing stored yet.</p>}
-          {secrets.map((s) => (
-            <div key={s.entry.secret.id} className={`st-info-field tone-${tone(s.entry.secret.kind)}`}>
-              <span className="st-info-field-name">{s.entry.secret.name}</span>
-              <span className="st-info-field-value mono">{s.entry.secret.preview}</span>
-              <button type="button" onClick={() => onCopySecret(s)} aria-label={`Copy ${s.entry.secret.name}`}>
-                Copy
-              </button>
-            </div>
+      <h4>{ball.kind === "project" ? "Variables and fields" : holdsSecrets ? "Keys and fields" : "Fields"}</h4>
+      {secrets.length === 0 && fields.length === 0 && <p className="muted-p">Nothing stored yet.</p>}
+      {secrets.map((s) => (
+        <div key={s.entry.secret.id} className={`st-info-field tone-${tone(s.entry.secret.kind)}`}>
+          <span className="st-info-field-name">{s.entry.secret.name}</span>
+          <span className="st-info-field-value mono">{s.entry.secret.preview}</span>
+          <button type="button" onClick={() => onCopySecret(s)} aria-label={`Copy ${s.entry.secret.name}`}>
+            Copy
+          </button>
+        </div>
+      ))}
+      {fields.map((f) => (
+        <div key={f.id} className="st-info-field tone-plain">
+          <span className="st-info-field-name">{f.label}</span>
+          <span className="st-info-field-value">{f.value}</span>
+          <button type="button" onClick={() => onCopyText(f.label, f.value)} aria-label={`Copy ${f.label}`}>
+            Copy
+          </button>
+        </div>
+      ))}
+      {!locked && (
+        <div className="st-info-actions">
+          {addButtons.map(([kind, label]) => (
+            <button key={kind} type="button" onClick={() => onAdd(kind)}>
+              {label}
+            </button>
           ))}
-          {fields.map((f) => (
-            <div key={f.id} className="st-info-field tone-plain">
-              <span className="st-info-field-name">{f.label}</span>
-              <span className="st-info-field-value">{f.value}</span>
-              <button type="button" onClick={() => onCopyText(f.label, f.value)} aria-label={`Copy ${f.label}`}>
-                Copy
-              </button>
-            </div>
-          ))}
-          {!locked && (
-            <div className="st-info-actions">
-              {ball.kind === "account" ? (
-                <>
-                  <button type="button" onClick={() => onAdd("api")}>
-                    + API key
-                  </button>
-                  <button type="button" onClick={() => onAdd("password")}>
-                    + Password
-                  </button>
-                  <button type="button" onClick={() => onAdd("field")}>
-                    + Field
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => onAdd("secret")}>
-                  + Variable
-                </button>
-              )}
-            </div>
-          )}
-        </>
+        </div>
       )}
     </aside>
   );

@@ -1455,6 +1455,17 @@ impl Vault {
         self.unlocked()?.store.delete_account(account_id)
     }
 
+    /// Rename an organization.
+    pub fn rename_organization(&self, organization_id: Uuid, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CoreError::Invalid("an organization needs a name".into()));
+        }
+        self.unlocked()?
+            .store
+            .rename_organization(organization_id, name)
+    }
+
     /// Delete an organization. Its resources survive, unassigned.
     pub fn delete_organization(&self, organization_id: Uuid) -> Result<()> {
         self.unlocked()?.store.delete_organization(organization_id)

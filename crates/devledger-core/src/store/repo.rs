@@ -166,7 +166,7 @@ pub struct AccountDetails {
 pub enum AttentionKind {
     /// A resource whose organization is unknown.
     UnassignedOrganization,
-    /// A resource not used by any DevLedger project.
+    /// A resource holding keys that no DevLedger project uses.
     UnlinkedServiceProject,
     /// An identity with no email, so it cannot be matched against a paste.
     IdentityWithoutEmail,
@@ -2366,7 +2366,15 @@ impl Store {
                     entity: EntityRef::new(EntityKind::ServiceProject, sp.id),
                 });
             }
-            if self.projects_using(sp.id)?.is_empty() {
+            // Unused is only a gap when it holds keys: they belong in some
+            // project's vault. A resource written down by hand -- a paused
+            // Supabase project, a repo nothing builds from -- is just a record.
+            let holds_keys: i64 = self.conn().query_row(
+                "SELECT count(*) FROM secrets WHERE service_project_id = ?1",
+                params![sp.id.to_string()],
+                |r| r.get(0),
+            )?;
+            if holds_keys > 0 && self.projects_using(sp.id)?.is_empty() {
                 items.push(AttentionItem {
                     kind: AttentionKind::UnlinkedServiceProject,
                     title: format!("{} is not used by any project", sp.name),
@@ -2585,6 +2593,7 @@ impl Store {
         let table = match entity.kind {
             EntityKind::Identity => "identities",
             EntityKind::Account => "accounts",
+            EntityKind::Organization => "organizations",
             EntityKind::Project => "projects",
             EntityKind::ServiceProject => "service_projects",
             other => {
@@ -2685,6 +2694,7 @@ fn custom_field_kind(kind: EntityKind) -> Result<&'static str> {
     match kind {
         EntityKind::Identity => Ok("identity"),
         EntityKind::Account => Ok("account"),
+        EntityKind::Organization => Ok("organization"),
         EntityKind::Project => Ok("project"),
         EntityKind::ServiceProject => Ok("service_project"),
         other => Err(CoreError::Invalid(format!(

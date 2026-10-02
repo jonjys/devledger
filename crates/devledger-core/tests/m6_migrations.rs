@@ -9,6 +9,7 @@
 //! left it, write rows the way the old code wrote them, then run the real
 //! migration path and assert on what survived.
 
+use devledger_core::model::{EntityKind, EntityRef, Provider};
 use devledger_core::secret::SecretBytes;
 use devledger_core::store::schema::CURRENT_VERSION;
 use devledger_core::store::Store;
@@ -241,4 +242,54 @@ fn upgrading_is_idempotent() {
             .unwrap(),
         CURRENT_VERSION,
     );
+}
+
+#[test]
+fn upgrading_to_v6_keeps_every_field_and_lets_organizations_carry_them() {
+    let mut store = Store::open_in_memory_at_version(&key(), 5).expect("v5 database");
+    store
+        .execute_batch_for_test(
+            "INSERT INTO identities (id, label, email, email_blind_index, created_at)
+                 VALUES ('11111111-0000-4000-8000-000000000000', 'me', NULL, NULL, '2026-01-01T00:00:00Z');
+             INSERT INTO custom_fields (id, entity_kind, entity_id, label, value, position, created_at, updated_at)
+                 VALUES ('55555555-0000-4000-8000-000000000000', 'identity', '11111111-0000-4000-8000-000000000000', 'Phone', '555-0100', 0,
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("v5 rows");
+    store.migrate_now().expect("upgrade");
+
+    let me = EntityRef {
+        kind: EntityKind::Identity,
+        id: "11111111-0000-4000-8000-000000000000"
+            .parse()
+            .expect("uuid"),
+    };
+    let kept = store.custom_fields_for(&me).expect("fields");
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].label.as_str(), kept[0].value.as_str()),
+        ("Phone", "555-0100")
+    );
+
+    let identity = store
+        .create_identity("dev-a", Some("dev-a@example.com"), None)
+        .expect("identity");
+    let account = store
+        .create_account(identity.id, &Provider::Supabase, None, "Supabase")
+        .expect("account");
+    let org = store
+        .create_organization(account.id, None, "acme's Org")
+        .expect("organization");
+    let entity = EntityRef {
+        kind: EntityKind::Organization,
+        id: org.id,
+    };
+    store
+        .create_custom_field(&entity, "Plan", "Free")
+        .expect("a field on an organization");
+    assert_eq!(store.custom_fields_for(&entity).expect("fields").len(), 1);
+
+    // Deleting the organization takes its fields with it.
+    store.delete_organization(org.id).expect("delete");
+    assert!(store.custom_fields_for(&entity).expect("fields").is_empty());
 }

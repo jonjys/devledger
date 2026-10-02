@@ -276,6 +276,10 @@ export const moveServiceProject = (
 export const deleteAccount = (accountId: string) =>
   call<void>("delete_account", { accountId });
 
+/** Rename an organization. */
+export const renameOrganization = (organizationId: string, name: string) =>
+  call<void>("rename_organization", { organizationId, name });
+
 /** Delete an organization. Its resources survive, unassigned. */
 export const deleteOrganization = (organizationId: string) =>
   call<void>("delete_organization", { organizationId });

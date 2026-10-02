@@ -4,9 +4,15 @@
 //
 // Every line is something the vault already records, not a drawing of its own:
 //
-//   email ── service   the account belongs to that email (accounts.identity_id)
-//   project ── service the project uses a resource under that account
-//                      (a Vercel project, a repo, a Supabase project)
+//   email ── service          the account belongs to that email (accounts.identity_id)
+//   service ── organization   a team or org inside the account
+//   organization ── resource  a project inside the service (a Supabase project,
+//                             a Vercel project, a repo); straight from the
+//                             service when it is in no organization
+//   project ── resource       your project runs on it
+//   project ── service        the same, through a resource drawing that line
+//                             made: named after the project and nothing more,
+//                             so it is drawn as the line rather than a ball
 //
 // So drawing a line changes the vault, and the vault decides what is drawn.
 // Only where each ball sits is the canvas's own, kept in a hidden custom field
@@ -36,10 +42,10 @@ export function isHiddenField(label: string): boolean {
   return label.startsWith("_");
 }
 
-export type BallKind = "email" | "account" | "project";
+export type BallKind = "email" | "account" | "org" | "resource" | "project";
 
 export interface Ball {
-  /** `email:<id>`, `account:<id>` or `project:<id>`. */
+  /** `<kind>:<id>`, e.g. `account:<id>`. */
   key: string;
   kind: BallKind;
   id: string;
@@ -51,15 +57,18 @@ export interface Ball {
   /** A person with no address: whatever hangs off it is filed under no one. */
   noEmail: boolean;
   attention: boolean;
+  /** The ball an organization or resource hangs under. */
+  parent: string | null;
 }
 
-export type LineKind = "owns" | "uses";
+/** `owns`: email to service. `holds`: service or organization to what is inside it. `uses`: project to what it runs on. */
+export type LineKind = "owns" | "holds" | "uses";
 
 export interface Line {
   key: string;
-  /** For `owns` the email, for `uses` the project. */
+  /** The owner or holder, or for `uses` the project. */
   source: string;
-  /** Always the service account. */
+  /** What is owned, held or used. */
   target: string;
   kind: LineKind;
 }
@@ -81,11 +90,27 @@ export interface CanvasData {
 
 export const ballKey = (kind: BallKind, id: string) => `${kind}:${id}`;
 
+const KINDS: BallKind[] = ["email", "account", "org", "resource", "project"];
+
 export function parseKey(key: string): { kind: BallKind; id: string } | null {
   const at = key.indexOf(":");
-  const kind = key.slice(0, at);
-  if (kind !== "email" && kind !== "account" && kind !== "project") return null;
-  return { kind, id: key.slice(at + 1) };
+  const kind = KINDS.find((k) => k === key.slice(0, at));
+  return kind ? { kind, id: key.slice(at + 1) } : null;
+}
+
+/**
+ * Whether a resource is the one drawing a project–service line made: in no
+ * organization, used by exactly one project and named after it. It is drawn
+ * as that line; every other resource is a ball of its own.
+ */
+export function isImplicit(r: ServiceProjectSummary): boolean {
+  const [only, ...rest] = r.used_by;
+  return (
+    r.service_project.organization_id === null &&
+    only !== undefined &&
+    rest.length === 0 &&
+    only.name.trim().toLowerCase() === r.service_project.name.trim().toLowerCase()
+  );
 }
 
 // --- positions --------------------------------------------------------------------
@@ -149,6 +174,8 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
   const keys = secretsPerAccount(data);
   const balls: Ball[] = [];
   const lines: Line[] = [];
+  const inside: Ball[] = [];
+  const orgs = new Map<string, Ball>();
 
   for (const p of data.people) {
     const { identity } = p;
@@ -162,11 +189,13 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
       primary: identity.id === primary,
       noEmail: !identity.email,
       attention: flagged.has(identity.id),
+      parent: null,
     });
-    for (const { account } of p.accounts) {
+    for (const { account, organizations } of p.accounts) {
       const n = keys.get(account.id) ?? 0;
+      const accountKey = ballKey("account", account.id);
       balls.push({
-        key: ballKey("account", account.id),
+        key: accountKey,
         kind: "account",
         id: account.id,
         label: account.label,
@@ -175,24 +204,68 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
         primary: false,
         noEmail: false,
         attention: flagged.has(account.id),
+        parent: ballKey("email", identity.id),
       });
       lines.push({
         key: `owns:${identity.id}:${account.id}`,
         source: ballKey("email", identity.id),
-        target: ballKey("account", account.id),
+        target: accountKey,
         kind: "owns",
       });
+      for (const { organization, service_projects } of organizations) {
+        const org: Ball = {
+          key: ballKey("org", organization.id),
+          kind: "org",
+          id: organization.id,
+          label: organization.name,
+          sub: service_projects.length > 0 ? plural(service_projects.length, "project") : null,
+          provider: account.provider,
+          primary: false,
+          noEmail: false,
+          attention: flagged.has(organization.id),
+          parent: accountKey,
+        };
+        inside.push(org);
+        orgs.set(organization.id, org);
+        lines.push({ key: `holds:${account.id}:${organization.id}`, source: accountKey, target: org.key, kind: "holds" });
+      }
     }
   }
 
   const accounts = new Set(balls.filter((b) => b.kind === "account").map((b) => b.id));
+  const drawn = new Set<string>();
+  for (const r of data.resources) {
+    const sp = r.service_project;
+    if (!accounts.has(sp.account_id) || isImplicit(r)) continue;
+    const org = sp.organization_id ? orgs.get(sp.organization_id) : undefined;
+    const parent = org?.key ?? ballKey("account", sp.account_id);
+    const key = ballKey("resource", sp.id);
+    inside.push({
+      key,
+      kind: "resource",
+      id: sp.id,
+      label: sp.name,
+      sub: r.secret_count > 0 ? plural(r.secret_count, "key") : sp.region,
+      provider: sp.provider,
+      primary: false,
+      noEmail: false,
+      attention: flagged.has(sp.id),
+      parent,
+    });
+    drawn.add(sp.id);
+    lines.push({ key: `holds:${parseKey(parent)?.id}:${sp.id}`, source: parent, target: key, kind: "holds" });
+  }
+  // Organizations first, so each is placed before what goes inside it.
+  balls.push(...inside.filter((b) => b.kind === "org"), ...inside.filter((b) => b.kind === "resource"));
+
   for (const project of data.projects) {
     const vars = data.secrets.filter((s) => s.entry.secret.project_id === project.id).length;
     const uses = new Set<string>();
     for (const r of data.resources) {
-      if (r.used_by.some((u) => u.id === project.id) && accounts.has(r.service_project.account_id)) {
-        uses.add(r.service_project.account_id);
-      }
+      const sp = r.service_project;
+      if (!r.used_by.some((u) => u.id === project.id)) continue;
+      if (drawn.has(sp.id)) uses.add(ballKey("resource", sp.id));
+      else if (accounts.has(sp.account_id)) uses.add(ballKey("account", sp.account_id));
     }
     balls.push({
       key: ballKey("project", project.id),
@@ -204,12 +277,13 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
       primary: false,
       noEmail: false,
       attention: flagged.has(project.id),
+      parent: null,
     });
-    for (const accountId of uses) {
+    for (const target of uses) {
       lines.push({
-        key: `uses:${project.id}:${accountId}`,
+        key: `uses:${project.id}:${parseKey(target)?.id}`,
         source: ballKey("project", project.id),
-        target: ballKey("account", accountId),
+        target,
         kind: "uses",
       });
     }
@@ -219,17 +293,20 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
 
 // --- where balls go ---------------------------------------------------------------
 
-const COLUMN: Record<BallKind, number> = { email: 0, account: 300, project: 600 };
+const COLUMN: Record<BallKind, number> = { email: 0, account: 300, org: 520, resource: 740, project: 1000 };
 const ROW = 130;
+/** How far to the right of its holder an organization or resource is put. */
+const BESIDE = 220;
 
 /**
  * Every ball's position: where the user left it, or for a ball never moved, a
  * spot in its column -- emails, then services, then projects, left to right --
  * below whatever is already there, so nothing new lands on top of something.
+ * An organization or resource goes beside what holds it instead.
  */
 export function positions(balls: Ball[], saved: Map<string, Point>): Map<string, Point> {
   const out = new Map<string, Point>();
-  const lowest: Record<BallKind, number> = { email: -ROW, account: -ROW, project: -ROW };
+  const lowest: Record<BallKind, number> = { email: -ROW, account: -ROW, org: -ROW, resource: -ROW, project: -ROW };
   for (const b of balls) {
     const p = saved.get(b.key);
     if (!p) continue;
@@ -238,6 +315,11 @@ export function positions(balls: Ball[], saved: Map<string, Point>): Map<string,
   }
   for (const b of balls) {
     if (out.has(b.key)) continue;
+    const holder = (b.kind === "org" || b.kind === "resource") && b.parent ? out.get(b.parent) : undefined;
+    if (holder) {
+      out.set(b.key, besideSpot(holder, out.values()));
+      continue;
+    }
     lowest[b.kind] += ROW;
     // Its column's next row, or the nearest free spot if a ball someone moved
     // already sits there.
@@ -279,40 +361,80 @@ export function nearestEmail(balls: Ball[], at: Map<string, Point>, point: Point
 export type Intent =
   | { kind: "own"; accountId: string; identityId: string }
   | { kind: "use"; accountId: string; projectId: string }
+  | { kind: "link"; resourceId: string; projectId: string }
+  | { kind: "moveOrg"; organizationId: string; accountId: string }
+  | { kind: "place"; resourceId: string; accountId: string; organizationId: string | null }
   | { kind: "none" }
   | { kind: "refuse"; reason: string };
+
+const RANK: Record<BallKind, number> = { email: 0, account: 1, org: 2, resource: 3, project: 4 };
 
 /** What a line drawn between two balls means, whichever end it started from. */
 export function connectIntent(a: Ball, b: Ball, lines: Line[]): Intent {
   if (a.key === b.key) return { kind: "none" };
-  const pair = [a, b].sort((x, y) => x.kind.localeCompare(y.kind));
-  const [first, second] = pair as [Ball, Ball];
+  const [first, second] = [a, b].sort((x, y) => RANK[x.kind] - RANK[y.kind]) as [Ball, Ball];
   const exists = lines.some(
     (l) => (l.source === a.key && l.target === b.key) || (l.source === b.key && l.target === a.key),
   );
   if (exists) return { kind: "none" };
+  const pair = `${first.kind}-${second.kind}`;
+  const otherService = () => ({
+    kind: "refuse" as const,
+    reason: `${second.label} is in another service than ${first.label}; it can only move within the same service.`,
+  });
+  const orgAccount = (org: Ball) => (org.parent ? parseKey(org.parent)?.id : undefined);
 
-  // account < email < project, alphabetically.
-  if (first.kind === "account" && second.kind === "email") {
-    if (second.noEmail) {
-      return { kind: "refuse", reason: "That entry has no email address. Connect the service to an email instead." };
+  switch (pair) {
+    case "email-account":
+      if (first.noEmail) {
+        return { kind: "refuse", reason: "That entry has no email address. Connect the service to an email instead." };
+      }
+      return { kind: "own", accountId: second.id, identityId: first.id };
+    case "email-org":
+    case "email-resource":
+      return {
+        kind: "refuse",
+        reason: `An email owns the service itself. Connect the email to the service ${second.label} is in.`,
+      };
+    case "email-project":
+      return {
+        kind: "refuse",
+        reason: "A project connects to the services it runs on, and each service to its email. Draw project → GitHub, then GitHub → email.",
+      };
+    case "account-org":
+      if (first.provider !== second.provider) return otherService();
+      return { kind: "moveOrg", organizationId: second.id, accountId: first.id };
+    case "account-resource":
+      if (first.provider !== second.provider) return otherService();
+      return { kind: "place", resourceId: second.id, accountId: first.id, organizationId: null };
+    case "account-project":
+      return { kind: "use", accountId: first.id, projectId: second.id };
+    case "org-resource": {
+      const accountId = orgAccount(first);
+      if (first.provider !== second.provider || !accountId) return otherService();
+      return { kind: "place", resourceId: second.id, accountId, organizationId: first.id };
     }
-    return { kind: "own", accountId: first.id, identityId: second.id };
+    case "org-project":
+      return {
+        kind: "refuse",
+        reason: `Connect ${second.label} to a project inside ${first.label}, or add one: drag from ${first.label} to an empty spot.`,
+      };
+    case "resource-project":
+      return { kind: "link", resourceId: first.id, projectId: second.id };
+    case "account-account":
+      return { kind: "refuse", reason: "Two services are not linked to each other. Connect each to its email and to the projects that use it." };
+    default:
+      return { kind: "refuse", reason: `A ${KIND_NOUN[first.kind]} and a ${KIND_NOUN[second.kind]} cannot be connected.` };
   }
-  if (first.kind === "account" && second.kind === "project") {
-    return { kind: "use", accountId: first.id, projectId: second.id };
-  }
-  if (first.kind === "email" && second.kind === "project") {
-    return {
-      kind: "refuse",
-      reason: "A project connects to the services it runs on, and each service to its email. Draw project → GitHub, then GitHub → email.",
-    };
-  }
-  if (first.kind === "account" && second.kind === "account") {
-    return { kind: "refuse", reason: "Two services are not linked to each other. Connect each to its email and to the projects that use it." };
-  }
-  return { kind: "refuse", reason: `Two ${first.kind === "email" ? "emails" : "projects"} cannot be connected.` };
 }
+
+const KIND_NOUN: Record<BallKind, string> = {
+  email: "email",
+  account: "service",
+  org: "organization",
+  resource: "project in a service",
+  project: "project",
+};
 
 /**
  * The resource to link when a project starts using an account: one already
@@ -328,9 +450,8 @@ export function resourceToLink(data: CanvasData, accountId: string, projectName:
 }
 
 /**
- * What removing a project–service line touches: every resource under the
- * account the project uses. A resource that holds nothing and nothing else
- * uses -- the one drawing the line made -- goes; any other is only unlinked.
+ * What removing a project–service line touches: the resources drawn as that
+ * line. One that holds nothing goes; one holding keys is only unlinked.
  */
 export function resourcesToUnlink(
   data: CanvasData,
@@ -338,51 +459,116 @@ export function resourcesToUnlink(
   projectId: string,
 ): { id: string; remove: boolean }[] {
   return data.resources
-    .filter((r) => r.service_project.account_id === accountId && r.used_by.some((u) => u.id === projectId))
+    .filter((r) => r.service_project.account_id === accountId && isImplicit(r) && r.used_by.some((u) => u.id === projectId))
     .map((r) => ({ id: r.service_project.id, remove: r.secret_count === 0 && r.used_by.length === 1 }));
 }
 
 // --- what a ball is connected to --------------------------------------------------
 
 /**
- * A ball and what it is connected to: a project's services and their emails;
- * a service's email and the projects using it; an email's services and the
- * projects using those.
+ * A ball and what it is connected to. For a project: what it runs on and
+ * everything that holds those, up to the email. For anything else: what holds
+ * it, up to the email; everything inside it; and the projects using any of that.
  */
 export function neighbourhood(lines: Line[], key: string): Set<string> {
   const out = new Set([key]);
-  const near = (k: string) =>
-    lines.filter((l) => l.source === k || l.target === k).map((l) => (l.source === k ? l.target : l.source));
-  const kind = parseKey(key)?.kind;
-  for (const service of near(key)) {
-    out.add(service);
-    if (kind === "account") continue;
-    const far = kind === "project" ? "email:" : "project:";
-    for (const k of near(service)) if (k.startsWith(far)) out.add(k);
+  const holder = new Map<string, string>();
+  const held = new Map<string, string[]>();
+  for (const l of lines) {
+    if (l.kind === "uses") continue;
+    holder.set(l.target, l.source);
+    held.set(l.source, [...(held.get(l.source) ?? []), l.target]);
   }
+  const up = (k: string) => {
+    for (let h = holder.get(k); h && !out.has(h); h = holder.get(h)) out.add(h);
+  };
+
+  if (parseKey(key)?.kind === "project") {
+    for (const l of lines) {
+      if (l.kind === "uses" && l.source === key) {
+        out.add(l.target);
+        up(l.target);
+      }
+    }
+    return out;
+  }
+  up(key);
+  const below = new Set([key]);
+  const down = (k: string) => {
+    for (const c of held.get(k) ?? []) {
+      if (below.has(c)) continue;
+      below.add(c);
+      out.add(c);
+      down(c);
+    }
+  };
+  down(key);
+  for (const l of lines) if (l.kind === "uses" && below.has(l.target)) out.add(l.source);
   return out;
 }
 
 /**
- * A project's page draws it on its own: the project on the left, the
- * services it uses beside it, and their emails beyond. Positions here are
- * for that page only and are never saved.
+ * A project's page draws it on its own: the project on the left, what it runs
+ * on beside it, and then whatever holds those -- organizations, services,
+ * emails -- a column each. Positions here are for that page only and are never
+ * saved.
  */
 export function focusLayout(balls: Ball[], lines: Line[], projectKey: string): Map<string, Point> {
   const out = new Map<string, Point>([[projectKey, { x: 0, y: 0 }]]);
-  const column = (keys: string[], x: number) =>
-    keys.forEach((k, i) => out.set(k, { x, y: (i - (keys.length - 1) / 2) * ROW }));
-  const services = lines.filter((l) => l.source === projectKey).map((l) => l.target);
-  column(services, 220);
-  const emails: string[] = [];
-  for (const s of services) {
-    const owner = lines.find((l) => l.kind === "owns" && l.target === s)?.source;
-    if (owner && !emails.includes(owner)) emails.push(owner);
+  const byKey = new Map(balls.map((b) => [b.key, b]));
+  const holder = new Map(lines.filter((l) => l.kind !== "uses").map((l) => [l.target, l.source]));
+  const columns: string[][] = [];
+  const add = (k: string, column: number) => {
+    if (columns.some((c) => c.includes(k))) return;
+    (columns[column] ??= []).push(k);
+  };
+  // What the project runs on, then a column per kind further up the chain.
+  const order: BallKind[] = ["resource", "org", "account", "email"];
+  const targets = lines.filter((l) => l.kind === "uses" && l.source === projectKey).map((l) => l.target);
+  for (const t of targets) add(t, 0);
+  const chain = new Set<string>();
+  for (const t of targets) for (let h = holder.get(t); h; h = holder.get(h)) chain.add(h);
+  const kinds = order.filter((k) => [...chain].some((c) => byKey.get(c)?.kind === k && !targets.includes(c)));
+  for (const c of chain) {
+    const kind = byKey.get(c)?.kind;
+    if (kind) add(c, 1 + kinds.indexOf(kind));
   }
-  column(emails, 440);
+  // What the project runs on is spread evenly; everything further up sits
+  // level with what it holds, so no line has to run through a ball it does
+  // not belong to.
+  const first = columns[0] ?? [];
+  first.forEach((k, j) => out.set(k, { x: 220, y: (j - (first.length - 1) / 2) * ROW }));
+  columns.slice(1).forEach((keys, i) => {
+    const want = (keys ?? []).map((k) => {
+      const held = [...out.entries()].filter(([c]) => holder.get(c) === k).map(([, p]) => p.y);
+      return { k, y: held.length > 0 ? held.reduce((a, b) => a + b, 0) / held.length : 0 };
+    });
+    want.sort((a, b) => a.y - b.y);
+    let last = -Infinity;
+    for (const w of want) {
+      const y = Math.max(w.y, last + 100);
+      out.set(w.k, { x: 220 * (i + 2), y });
+      last = y;
+    }
+  });
   let spare = 0;
   for (const b of balls) if (!out.has(b.key)) out.set(b.key, { x: 0, y: ROW * ++spare });
   return out;
+}
+
+/**
+ * Beside what holds it: to the right, at the same height if that is free,
+ * else the nearest free spot above or below.
+ */
+export function besideSpot(holder: Point, taken: Iterable<Point>, gap = 100): Point {
+  const spots = [...taken];
+  const x = holder.x + BESIDE;
+  for (let i = 0; i < 24; i += 1) {
+    const step = Math.ceil(i / 2) * (i % 2 === 1 ? 1 : -1);
+    const p = { x, y: holder.y + step * gap };
+    if (spots.every((s) => Math.hypot(s.x - p.x, s.y - p.y) >= gap)) return p;
+  }
+  return freeSpot({ x, y: holder.y }, spots);
 }
 
 /** The nearest spot to `at` that is at least `gap` from every taken one. */

@@ -80,7 +80,7 @@ xdotool mousemove --window "$WINDOW" 120 148 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/06-ledger.png"
 # Add the first email from the guide: UI -> IPC -> SQLCipher -> back, and the
 # map redraws with the address as a ball in the middle.
-xdotool mousemove --window "$WINDOW" 427 518 click 1; sleep 1.5
+xdotool mousemove --window "$WINDOW" 427 540 click 1; sleep 1.5
 xdotool type --delay 35 "smoke@example.com"
 xdotool key Return; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/07-ledger-map.png"

@@ -14,11 +14,13 @@ import ProviderIcon from "./ProviderIcon";
 export const KIND_LABEL: Record<BallKind, string> = {
   email: "Email",
   account: "Service",
+  org: "Organization",
+  resource: "Project in a service",
   project: "Project",
 };
 
 /** How big each kind of ball draws: its node is exactly the ball. */
-export const BALL_SIZE: Record<BallKind, number> = { email: 76, account: 60, project: 68 };
+export const BALL_SIZE: Record<BallKind, number> = { email: 76, account: 60, org: 54, resource: 46, project: 68 };
 export const PRIMARY_SIZE = 96;
 
 export function ballSize(ball: Ball): number {
@@ -106,9 +108,13 @@ function RenameInput({ ball, onRename }: { ball: Ball; onRename: BallData["onRen
   );
 }
 
+const initial = (label: string) => label.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "?";
+
 function Glyph({ ball }: { ball: Ball }) {
   if (ball.kind === "account" && ball.provider) return <ProviderIcon provider={ball.provider} name={ball.label} size={26} />;
-  if (ball.kind === "project") return <span className="cv-initial">{ball.label.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "?"}</span>;
+  if (ball.kind === "resource" && ball.provider) return <ProviderIcon provider={ball.provider} name={ball.label} size={18} />;
+  if (ball.kind === "org") return <span className="cv-initial">{initial(ball.label)}</span>;
+  if (ball.kind === "project") return <span className="cv-initial">{initial(ball.label)}</span>;
   if (ball.noEmail) return <span className="cv-initial">?</span>;
   return ball.primary ? <span className="cv-tag">YOU</span> : <span className="cv-initial">@</span>;
 }
@@ -308,8 +314,8 @@ export function Finder({
       <div className="st-palette">
         <input
           autoFocus
-          aria-label="Find an email, service or project"
-          placeholder="Find an email, service or project…"
+          aria-label="Find an email, service, organization or project"
+          placeholder="Find an email, service, organization or project…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -350,12 +356,14 @@ export function Finder({
 
 // --- adding ---------------------------------------------------------------------------
 
-export type AddKind = "email" | "project" | "service" | "api" | "password" | "secret" | "field";
+export type AddKind = "email" | "project" | "service" | "org" | "resource" | "api" | "password" | "secret" | "field";
 
 const ADD_TITLE: Record<AddKind, string> = {
   email: "Add an email",
   project: "Add a project",
   service: "Add a service",
+  org: "Add an organization",
+  resource: "Add a project in the service",
   api: "Add API key",
   password: "Add password",
   secret: "Add secret",
@@ -366,10 +374,20 @@ const ADD_HELP: Record<AddKind, string> = {
   email: "An address you sign up to services with. Services you use hang off it.",
   project: "Something you build, e.g. make-it-real. Draw a line from it to each service it runs on.",
   service: "An account you have with a service: GitHub, Vercel, Claude, your domain host…",
+  org: "A team or organization inside the service, e.g. a Supabase organization or a Vercel team. Its projects go under it.",
+  resource: "A project as the service knows it: a Supabase project, a Vercel project, a GitHub repo. Draw a line from your own project to it.",
   api: "Stored encrypted in your vault; it is never shown here again.",
   password: "Stored encrypted in your vault; it is never shown here again.",
   secret: "Stored encrypted in your vault; it is never shown here again.",
-  field: "Any detail worth keeping: region, customer id, plan…",
+  field: "Any detail worth keeping, with a name you choose: customer number, region, plan…",
+};
+
+const PLACEHOLDER: Partial<Record<AddKind, string>> = {
+  service: "e.g. GitHub, Vercel, Claude",
+  project: "e.g. make-it-real",
+  org: "e.g. acme's Org",
+  resource: "e.g. make-it-real",
+  field: "e.g. Customer number",
 };
 
 const DEFAULT_NAME: Partial<Record<AddKind, string>> = { api: "API key", password: "Password", secret: "Secret" };
@@ -389,12 +407,15 @@ export interface AddValues {
  */
 export function AddDialog({
   kind,
+  title,
   under,
   initialName = "",
   onCancel,
   onSubmit,
 }: {
   kind: AddKind;
+  /** In place of the kind's own title, e.g. "Add a Supabase project". */
+  title?: string;
   /** What it is added to, when that is worth saying. */
   under: string | null;
   initialName?: string;
@@ -427,6 +448,8 @@ export function AddDialog({
     email: "Email address",
     project: "Project name",
     service: "Service",
+    org: "Organization name",
+    resource: "Project name",
     api: "Name",
     password: "Name",
     secret: "Name",
@@ -434,17 +457,22 @@ export function AddDialog({
   };
 
   let extra: ReactNode = null;
-  if (kind === "email") {
+  if (kind === "email" || kind === "resource") {
     extra = (
       <div className="field">
-        <label htmlFor="cv-add-label">Your name (optional)</label>
-        <input id="cv-add-label" value={label} onChange={(e) => setLabel(e.target.value)} />
+        <label htmlFor="cv-add-label">{kind === "email" ? "Your name (optional)" : "Region (optional)"}</label>
+        <input
+          id="cv-add-label"
+          placeholder={kind === "resource" ? "e.g. eu-west-1" : undefined}
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
       </div>
     );
   }
 
   return (
-    <Modal label={ADD_TITLE[kind]} onClose={onCancel} maxWidth={460}>
+    <Modal label={title ?? ADD_TITLE[kind]} onClose={onCancel} maxWidth={460}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -452,7 +480,7 @@ export function AddDialog({
         }}
       >
         <header>
-          <h2>{ADD_TITLE[kind]}</h2>
+          <h2>{title ?? ADD_TITLE[kind]}</h2>
           <p>
             {under && (
               <>
@@ -476,7 +504,7 @@ export function AddDialog({
               type={kind === "email" ? "email" : "text"}
               list={kind === "service" ? "cv-services" : undefined}
               placeholder={
-                kind === "service" ? "e.g. GitHub, Vercel, Claude" : kind === "project" ? "e.g. make-it-real" : undefined
+                PLACEHOLDER[kind]
               }
               value={name}
               onChange={(e) => setName(e.target.value)}
