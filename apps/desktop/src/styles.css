@@ -1428,6 +1428,11 @@ select option { background: var(--panel); color: var(--text); }
 .cv-email.pulse .cv-orb { border-color: #EF4444; color: #F87171; background: #1A0D0D; animation: st-pulse 1.8s ease-in-out infinite; border-radius: 50%; }
 .cv-account .cv-orb { background: radial-gradient(circle at 35% 30%, #1E1E1E, #101010); border-color: #3A3A3A; }
 .cv-account.attention .cv-orb { border-color: #F59E0B; }
+/* inside a service: an organization, and the projects the service runs */
+.cv-org .cv-orb { background: radial-gradient(circle at 35% 30%, #1F1A2E, #110E1A); border-color: #6D5BD0; color: #C4B5FD; }
+.cv-org .cv-initial { font-size: 18px; }
+.cv-resource .cv-orb { background: radial-gradient(circle at 35% 30%, #18201C, #0E1311); border: 2px dashed #3F6B55; }
+.cv-org.attention .cv-orb, .cv-resource.attention .cv-orb { border-color: #F59E0B; }
 .cv-project .cv-orb {
   background: radial-gradient(circle at 35% 30%, hsl(var(--hue) 70% 58%), hsl(var(--hue) 65% 36%));
   border: 2px solid hsl(var(--hue) 70% 66%); color: #FFFFFF;
@@ -1461,6 +1466,7 @@ select option { background: var(--panel); color: var(--text); }
 /* lines */
 .ledger-canvas .react-flow__edge-path.cv-line { stroke: #34363A; stroke-width: 2; transition: stroke 120ms ease, opacity 120ms ease; }
 .ledger-canvas .react-flow__edge-path.cv-line.uses { stroke: #4A3A28; stroke-width: 2.5; }
+.ledger-canvas .react-flow__edge-path.cv-line.holds { stroke: #2C2F36; stroke-dasharray: 5 5; }
 .ledger-canvas .react-flow__edge-path.cv-line.lit { stroke: #FF8C00; stroke-width: 3; }
 .ledger-canvas .react-flow__edge-path.cv-line.selected { stroke: #FFD39A; stroke-width: 3; }
 .ledger-canvas .react-flow__edge-path.cv-line.dim { opacity: 0.2; }
@@ -1530,6 +1536,18 @@ select option { background: var(--panel); color: var(--text); }
 }
 .st-kind.k-email { color: #FF8C00; }
 .st-kind.k-account { color: #E5E5E5; }
+.st-kind.k-org { color: #C4B5FD; }
+.st-kind.k-resource { color: #86EFAC; }
+/* the projects in a service or organization, as cards */
+.cv-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cv-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+  padding: 10px; border-radius: 8px; background: #141414; border: 1px solid #262626; min-width: 0; cursor: pointer;
+}
+.cv-card:hover { border-color: #FF8C00; }
+.cv-card strong { font-size: 12.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-card small { font-size: 11px; color: #9CA3AF; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-card small.used { color: #86EFAC; }
 
 /* --- Projects, deploy-dashboard style ------------------------------------------ */
 

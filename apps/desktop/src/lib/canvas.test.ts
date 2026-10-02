@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { IDS, canvasVault, resource } from "../test/canvas-fixtures";
 import {
+  besideSpot,
   buildCanvas,
   focusLayout,
   freeSpot,
@@ -32,6 +33,8 @@ function ball(balls: Ball[], key: string): Ball {
 const email = (id: string) => `email:${id}`;
 const account = (id: string) => `account:${id}`;
 const project = (id: string) => `project:${id}`;
+const org = (id: string) => `org:${id}`;
+const res = (id: string) => `resource:${id}`;
 
 describe("balls", () => {
   it("draws every email, service and project as a ball", () => {
@@ -44,6 +47,8 @@ describe("balls", () => {
       "account:Stripe",
       "account:Supabase",
       "email:work@example.com",
+      "org:acme's Org",
+      "resource:shop-db",
       "project:shop",
       "project:blog",
     ]);
@@ -74,10 +79,31 @@ describe("lines", () => {
     expect(owns).toHaveLength(4);
   });
 
-  it("joins a project to the services it uses through a resource", () => {
+  it("joins a project to what it runs on: a project inside a service, or the service itself", () => {
     const { lines } = canvas();
     const uses = lines.filter((l) => l.kind === "uses").map((l) => `${l.source}>${l.target}`);
-    expect(uses).toEqual([`${project(IDS.project)}>${account(IDS.supabase)}`]);
+    expect(uses).toEqual([`${project(IDS.project)}>${res(IDS.resource)}`, `${project(IDS.project)}>${account(IDS.stripe)}`]);
+  });
+
+  it("hangs an organization under its service, and its projects under it", () => {
+    const { balls, lines } = canvas();
+    const holds = lines.filter((l) => l.kind === "holds").map((l) => `${l.source}>${l.target}`);
+    expect(holds).toEqual([`${account(IDS.supabase)}>${org(IDS.org)}`, `${org(IDS.org)}>${res(IDS.resource)}`]);
+    expect(ball(balls, org(IDS.org))).toMatchObject({ sub: "1 project", provider: "supabase", parent: account(IDS.supabase) });
+    expect(ball(balls, res(IDS.resource))).toMatchObject({ parent: org(IDS.org) });
+  });
+
+  it("draws a project in no organization straight under its service", () => {
+    const data = canvasVault();
+    data.resources.push(resource("r-free", IDS.supabase, "scratch", []));
+    const { balls, lines } = buildCanvas(data);
+    expect(ball(balls, res("r-free")).parent).toBe(account(IDS.supabase));
+    expect(lines.some((l) => l.source === account(IDS.supabase) && l.target === res("r-free"))).toBe(true);
+  });
+
+  it("draws the resource a project–service line made as that line, not as a ball", () => {
+    const { balls } = canvas();
+    expect(balls.some((b) => b.key === res(IDS.stripeShop))).toBe(false);
   });
 });
 
@@ -120,13 +146,46 @@ describe("drawing a line", () => {
     expect(resourceToLink(data, IDS.stripe, "blog")).toBeNull();
   });
 
-  it("removes only the empty resource a line made, and unlinks any other", () => {
+  it("removes only the empty resource a line made, and unlinks one holding keys", () => {
     const data = canvasVault();
-    expect(resourcesToUnlink(data, IDS.supabase, IDS.project)).toEqual([{ id: IDS.resource, remove: true }]);
-    const first = data.resources[0];
-    if (!first) throw new Error("fixture");
-    first.secret_count = 2;
-    expect(resourcesToUnlink(data, IDS.supabase, IDS.project)).toEqual([{ id: IDS.resource, remove: false }]);
+    expect(resourcesToUnlink(data, IDS.stripe, IDS.project)).toEqual([{ id: IDS.stripeShop, remove: true }]);
+    const made = data.resources[1];
+    if (!made) throw new Error("fixture");
+    made.secret_count = 2;
+    expect(resourcesToUnlink(data, IDS.stripe, IDS.project)).toEqual([{ id: IDS.stripeShop, remove: false }]);
+    // A project inside a service has a line of its own; this one never touches it.
+    expect(resourcesToUnlink(data, IDS.supabase, IDS.project)).toEqual([]);
+  });
+
+  it("puts a project into an organization, or moves an organization, within one service only", () => {
+    const data = canvasVault();
+    data.resources.push(resource("r-free", IDS.supabase, "scratch", []));
+    const { balls, lines } = buildCanvas(data);
+    const acme = ball(balls, org(IDS.org));
+    expect(connectIntent(ball(balls, res("r-free")), acme, lines)).toEqual({
+      kind: "place",
+      resourceId: "r-free",
+      accountId: IDS.supabase,
+      organizationId: IDS.org,
+    });
+    expect(connectIntent(ball(balls, res(IDS.resource)), ball(balls, account(IDS.supabase)), lines)).toEqual({
+      kind: "place",
+      resourceId: IDS.resource,
+      accountId: IDS.supabase,
+      organizationId: null,
+    });
+    expect(connectIntent(acme, ball(balls, account(IDS.github)), lines).kind).toBe("refuse");
+  });
+
+  it("lets a project run on a project inside a service, and explains the lines that cannot be", () => {
+    const { balls, lines } = canvas();
+    expect(connectIntent(ball(balls, project(IDS.blog)), ball(balls, res(IDS.resource)), lines)).toEqual({
+      kind: "link",
+      resourceId: IDS.resource,
+      projectId: IDS.blog,
+    });
+    expect(connectIntent(ball(balls, project(IDS.blog)), ball(balls, org(IDS.org)), lines).kind).toBe("refuse");
+    expect(connectIntent(ball(balls, email(IDS.me)), ball(balls, org(IDS.org)), lines).kind).toBe("refuse");
   });
 });
 
@@ -144,7 +203,15 @@ describe("positions", () => {
     const xs = (kind: string) => new Set(balls.filter((b) => b.kind === kind && b.id !== IDS.github).map((b) => at.get(b.key)?.x));
     expect([...xs("email")]).toEqual([0]);
     expect([...xs("account")]).toEqual([300]);
-    expect([...xs("project")]).toEqual([600]);
+    expect([...xs("project")]).toEqual([1000]);
+  });
+
+  it("puts an organization beside its service, and a project in it beside that", () => {
+    const { data, balls } = canvas();
+    const at = positions(balls, savedPositions(data, balls));
+    const supabase = at.get(account(IDS.supabase));
+    expect(at.get(org(IDS.org))).toEqual({ x: (supabase?.x ?? 0) + 220, y: supabase?.y });
+    expect(at.get(res(IDS.resource))).toEqual({ x: (supabase?.x ?? 0) + 440, y: supabase?.y });
   });
 
   it("never stacks two new balls on one spot, or on a moved one", () => {
@@ -185,17 +252,24 @@ describe("positions", () => {
 });
 
 describe("what a ball is connected to", () => {
-  it("shows a project's services and their emails, and nothing else", () => {
+  it("shows what a project runs on and everything that holds it, and nothing else", () => {
     const { lines } = canvas();
     expect([...neighbourhood(lines, project(IDS.project))].sort()).toEqual(
-      [project(IDS.project), account(IDS.supabase), email(IDS.me)].sort(),
+      [project(IDS.project), res(IDS.resource), org(IDS.org), account(IDS.supabase), account(IDS.stripe), email(IDS.me)].sort(),
     );
   });
 
-  it("shows a service's email and the projects using it", () => {
+  it("shows a service's email, what is inside it and the projects using any of it", () => {
     const { lines } = canvas();
     expect([...neighbourhood(lines, account(IDS.supabase))].sort()).toEqual(
-      [account(IDS.supabase), email(IDS.me), project(IDS.project)].sort(),
+      [account(IDS.supabase), email(IDS.me), org(IDS.org), res(IDS.resource), project(IDS.project)].sort(),
+    );
+  });
+
+  it("shows an organization's service, email, projects, and who uses them", () => {
+    const { lines } = canvas();
+    expect([...neighbourhood(lines, org(IDS.org))].sort()).toEqual(
+      [org(IDS.org), account(IDS.supabase), email(IDS.me), res(IDS.resource), project(IDS.project)].sort(),
     );
   });
 
@@ -209,12 +283,16 @@ describe("what a ball is connected to", () => {
 });
 
 describe("a project's own page", () => {
-  it("puts the project first, its services beside it and their emails beyond", () => {
+  it("puts the project first, what it runs on beside it, and a column for each kind that holds those", () => {
     const { balls, lines } = canvas();
     const at = focusLayout(balls, lines, project(IDS.project));
     expect(at.get(project(IDS.project))).toEqual({ x: 0, y: 0 });
-    expect(at.get(account(IDS.supabase))).toEqual({ x: 220, y: 0 });
-    expect(at.get(email(IDS.me))).toEqual({ x: 440, y: 0 });
+    expect(at.get(res(IDS.resource))).toEqual({ x: 220, y: -65 });
+    expect(at.get(account(IDS.stripe))).toEqual({ x: 220, y: 65 });
+    // Each holder sits level with what it holds; the email between its two services.
+    expect(at.get(org(IDS.org))).toEqual({ x: 440, y: -65 });
+    expect(at.get(account(IDS.supabase))).toEqual({ x: 660, y: -65 });
+    expect(at.get(email(IDS.me))).toEqual({ x: 880, y: 0 });
   });
 });
 
@@ -223,5 +301,11 @@ describe("placing something new", () => {
     expect(freeSpot({ x: 0, y: 0 }, [{ x: 500, y: 0 }])).toEqual({ x: 0, y: 0 });
     const p = freeSpot({ x: 0, y: 0 }, [{ x: 0, y: 0 }]);
     expect(Math.hypot(p.x, p.y)).toBeGreaterThanOrEqual(110);
+  });
+
+  it("puts a new thing beside what holds it, stepping up or down past what is there", () => {
+    expect(besideSpot({ x: 0, y: 0 }, [])).toEqual({ x: 220, y: 0 });
+    expect(besideSpot({ x: 0, y: 0 }, [{ x: 220, y: 0 }])).toEqual({ x: 220, y: 100 });
+    expect(besideSpot({ x: 0, y: 0 }, [{ x: 220, y: 0 }, { x: 220, y: 100 }])).toEqual({ x: 220, y: -100 });
   });
 });

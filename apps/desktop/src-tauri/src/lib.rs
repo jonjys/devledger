@@ -504,6 +504,16 @@ fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()>
     state.with(|vault| vault.delete_account(account_id))
 }
 
+/// Rename an organization.
+#[tauri::command]
+fn rename_organization(
+    state: State<'_, AppState>,
+    organization_id: Uuid,
+    name: String,
+) -> IpcResult<()> {
+    state.with(|vault| vault.rename_organization(organization_id, &name))
+}
+
 /// Delete an organization. Its resources survive, unassigned.
 #[tauri::command]
 fn delete_organization(state: State<'_, AppState>, organization_id: Uuid) -> IpcResult<()> {
@@ -980,6 +990,7 @@ pub fn run() {
             move_service_project,
             delete_account,
             delete_organization,
+            rename_organization,
             delete_service_project,
             delete_subscription,
             relations_for,

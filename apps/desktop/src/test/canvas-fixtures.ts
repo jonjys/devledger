@@ -95,7 +95,7 @@ export function secret(
 
 export function field(
   id: string,
-  entity: { kind: "identity" | "account" | "project"; id: string },
+  entity: { kind: "identity" | "account" | "organization" | "service_project" | "project"; id: string },
   label: string,
   value: string,
 ): CustomField {
@@ -107,13 +107,14 @@ export function resource(
   accountId: string,
   name: string,
   usedBy: { id: string; name: string }[],
+  opts: { organizationId?: string; provider?: Provider } = {},
 ): ServiceProjectSummary {
   return {
     service_project: {
       id,
       account_id: accountId,
-      organization_id: null,
-      provider: "supabase",
+      organization_id: opts.organizationId ?? null,
+      provider: opts.provider ?? "supabase",
       provider_ref: null,
       name,
       region: null,
@@ -144,19 +145,36 @@ export const IDS = {
   project: uuid("9a000001"),
   blog: uuid("9a000002"),
   resource: uuid("5b000001"),
+  stripeShop: uuid("5b000002"),
+  org: uuid("0a000001"),
   primaryField: uuid("cf000001"),
   githubPos: uuid("cf000002"),
 };
 
 /**
- * Two people with an email and one without. "shop" uses Supabase through a
- * resource; "blog" uses nothing yet. GitHub has been moved by hand.
+ * Two people with an email and one without. Supabase holds an organization,
+ * "acme's Org", with one project in it, "shop-db", which "shop" runs on. "shop"
+ * also uses Stripe, through the resource drawing that line made. "blog" uses
+ * nothing yet. GitHub has been moved by hand.
  */
 export function canvasVault(opts: { pinned?: boolean } = {}): CanvasData {
+  const shopDb = resource(IDS.resource, IDS.supabase, "shop-db", [{ id: IDS.project, name: "shop" }], {
+    organizationId: IDS.org,
+  });
+  const stripeShop = resource(IDS.stripeShop, IDS.stripe, "shop", [{ id: IDS.project, name: "shop" }], {
+    provider: "stripe",
+  });
+  const supabase = accountNode(IDS.supabase, IDS.me, "supabase", "Supabase");
+  supabase.organizations = [
+    {
+      organization: { id: IDS.org, account_id: IDS.supabase, provider_org_id: null, name: "acme's Org", created_at: AT },
+      service_projects: [shopDb],
+    },
+  ];
   const me = person(IDS.me, "primary@example.com", "Primary Person", [
     accountNode(IDS.github, IDS.me, "github", "GitHub", { username: "octo-example" }),
     accountNode(IDS.stripe, IDS.me, "stripe", "Stripe"),
-    accountNode(IDS.supabase, IDS.me, "supabase", "Supabase"),
+    supabase,
   ]);
   const work = person(IDS.work, "work@example.com", "work@example.com", []);
   const other = person(IDS.other, null, "Unidentified", [
@@ -178,7 +196,7 @@ export function canvasVault(opts: { pinned?: boolean } = {}): CanvasData {
     ],
     fields,
     attention: [],
-    resources: [resource(IDS.resource, IDS.supabase, "shop-db", [{ id: IDS.project, name: "shop" }])],
+    resources: [shopDb, stripeShop],
     projects: [
       { id: IDS.project, name: "shop" },
       { id: IDS.blog, name: "blog" },
