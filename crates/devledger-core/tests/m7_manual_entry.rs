@@ -1193,3 +1193,57 @@ fn a_resource_written_down_by_hand_is_not_flagged_for_being_unused() {
         .expect("secret");
     assert!(unused(&vault));
 }
+
+#[test]
+fn a_person_can_work_on_a_project_without_becoming_its_parent() {
+    let (_dir, vault) = common::unlocked_vault();
+    let (me, github) = person(&vault, "dev-a@example.com", "github", "GitHub");
+    let project = vault.create_project("make-it-real", None).expect("project");
+
+    vault.link_identity_project(me, project.id).expect("link");
+    // Drawing the same line twice records it once.
+    vault.link_identity_project(me, project.id).expect("again");
+    assert_eq!(
+        vault.identity_project_links().expect("links"),
+        [(me, project.id)]
+    );
+    // Nothing moved: the account is still the person's, the project has no services.
+    assert_eq!(
+        vault
+            .account(github)
+            .expect("lookup")
+            .expect("account")
+            .identity_id,
+        me
+    );
+
+    vault
+        .unlink_identity_project(me, project.id)
+        .expect("unlink");
+    assert!(vault.identity_project_links().expect("links").is_empty());
+
+    assert!(matches!(
+        vault.link_identity_project(me, uuid::Uuid::new_v4()),
+        Err(CoreError::NotFound(_))
+    ));
+}
+
+#[test]
+fn deleting_either_end_removes_the_line_between_a_person_and_a_project() {
+    let (_dir, vault) = common::unlocked_vault();
+    let (me, _) = person(&vault, "dev-a@example.com", "github", "GitHub");
+    let (other, _) = person(&vault, "dev-b@example.com", "vercel", "Vercel");
+    let shop = vault.create_project("shop", None).expect("project");
+    let blog = vault.create_project("blog", None).expect("project");
+    vault.link_identity_project(me, shop.id).expect("link");
+    vault.link_identity_project(other, blog.id).expect("link");
+
+    vault.delete_project(shop.id).expect("delete project");
+    assert_eq!(
+        vault.identity_project_links().expect("links"),
+        [(other, blog.id)]
+    );
+
+    vault.delete_identity(other).expect("delete identity");
+    assert!(vault.identity_project_links().expect("links").is_empty());
+}

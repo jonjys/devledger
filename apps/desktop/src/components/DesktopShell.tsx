@@ -8,8 +8,6 @@ import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/typ
 
 import AttentionView from "./AttentionView";
 import ConnectionsView from "./ConnectionsView";
-import MapView from "./MapView";
-import StackGraphView from "./StackGraphView";
 import OverviewView from "./OverviewView";
 import AddAnythingDialog, { type WordKind } from "./AddAnythingDialog";
 import LedgerView from "./LedgerView";
@@ -23,8 +21,6 @@ type View =
   | "overview"
   | "ledger"
   | "projects"
-  | "identities"
-  | "stack"
   | "connections"
   | "subscriptions"
   | "secrets"
@@ -48,8 +44,6 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { id: "projects", label: "Projects", icon: "projects" },
       { id: "ledger", label: "Ledger", icon: "ledger" },
       { id: "overview", label: "Overview", icon: "overview" },
-      { id: "identities", label: "Identities", icon: "identities" },
-      { id: "stack", label: "Stack", icon: "stack" },
       { id: "connections", label: "Connections", icon: "connections" },
     ],
   },
@@ -101,24 +95,6 @@ function Icon({ name }: { name: IconName }) {
       return (
         <svg {...common}>
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-        </svg>
-      );
-    case "identities":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="8" r="3.2" />
-          <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
-        </svg>
-      );
-    case "stack":
-      return (
-        <svg {...common}>
-          <circle cx="6" cy="6" r="2" />
-          <circle cx="18" cy="7" r="2" />
-          <circle cx="12" cy="18" r="2" />
-          <path d="M8 7.2 16.2 7.8" />
-          <path d="M7.2 8 11 16.2" />
-          <path d="M16.8 9 13 16.2" />
         </svg>
       );
     case "connections":
@@ -403,19 +379,6 @@ function DesktopShellInner({ onLock }: Props) {
                 setView("projects");
               }}
             />
-          )}
-
-          {view === "identities" && (
-            <div className="dash">
-              <div className="dash-head">
-                <h1>Identities</h1>
-              </div>
-              <MapView projects={projects} onNotify={notify} onChanged={refresh} />
-            </div>
-          )}
-
-          {view === "stack" && (
-            <StackGraphView projects={projects} onNotify={notify} onChanged={refresh} />
           )}
 
           {view === "connections" && (

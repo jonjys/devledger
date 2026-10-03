@@ -276,6 +276,16 @@ export const moveServiceProject = (
 export const deleteAccount = (accountId: string) =>
   call<void>("delete_account", { accountId });
 
+/** Record that a person works on a project: a line beside its services, never above them. */
+export const linkIdentityProject = (identityId: string, projectId: string) =>
+  call<void>("link_identity_project", { identityId, projectId });
+
+export const unlinkIdentityProject = (identityId: string, projectId: string) =>
+  call<void>("unlink_identity_project", { identityId, projectId });
+
+/** Every person–project pair, as [identityId, projectId]. */
+export const identityProjectLinks = () => call<[string, string][]>("identity_project_links");
+
 /** Rename an organization. */
 export const renameOrganization = (organizationId: string, name: string) =>
   call<void>("rename_organization", { organizationId, name });

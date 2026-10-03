@@ -558,6 +558,11 @@ pub enum RelationKind {
     Bills,
     /// Two entities are believed to be the same thing.
     SameAs,
+    /// A person works on a DevLedger project.
+    ///
+    /// Beside the accounts a project runs on, never above them: the email is
+    /// not the project's parent, it is one of the people behind it.
+    WorksOn,
 }
 
 impl RelationKind {
@@ -571,6 +576,7 @@ impl RelationKind {
             RelationKind::AuthenticatesTo => "authenticates to",
             RelationKind::Bills => "bills",
             RelationKind::SameAs => "is the same as",
+            RelationKind::WorksOn => "works on",
         }
     }
 }

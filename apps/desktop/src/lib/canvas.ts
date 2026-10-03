@@ -10,6 +10,8 @@
 //                             a Vercel project, a repo); straight from the
 //                             service when it is in no organization
 //   project ── resource       your project runs on it
+//   email ── project          the person works on it -- beside its services,
+//                             never above them
 //   project ── service        the same, through a resource drawing that line
 //                             made: named after the project and nothing more,
 //                             so it is drawn as the line rather than a ball
@@ -61,8 +63,12 @@ export interface Ball {
   parent: string | null;
 }
 
-/** `owns`: email to service. `holds`: service or organization to what is inside it. `uses`: project to what it runs on. */
-export type LineKind = "owns" | "holds" | "uses";
+/**
+ * `owns`: email to service. `holds`: service or organization to what is inside
+ * it. `uses`: project to what it runs on. `works`: email to a project the
+ * person works on.
+ */
+export type LineKind = "owns" | "holds" | "uses" | "works";
 
 export interface Line {
   key: string;
@@ -86,6 +92,8 @@ export interface CanvasData {
   attention: AttentionItem[];
   /** Custom fields per ball key, hidden ones included. */
   fields: Map<string, CustomField[]>;
+  /** Who works on what, as [identityId, projectId]. */
+  worksOn: [string, string][];
 }
 
 export const ballKey = (kind: BallKind, id: string) => `${kind}:${id}`;
@@ -288,6 +296,17 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
       });
     }
   }
+  const people = new Set(data.people.map((p) => p.identity.id));
+  const projects = new Set(data.projects.map((p) => p.id));
+  for (const [identityId, projectId] of data.worksOn) {
+    if (!people.has(identityId) || !projects.has(projectId)) continue;
+    lines.push({
+      key: `works:${identityId}:${projectId}`,
+      source: ballKey("email", identityId),
+      target: ballKey("project", projectId),
+      kind: "works",
+    });
+  }
   return { balls, lines };
 }
 
@@ -362,6 +381,7 @@ export type Intent =
   | { kind: "own"; accountId: string; identityId: string }
   | { kind: "use"; accountId: string; projectId: string }
   | { kind: "link"; resourceId: string; projectId: string }
+  | { kind: "work"; identityId: string; projectId: string }
   | { kind: "moveOrg"; organizationId: string; accountId: string }
   | { kind: "place"; resourceId: string; accountId: string; organizationId: string | null }
   | { kind: "none" }
@@ -397,10 +417,7 @@ export function connectIntent(a: Ball, b: Ball, lines: Line[]): Intent {
         reason: `An email owns the service itself. Connect the email to the service ${second.label} is in.`,
       };
     case "email-project":
-      return {
-        kind: "refuse",
-        reason: "A project connects to the services it runs on, and each service to its email. Draw project → GitHub, then GitHub → email.",
-      };
+      return { kind: "work", identityId: first.id, projectId: second.id };
     case "account-org":
       if (first.provider !== second.provider) return otherService();
       return { kind: "moveOrg", organizationId: second.id, accountId: first.id };
@@ -475,7 +492,7 @@ export function neighbourhood(lines: Line[], key: string): Set<string> {
   const holder = new Map<string, string>();
   const held = new Map<string, string[]>();
   for (const l of lines) {
-    if (l.kind === "uses") continue;
+    if (l.kind === "uses" || l.kind === "works") continue;
     holder.set(l.target, l.source);
     held.set(l.source, [...(held.get(l.source) ?? []), l.target]);
   }
@@ -489,6 +506,7 @@ export function neighbourhood(lines: Line[], key: string): Set<string> {
         out.add(l.target);
         up(l.target);
       }
+      if (l.kind === "works" && l.target === key) out.add(l.source);
     }
     return out;
   }
@@ -503,7 +521,10 @@ export function neighbourhood(lines: Line[], key: string): Set<string> {
     }
   };
   down(key);
-  for (const l of lines) if (l.kind === "uses" && below.has(l.target)) out.add(l.source);
+  for (const l of lines) {
+    if (l.kind === "uses" && below.has(l.target)) out.add(l.source);
+    if (l.kind === "works" && l.source === key) out.add(l.target);
+  }
   return out;
 }
 
@@ -516,7 +537,7 @@ export function neighbourhood(lines: Line[], key: string): Set<string> {
 export function focusLayout(balls: Ball[], lines: Line[], projectKey: string): Map<string, Point> {
   const out = new Map<string, Point>([[projectKey, { x: 0, y: 0 }]]);
   const byKey = new Map(balls.map((b) => [b.key, b]));
-  const holder = new Map(lines.filter((l) => l.kind !== "uses").map((l) => [l.target, l.source]));
+  const holder = new Map(lines.filter((l) => l.kind === "owns" || l.kind === "holds").map((l) => [l.target, l.source]));
   const columns: string[][] = [];
   const add = (k: string, column: number) => {
     if (columns.some((c) => c.includes(k))) return;
@@ -528,6 +549,8 @@ export function focusLayout(balls: Ball[], lines: Line[], projectKey: string): M
   for (const t of targets) add(t, 0);
   const chain = new Set<string>();
   for (const t of targets) for (let h = holder.get(t); h; h = holder.get(h)) chain.add(h);
+  // The people who work on it sit with the emails.
+  for (const l of lines) if (l.kind === "works" && l.target === projectKey) chain.add(l.source);
   const kinds = order.filter((k) => [...chain].some((c) => byKey.get(c)?.kind === k && !targets.includes(c)));
   for (const c of chain) {
     const kind = byKey.get(c)?.kind;

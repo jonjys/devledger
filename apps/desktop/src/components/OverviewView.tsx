@@ -149,7 +149,7 @@ export default function OverviewView({
           <div className="stat-num">{projects.length}</div>
           <div className="stat-label">Projects</div>
         </button>
-        <button type="button" className="stat" onClick={() => onNavigate("identities")}>
+        <button type="button" className="stat" onClick={() => onNavigate("ledger")}>
           <div className="stat-num">{identities.length}</div>
           <div className="stat-label">Identities</div>
         </button>

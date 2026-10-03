@@ -121,7 +121,8 @@ export type RelationKind =
   | "used_by"
   | "authenticates_to"
   | "bills"
-  | "same_as";
+  | "same_as"
+  | "works_on";
 
 export const RELATION_VERB: Record<RelationKind, string> = {
   owns: "owns",
@@ -131,6 +132,7 @@ export const RELATION_VERB: Record<RelationKind, string> = {
   authenticates_to: "authenticates to",
   bills: "bills",
   same_as: "is the same as",
+  works_on: "works on",
 };
 
 /** Where a node sits in the Identity → … → Project chain. */

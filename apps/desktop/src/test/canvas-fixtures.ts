@@ -196,6 +196,7 @@ export function canvasVault(opts: { pinned?: boolean } = {}): CanvasData {
     ],
     fields,
     attention: [],
+    worksOn: [],
     resources: [shopDb, stripeShop],
     projects: [
       { id: IDS.project, name: "shop" },

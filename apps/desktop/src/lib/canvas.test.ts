@@ -130,10 +130,16 @@ describe("drawing a line", () => {
     expect(connectIntent(ball(balls, email(IDS.me)), ball(balls, account(IDS.github)), lines)).toEqual({ kind: "none" });
   });
 
+  it("lets a person work on a project, whichever end the line started from", () => {
+    const { balls, lines } = canvas();
+    const want = { kind: "work", identityId: IDS.work, projectId: IDS.blog };
+    expect(connectIntent(ball(balls, project(IDS.blog)), ball(balls, email(IDS.work)), lines)).toEqual(want);
+    expect(connectIntent(ball(balls, email(IDS.work)), ball(balls, project(IDS.blog)), lines)).toEqual(want);
+  });
+
   it("explains the lines that mean nothing", () => {
     const { balls, lines } = canvas();
     const refuse = (a: string, b: string) => connectIntent(ball(balls, a), ball(balls, b), lines).kind;
-    expect(refuse(project(IDS.blog), email(IDS.me))).toBe("refuse");
     expect(refuse(account(IDS.github), account(IDS.stripe))).toBe("refuse");
     expect(refuse(email(IDS.me), email(IDS.work))).toBe("refuse");
     expect(refuse(account(IDS.github), email(IDS.other))).toBe("refuse");
@@ -248,6 +254,35 @@ describe("positions", () => {
     expect(nearestEmail(balls, at, { x: 200, y: 350 })?.id).toBe(IDS.work);
     expect(nearestEmail(balls, at, { x: 200, y: 50 })?.id).toBe(IDS.me);
     expect(nearestEmail([], at, { x: 0, y: 0 })).toBeNull();
+  });
+});
+
+describe("a person working on a project", () => {
+  const withWork = () => {
+    const data = canvasVault();
+    data.worksOn = [[IDS.work, IDS.project], [IDS.work, "gone"]];
+    return { data, ...buildCanvas(data) };
+  };
+
+  it("is a line from the email to the project, and nothing moves under the email", () => {
+    const { balls, lines } = withWork();
+    expect(lines.filter((l) => l.kind === "works").map((l) => `${l.source}>${l.target}`)).toEqual([
+      `${email(IDS.work)}>${project(IDS.project)}`,
+    ]);
+    expect(ball(balls, project(IDS.project)).parent).toBeNull();
+  });
+
+  it("shows the person with the project, and the project with the person, but not the person's other ties", () => {
+    const { lines } = withWork();
+    expect(neighbourhood(lines, project(IDS.project)).has(email(IDS.work))).toBe(true);
+    expect([...neighbourhood(lines, email(IDS.work))].sort()).toEqual([email(IDS.work), project(IDS.project)].sort());
+  });
+
+  it("puts the person with the emails on the project's page", () => {
+    const { balls, lines } = withWork();
+    const at = focusLayout(balls, lines, project(IDS.project));
+    expect(at.get(email(IDS.work))?.x).toBe(at.get(email(IDS.me))?.x);
+    expect(at.get(email(IDS.work))?.y).not.toBe(at.get(email(IDS.me))?.y);
   });
 });
 
