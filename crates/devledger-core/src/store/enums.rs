@@ -93,6 +93,7 @@ str_enum!(
     RelationKind::AuthenticatesTo => "authenticates_to",
     RelationKind::Bills => "bills",
     RelationKind::SameAs => "same_as",
+    RelationKind::WorksOn => "works_on",
 );
 
 str_enum!(

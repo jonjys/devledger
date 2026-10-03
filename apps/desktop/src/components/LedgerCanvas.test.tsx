@@ -54,6 +54,7 @@ function serve(data: CanvasData = canvasVault()) {
   mocked.listServiceProjects.mockImplementation(async () => data.resources);
   mocked.listAllSecrets.mockImplementation(async () => data.secrets);
   mocked.needsAttention.mockImplementation(async () => data.attention);
+  mocked.identityProjectLinks.mockImplementation(async () => data.worksOn);
   mocked.customFields.mockImplementation(async (entity: EntityRef): Promise<CustomField[]> => {
     const kind = { identity: "email", organization: "org", service_project: "resource" }[entity.kind as string] ?? entity.kind;
     return data.fields.get(`${kind}:${entity.id}`) ?? [];
@@ -64,6 +65,8 @@ function serve(data: CanvasData = canvasVault()) {
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  // Most tests edit the map; the lock's own tests set it themselves.
+  window.localStorage.setItem("devledger.mapLocked", "0");
   vi.spyOn(window, "confirm").mockReturnValue(true);
   mocked.addCustomField.mockImplementation(async (entity, label, value) => ({
     id: `f-${label}`,
@@ -224,8 +227,8 @@ describe("the lock", () => {
     expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
-    await user.click(screen.getByRole("button", { name: /Editing/ }));
-    expect(screen.getByRole("button", { name: /Locked/ })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: /Done editing/ }));
+    expect(screen.getByRole("button", { name: /Edit map/, pressed: false })).toBeInTheDocument();
     expect(within(shelf()).getByRole("button", { name: /GitHub/ })).toBeDisabled();
 
     fireEvent.contextMenu(ball);
@@ -239,7 +242,7 @@ describe("the lock", () => {
     await user.keyboard("{Delete}");
     expect(mocked.deleteAccount).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: /Locked/ }));
+    await user.click(screen.getAllByRole("button", { name: /Edit map/ })[0] as HTMLElement);
     fireEvent.contextMenu(ball);
     expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
   });
@@ -248,7 +251,25 @@ describe("the lock", () => {
     window.localStorage.setItem("devledger.mapLocked", "1");
     serve();
     await renderMap();
-    expect(await screen.findByRole("button", { name: /Locked/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Edit map/, pressed: false })).toBeInTheDocument();
+  });
+
+  it("starts locked on a fresh install once there is a map", async () => {
+    window.localStorage.clear();
+    serve();
+    await renderMap();
+    await screen.findByTestId(`account:${IDS.github}`);
+    expect(screen.getAllByRole("button", { name: /Edit map/ }).length).toBeGreaterThan(0);
+    fireEvent.contextMenu(screen.getByTestId(`account:${IDS.github}`));
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("starts in edit mode on an empty map, so it can be set up", async () => {
+    window.localStorage.clear();
+    serve({ ...canvasVault(), people: [], projects: [], resources: [], secrets: [], fields: new Map() });
+    await renderMap();
+    expect(await screen.findByRole("button", { name: /Done editing/ })).toBeInTheDocument();
+    expect(window.localStorage.getItem("devledger.mapLocked")).toBeNull();
   });
 
   it("still asks before deleting when unlocked", async () => {
@@ -546,5 +567,131 @@ describe("a project moving onto a project inside a service", () => {
     await user.click(screen.getByRole("menuitem", { name: "shop" }));
     await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("r-pay", IDS.project));
     expect(mocked.deleteServiceProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("a person working on a project", () => {
+  it("is drawn from the email's menu and leaves the project where it is", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`email:${IDS.work}`));
+    await user.hover(screen.getByRole("menuitem", { name: /Works on/ }));
+    await user.click(screen.getByRole("menuitem", { name: "blog" }));
+    await waitFor(() => expect(mocked.linkIdentityProject).toHaveBeenCalledWith(IDS.work, IDS.blog));
+    expect(mocked.moveAccount).not.toHaveBeenCalled();
+  });
+
+  it("shows the person on the project's page and can be removed", async () => {
+    const data = canvasVault();
+    data.worksOn = [[IDS.work, IDS.project]];
+    serve(data);
+    const user = userEvent.setup();
+    await renderMap({ projectId: IDS.project });
+    expect(await screen.findByTestId(`email:${IDS.work}`)).toBeInTheDocument();
+    const edge = document.querySelector(`[data-id="works:${IDS.work}:${IDS.project}"]`);
+    if (!edge) throw new Error("no line");
+    fireEvent.contextMenu(edge);
+    await user.click(screen.getByRole("menuitem", { name: "Remove link" }));
+    await waitFor(() => expect(mocked.unlinkIdentityProject).toHaveBeenCalledWith(IDS.work, IDS.project));
+  });
+});
+
+describe("undo and redo", () => {
+  it("takes back a line and puts it back again", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`email:${IDS.work}`));
+    await user.hover(screen.getByRole("menuitem", { name: /Works on/ }));
+    await user.click(screen.getByRole("menuitem", { name: "blog" }));
+    await waitFor(() => expect(mocked.linkIdentityProject).toHaveBeenCalledTimes(1));
+
+    await user.click(await screen.findByRole("button", { name: "Undo the new line" }));
+    await waitFor(() => expect(mocked.unlinkIdentityProject).toHaveBeenCalledWith(IDS.work, IDS.blog));
+    await user.click(await screen.findByRole("button", { name: "Redo the new line" }));
+    await waitFor(() => expect(mocked.linkIdentityProject).toHaveBeenCalledTimes(2));
+  });
+
+  it("puts a name back with the keyboard", async () => {
+    serve();
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.doubleClick(await screen.findByTestId(`project:${IDS.blog}`));
+    const input = await screen.findByLabelText("Rename blog");
+    await user.clear(input);
+    await user.type(input, "journal{Enter}");
+    await waitFor(() => expect(mocked.updateProject).toHaveBeenCalledWith(IDS.blog, "journal", null));
+    await screen.findByRole("button", { name: "Undo renaming blog" });
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(mocked.updateProject).toHaveBeenLastCalledWith(IDS.blog, "blog", null));
+  });
+
+  it("takes back something just added, but not once it holds something", async () => {
+    serve();
+    mocked.createOrganization.mockResolvedValue({
+      id: "org-new",
+      account_id: IDS.supabase,
+      provider_org_id: null,
+      name: "Second Org",
+      created_at: AT,
+    });
+    const user = userEvent.setup();
+    await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`account:${IDS.supabase}`));
+    await user.hover(screen.getByRole("menuitem", { name: /^Add/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Organization…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an organization" });
+    await user.type(within(dialog).getByLabelText("Organization name"), "Second Org");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(await screen.findByRole("button", { name: "Undo adding Second Org" }));
+    await waitFor(() => expect(mocked.deleteOrganization).toHaveBeenCalledWith("org-new"));
+  });
+
+  it("refuses to take back an organization that now has projects in it", async () => {
+    // acme's Org holds shop-db; pretend it was just added.
+    serve();
+    mocked.createOrganization.mockResolvedValue({
+      id: IDS.org,
+      account_id: IDS.supabase,
+      provider_org_id: null,
+      name: "Again",
+      created_at: AT,
+    });
+    const user = userEvent.setup();
+    const { onNotify } = await renderMap();
+    fireEvent.contextMenu(await screen.findByTestId(`account:${IDS.supabase}`));
+    await user.hover(screen.getByRole("menuitem", { name: /^Add/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Organization…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an organization" });
+    await user.type(within(dialog).getByLabelText("Organization name"), "Again");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(await screen.findByRole("button", { name: "Undo adding Again" }));
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith(expect.stringContaining("holds things now"), true));
+    expect(mocked.deleteOrganization).not.toHaveBeenCalled();
+  });
+
+  it("is not offered while the layout is locked", async () => {
+    window.localStorage.setItem("devledger.mapLocked", "1");
+    serve();
+    await renderMap();
+    await screen.findByTestId(`account:${IDS.github}`);
+    expect(screen.queryByRole("button", { name: /undo/i })).toBeNull();
+  });
+});
+
+describe("the list on the right", () => {
+  it("lists what is not connected to anything yet, and finds it on the map even when locked", async () => {
+    window.localStorage.setItem("devledger.mapLocked", "1");
+    serve();
+    await renderMap();
+    await screen.findByTestId(`project:${IDS.blog}`);
+    const loose = within(shelf()).getByLabelText("Not connected yet");
+    // blog and work@example.com have no lines; shop and GitHub do.
+    expect(within(loose).getByRole("button", { name: /blog/ })).toBeEnabled();
+    expect(within(loose).getByRole("button", { name: /work@example.com/ })).toBeInTheDocument();
+    expect(within(loose).queryByRole("button", { name: /shop/ })).toBeNull();
+    fireEvent.click(within(loose).getByRole("button", { name: /blog/ }));
+    expect(screen.getByRole("complementary", { name: "Details" })).toHaveTextContent("blog");
   });
 });

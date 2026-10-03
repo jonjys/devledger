@@ -68,7 +68,7 @@ import -window "$WINDOW" -display "$DISPLAY" "$OUT/02-shell.png"
 # Sidebar: Workspace → Connections. Coordinates are inside the DevLedger window,
 # so adding or reordering sidebar entries moves the targets. Look at the
 # screenshots after any change to the sidebar or to these screens.
-xdotool mousemove --window "$WINDOW" 120 308 click 1; sleep 4
+xdotool mousemove --window "$WINDOW" 120 228 click 1; sleep 4
 import -window "$WINDOW" -display "$DISPLAY" "$OUT/03-connections.png"
 # Supabase is the first card in the service grid; its Connect button sits at
 # the card's bottom right.

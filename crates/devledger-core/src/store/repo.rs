@@ -390,6 +390,10 @@ impl Store {
         if changed == 0 {
             return Err(CoreError::NotFound(format!("identity {identity_id}")));
         }
+        self.conn().execute(
+            "DELETE FROM relations WHERE from_kind = 'identity' AND from_id = ?1",
+            params![identity_id.to_string()],
+        )?;
         self.audit(
             "identity.delete",
             Some("identity"),
@@ -2097,6 +2101,19 @@ impl Store {
             &format!("Unlinked {} {}", kind.label(), to.id),
         )?;
         Ok(())
+    }
+
+    /// Every (identity, project) pair joined by [`RelationKind::WorksOn`].
+    pub fn identity_project_links(&self) -> Result<Vec<(Uuid, Uuid)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT from_id, to_id FROM relations
+             WHERE kind = 'works_on' AND from_kind = 'identity' AND to_kind = 'project'
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((uuid_from(r, 0)?, uuid_from(r, 1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// Every relation touching an entity, in either direction.

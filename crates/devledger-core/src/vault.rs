@@ -1077,6 +1077,44 @@ impl Vault {
         )
     }
 
+    /// Record that a person works on a project.
+    ///
+    /// The email does not become the project's parent and nothing moves under
+    /// it; this is a line between two things that stay where they are.
+    pub fn link_identity_project(&self, identity_id: Uuid, project_id: Uuid) -> Result<()> {
+        let inner = self.unlocked()?;
+        let identity = EntityRef::new(EntityKind::Identity, identity_id);
+        let project = EntityRef::new(EntityKind::Project, project_id);
+        if !inner.store.entity_exists(&identity)? || !inner.store.entity_exists(&project)? {
+            return Err(CoreError::NotFound("that email or project".into()));
+        }
+        inner.store.create_relation(
+            identity,
+            project,
+            RelationKind::WorksOn,
+            &Evidence::new(
+                EvidenceLevel::Explicit,
+                "user.linked",
+                "Drawn by hand in DevLedger",
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Undo [`Vault::link_identity_project`].
+    pub fn unlink_identity_project(&self, identity_id: Uuid, project_id: Uuid) -> Result<()> {
+        self.unlocked()?.store.delete_relation(
+            EntityRef::new(EntityKind::Identity, identity_id),
+            EntityRef::new(EntityKind::Project, project_id),
+            RelationKind::WorksOn,
+        )
+    }
+
+    /// Every (identity, project) pair a person works on.
+    pub fn identity_project_links(&self) -> Result<Vec<(Uuid, Uuid)>> {
+        self.unlocked()?.store.identity_project_links()
+    }
+
     /// Create an organization under an account.
     pub fn create_organization(&self, account_id: Uuid, name: &str) -> Result<Organization> {
         let trimmed = name.trim();

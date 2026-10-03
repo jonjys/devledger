@@ -504,6 +504,32 @@ fn delete_account(state: State<'_, AppState>, account_id: Uuid) -> IpcResult<()>
     state.with(|vault| vault.delete_account(account_id))
 }
 
+/// Record that a person works on a project.
+#[tauri::command]
+fn link_identity_project(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    project_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.link_identity_project(identity_id, project_id))
+}
+
+/// Undo `link_identity_project`.
+#[tauri::command]
+fn unlink_identity_project(
+    state: State<'_, AppState>,
+    identity_id: Uuid,
+    project_id: Uuid,
+) -> IpcResult<()> {
+    state.with(|vault| vault.unlink_identity_project(identity_id, project_id))
+}
+
+/// Every person–project pair, as `[identityId, projectId]`.
+#[tauri::command]
+fn identity_project_links(state: State<'_, AppState>) -> IpcResult<Vec<(Uuid, Uuid)>> {
+    state.with(|vault| vault.identity_project_links())
+}
+
 /// Rename an organization.
 #[tauri::command]
 fn rename_organization(
@@ -991,6 +1017,9 @@ pub fn run() {
             delete_account,
             delete_organization,
             rename_organization,
+            link_identity_project,
+            unlink_identity_project,
+            identity_project_links,
             delete_service_project,
             delete_subscription,
             relations_for,

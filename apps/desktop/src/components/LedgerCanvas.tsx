@@ -29,6 +29,7 @@ import {
   formatPos,
   freeSpot,
   isHiddenField,
+  isImplicit,
   nearestEmail,
   neighbourhood,
   parseKey,
@@ -40,6 +41,7 @@ import {
   savedPositions,
   type Ball,
   type CanvasData,
+  type Intent,
   type Line,
   type Point,
 } from "../lib/canvas";
@@ -54,6 +56,7 @@ import type {
   SecretKind,
   SecretListing,
   SecretOwner,
+  ServiceProject,
   ServiceProjectSummary,
 } from "../lib/types";
 
@@ -104,11 +107,13 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function readLocked(): boolean {
+/** The layout lock as last left, or null on a fresh install. */
+function readLocked(): boolean | null {
   try {
-    return window.localStorage.getItem(LOCK_KEY) === "1";
+    const v = window.localStorage.getItem(LOCK_KEY);
+    return v === null ? null : v === "1";
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -150,12 +155,13 @@ interface Loaded extends CanvasData {
 }
 
 async function load(): Promise<Loaded> {
-  const [people, projects, resources, secrets, attention] = await Promise.all([
+  const [people, projects, resources, secrets, attention, worksOn] = await Promise.all([
     api.ledgerOverview(),
     api.listProjects(),
     api.listServiceProjects(),
     api.listAllSecrets(),
     api.needsAttention(),
+    api.identityProjectLinks(),
   ]);
   const fields = new Map<string, CustomField[]>();
   const accounts = new Map<string, Account>();
@@ -186,6 +192,7 @@ async function load(): Promise<Loaded> {
     secrets,
     attention,
     fields,
+    worksOn: worksOn ?? [],
     accounts,
     orgs,
     resourceById: new Map(resources.map((r) => [r.service_project.id, r])),
@@ -218,6 +225,18 @@ export default function LedgerCanvas(props: Props) {
   );
 }
 
+/** One thing done on the map, and how to take it back and do it again. */
+interface Step {
+  label: string;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
+  /** Whether the map reloads afterwards. A move does not need to. */
+  reload?: boolean;
+}
+const MAX_STEPS = 50;
+/** A line drawn between two balls that means something. */
+type Act = Exclude<Intent, { kind: "none" } | { kind: "refuse" }>;
+
 type Dialog = { kind: AddKind; ball: Ball | null; at: Point | null; name?: string; title?: string };
 /** A right-click on a ball, a line or the background, or a line dragged from `drop` into empty space. */
 type Menu = {
@@ -235,7 +254,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const flow = useReactFlow();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<Loaded | null>(null);
-  const [locked, setLocked] = useState(readLocked);
+  // Locked unless someone chose otherwise: a map that has been drawn should
+  // not change by accident. The one exception is an empty map, which is
+  // being set up -- see the effect below.
+  const [stored] = useState(readLocked);
+  const [locked, setLocked] = useState(stored ?? true);
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedLine, setSelectedLine] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -268,6 +291,15 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   // --- the model ------------------------------------------------------------------
 
   const model = useMemo(() => (data ? buildCanvas(data) : { balls: [], lines: [] }), [data]);
+
+  // First run: nothing to protect yet, so start in edit mode. The choice is
+  // not remembered, so the next start is locked like any other.
+  const setupChecked = useRef(false);
+  useEffect(() => {
+    if (!data || setupChecked.current) return;
+    setupChecked.current = true;
+    if (stored === null && model.balls.length === 0) setLocked(false);
+  }, [data, model, stored]);
   const projectKey = projectId ? ballKey("project", projectId) : null;
   const shown = useMemo(() => (projectKey ? neighbourhood(model.lines, projectKey) : null), [model, projectKey]);
   const balls = useMemo(() => (shown ? model.balls.filter((b) => shown.has(b.key)) : model.balls), [model, shown]);
@@ -296,8 +328,10 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const onRename = useCallback((key: string, value: string | null) => void renameRef.current(key, value), []);
 
   useEffect(() => {
-    setNodes(
-      balls.map((b) => {
+    setNodes((prev) => {
+      // A box- or shift-selection belongs to xyflow; keep it across redraws.
+      const picked = new Set(locked ? [] : prev.filter((n) => n.selected).map((n) => n.id));
+      return balls.map((b) => {
         const size = ballSize(b);
         return {
           id: b.key,
@@ -308,7 +342,8 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           initialWidth: size,
           initialHeight: size,
           draggable: !locked && renaming !== b.key,
-          selectable: false,
+          selectable: !locked,
+          selected: picked.has(b.key),
           data: {
             ball: b,
             selected: selected === b.key,
@@ -318,8 +353,8 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             onRename,
           },
         };
-      }),
-    );
+      });
+    });
   }, [balls, place, selected, lit, renaming, locked, onRename]);
 
   const edges: Edge<LineData>[] = useMemo(
@@ -374,27 +409,78 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     return () => observer.disconnect();
   }, [projectKey, flow, data]);
 
+  // --- history ----------------------------------------------------------------------
+
+  // Undo and redo run long after the step was recorded, so everything they
+  // touch reads the vault as it is now, through these, not as it was then.
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const byKeyRef = useRef(byKey);
+  byKeyRef.current = byKey;
+  const labelOf = (kind: Ball["kind"], id: string) => byKeyRef.current.get(ballKey(kind, id))?.label ?? "";
+
+  const history = useRef<{ past: Step[]; future: Step[] }>({ past: [], future: [] });
+  const replaying = useRef(false);
+  const [, setHistoryTick] = useState(0);
+
+  function record(step: Step) {
+    if (replaying.current) return;
+    const h = history.current;
+    h.past = [...h.past, step].slice(-MAX_STEPS);
+    h.future = [];
+    setHistoryTick((t) => t + 1);
+  }
+
+  async function travel(back: boolean) {
+    if (locked) return;
+    const h = history.current;
+    const step = back ? h.past.pop() : h.future.pop();
+    if (!step) return;
+    replaying.current = true;
+    try {
+      await (back ? step.undo() : step.redo());
+      (back ? h.future : h.past).push(step);
+      onNotify(`${back ? "Undid" : "Redid"} ${step.label}`);
+    } catch (e: unknown) {
+      onNotify(`Could not ${back ? "undo" : "redo"} ${step.label}: ${message(e)}`, true);
+    } finally {
+      replaying.current = false;
+      setHistoryTick((t) => t + 1);
+    }
+    if (step.reload !== false) await changed();
+  }
+
   // --- saving positions -------------------------------------------------------------
 
   async function savePosition(key: string, p: Point) {
-    const ball = byKey.get(key);
-    if (!ball || !data || projectKey) return;
-    const existing = posField(data, key);
+    const d = dataRef.current;
+    const ball = byKeyRef.current.get(key);
+    if (!ball || !d || projectKey) return;
+    const existing = posField(d, key);
     try {
       if (existing) {
         await api.updateCustomField(existing.id, POS_FIELD, formatPos(p));
       } else {
         const created = await api.addCustomField(entityOf(ball), POS_FIELD, formatPos(p));
-        setData((d) => {
-          if (!d) return d;
-          const fields = new Map(d.fields);
+        setData((cur) => {
+          if (!cur) return cur;
+          const fields = new Map(cur.fields);
           fields.set(key, [...(fields.get(key) ?? []), created]);
-          return { ...d, fields };
+          return { ...cur, fields };
         });
       }
     } catch (e: unknown) {
       onNotify(message(e), true);
     }
+  }
+
+  async function setPositions(to: Map<string, Point>) {
+    setMoved((m) => {
+      const next = new Map(m);
+      for (const [k, p] of to) next.set(k, p);
+      return next;
+    });
+    for (const [k, p] of to) await savePosition(k, p);
   }
 
   /** Put a ball that was just created where it was dropped. */
@@ -454,110 +540,246 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   // --- actions ------------------------------------------------------------------------
 
   async function connect(a: Ball, b: Ball) {
-    if (!data) return;
+    if (!dataRef.current) return;
     const intent = connectIntent(a, b, model.lines);
+    if (intent.kind === "refuse") {
+      onNotify(intent.reason, true);
+      return;
+    }
+    if (intent.kind === "none") return;
     try {
-      if (intent.kind === "refuse") {
-        onNotify(intent.reason, true);
-        return;
-      }
-      if (intent.kind === "none") return;
-      const name = (kind: Ball["kind"], id: string) => byKey.get(ballKey(kind, id))?.label ?? "";
-      switch (intent.kind) {
-        case "own":
-          await api.moveAccount(intent.accountId, intent.identityId);
-          onNotify(`${name("account", intent.accountId)} now belongs to ${name("email", intent.identityId)}`);
-          break;
-        case "use":
-          await use(intent.accountId, intent.projectId);
-          break;
-        case "link": {
-          await api.linkServiceProject(intent.resourceId, intent.projectId);
-          // The line straight to the service said less than this one does. If
-          // nothing is stored on what that line stood for, it goes.
-          const account = data.resourceById.get(intent.resourceId)?.service_project.account_id;
-          for (const r of account ? resourcesToUnlink(data, account, intent.projectId) : []) {
-            if (r.remove) await api.deleteServiceProject(r.id);
-          }
-          onNotify(`${name("project", intent.projectId)} now runs on ${name("resource", intent.resourceId)}`);
-          break;
-        }
-        case "moveOrg":
-          await api.moveOrganization(intent.organizationId, intent.accountId);
-          onNotify(`${name("org", intent.organizationId)} is now under ${name("account", intent.accountId)}`);
-          break;
-        case "place": {
-          const r = data.resourceById.get(intent.resourceId)?.service_project;
-          if (r && r.account_id === intent.accountId) {
-            await api.assignOrganization(intent.resourceId, intent.organizationId);
-          } else {
-            await api.moveServiceProject(intent.resourceId, intent.accountId, intent.organizationId);
-          }
-          const into = intent.organizationId ? name("org", intent.organizationId) : name("account", intent.accountId);
-          onNotify(`${name("resource", intent.resourceId)} is now in ${into}`);
-          break;
-        }
-      }
+      const step: Step = {
+        label: "the new line",
+        undo: async () => undefined,
+        redo: async () => {
+          step.undo = await apply(intent);
+        },
+      };
+      step.undo = await apply(intent);
+      record(step);
       await changed();
     } catch (e: unknown) {
       onNotify(message(e), true);
     }
   }
 
+  /** Carry out what a line means. Returns how to take it back. */
+  async function apply(intent: Act): Promise<() => Promise<void>> {
+    const d = dataRef.current;
+    if (!d) throw new Error("The vault is not open.");
+    switch (intent.kind) {
+      case "own": {
+        const before = d.accounts.get(intent.accountId)?.identity_id;
+        await api.moveAccount(intent.accountId, intent.identityId);
+        onNotify(`${labelOf("account", intent.accountId)} now belongs to ${labelOf("email", intent.identityId)}`);
+        return async () => {
+          if (before) await api.moveAccount(intent.accountId, before);
+        };
+      }
+      case "use": {
+        const made = await use(intent.accountId, intent.projectId);
+        return async () => {
+          if (made.created) await api.deleteServiceProject(made.resourceId);
+          else await api.unlinkServiceProject(made.resourceId, intent.projectId);
+        };
+      }
+      case "link": {
+        await api.linkServiceProject(intent.resourceId, intent.projectId);
+        // The line straight to the service said less than this one does. If
+        // nothing is stored on what that line stood for, it goes.
+        const account = d.resourceById.get(intent.resourceId)?.service_project.account_id;
+        const dropped: ServiceProject[] = [];
+        for (const r of account ? resourcesToUnlink(d, account, intent.projectId) : []) {
+          if (!r.remove) continue;
+          const sp = d.resourceById.get(r.id)?.service_project;
+          await api.deleteServiceProject(r.id);
+          if (sp) dropped.push(sp);
+        }
+        onNotify(`${labelOf("project", intent.projectId)} now runs on ${labelOf("resource", intent.resourceId)}`);
+        return async () => {
+          await api.unlinkServiceProject(intent.resourceId, intent.projectId);
+          for (const sp of dropped) await relink(sp, intent.projectId);
+        };
+      }
+      case "work":
+        await api.linkIdentityProject(intent.identityId, intent.projectId);
+        onNotify(`${labelOf("email", intent.identityId)} works on ${labelOf("project", intent.projectId)}`);
+        return () => api.unlinkIdentityProject(intent.identityId, intent.projectId);
+      case "moveOrg": {
+        const before = d.orgs.get(intent.organizationId)?.account_id;
+        await api.moveOrganization(intent.organizationId, intent.accountId);
+        onNotify(`${labelOf("org", intent.organizationId)} is now under ${labelOf("account", intent.accountId)}`);
+        return async () => {
+          if (before) await api.moveOrganization(intent.organizationId, before);
+        };
+      }
+      case "place": {
+        const r = d.resourceById.get(intent.resourceId)?.service_project;
+        if (!r) throw new Error("That project is no longer in your vault.");
+        await placeResource(r.id, r.account_id, intent.accountId, intent.organizationId);
+        const into = intent.organizationId ? labelOf("org", intent.organizationId) : labelOf("account", intent.accountId);
+        onNotify(`${r.name} is now in ${into}`);
+        return () => placeResource(r.id, intent.accountId, r.account_id, r.organization_id);
+      }
+    }
+  }
+
+  /** Put a resource under an organization, or straight under an account. */
+  const placeResource = (id: string, fromAccount: string, toAccount: string, organizationId: string | null) =>
+    fromAccount === toAccount
+      ? api.assignOrganization(id, organizationId)
+      : api.moveServiceProject(id, toAccount, organizationId);
+
+  /** Bring back a resource a line stood for, and the line. */
+  async function relink(sp: ServiceProject, projectId_: string) {
+    const again = await api.createServiceProjectManual(sp.account_id, null, sp.provider, sp.name, null, sp.environment);
+    await api.linkServiceProject(again.id, projectId_);
+  }
+
   /**
    * Record that a project runs on a service: a resource under the account,
-   * linked. `fresh` is an account created a moment ago, not in `data` yet.
+   * linked. `fresh` is an account created a moment ago, not in the data yet.
    */
   async function use(accountId: string, projectId_: string, fresh?: Account) {
-    if (!data) return;
-    const account = fresh ?? data.accounts.get(accountId);
-    const project = data.projects.find((p) => p.id === projectId_);
-    if (!account || !project) throw new Error("That service or project is no longer in your vault.");
-    const existing = resourceToLink(data, accountId, project.name);
+    const d = dataRef.current;
+    const account = fresh ?? d?.accounts.get(accountId);
+    const project = d?.projects.find((p) => p.id === projectId_);
+    if (!d || !account || !project) throw new Error("That service or project is no longer in your vault.");
+    const existing = resourceToLink(d, accountId, project.name);
     const resourceId =
       existing ??
       (await api.createServiceProjectManual(accountId, null, account.provider, project.name, null, "unknown")).id;
     await api.linkServiceProject(resourceId, project.id);
     onNotify(`${project.name} now uses ${account.label}`);
+    return { resourceId, created: existing === null };
   }
 
   async function removeLine(line: Line) {
-    if (!data || locked) return;
+    if (!dataRef.current || locked) return;
+    const b = byKey.get(line.target)?.label;
     if (line.kind === "owns") {
       onNotify("A service always belongs to one email. Draw a line from it to another email to move it.");
       return;
     }
-    const from = parseKey(line.source);
-    const to = parseKey(line.target);
-    if (!from || !to) return;
-    const a = byKey.get(line.source)?.label;
-    const b = byKey.get(line.target)?.label;
-    if (line.kind === "holds" && from.kind !== "org") {
+    if (line.kind === "holds" && parseKey(line.source)?.kind !== "org") {
       onNotify(
-        to.kind === "org"
+        parseKey(line.target)?.kind === "org"
           ? `${b} always belongs to a service. Draw it to another account to move it, or delete it.`
           : `${b} always belongs to a service. Draw it to an organization to put it there, or delete it.`,
       );
       return;
     }
     try {
-      if (line.kind === "holds") {
-        await api.assignOrganization(to.id, null);
-        onNotify(`${b} is no longer in ${a}; it stays under ${serviceName(byKey.get(line.target) as Ball)}`);
-      } else if (to.kind === "resource") {
-        await api.unlinkServiceProject(to.id, from.id);
-        onNotify(`${a} no longer runs on ${b}`);
-      } else {
-        for (const r of resourcesToUnlink(data, to.id, from.id)) {
-          if (r.remove) await api.deleteServiceProject(r.id);
-          else await api.unlinkServiceProject(r.id, from.id);
-        }
-        onNotify(`${a} no longer uses ${b}`);
-      }
+      const step: Step = {
+        label: "removing the line",
+        undo: async () => undefined,
+        redo: async () => {
+          step.undo = await detach(line);
+        },
+      };
+      step.undo = await detach(line);
+      record(step);
       setSelectedLine(null);
       await changed();
     } catch (e: unknown) {
       onNotify(message(e), true);
+    }
+  }
+
+  /** Take a line away. Returns how to put it back. */
+  async function detach(line: Line): Promise<() => Promise<void>> {
+    const d = dataRef.current;
+    const from = parseKey(line.source);
+    const to = parseKey(line.target);
+    if (!d || !from || !to) throw new Error("That line is no longer on the map.");
+    const a = labelOf(from.kind, from.id);
+    const b = labelOf(to.kind, to.id);
+    if (line.kind === "works") {
+      await api.unlinkIdentityProject(from.id, to.id);
+      onNotify(`${a} no longer works on ${b}`);
+      return () => api.linkIdentityProject(from.id, to.id);
+    }
+    if (line.kind === "holds") {
+      await api.assignOrganization(to.id, null);
+      onNotify(`${b} is no longer in ${a}`);
+      return () => api.assignOrganization(to.id, from.id);
+    }
+    if (to.kind === "resource") {
+      await api.unlinkServiceProject(to.id, from.id);
+      onNotify(`${a} no longer runs on ${b}`);
+      return () => api.linkServiceProject(to.id, from.id);
+    }
+    const touched = resourcesToUnlink(d, to.id, from.id);
+    const gone: ServiceProject[] = [];
+    for (const r of touched) {
+      if (r.remove) {
+        const sp = d.resourceById.get(r.id)?.service_project;
+        await api.deleteServiceProject(r.id);
+        if (sp) gone.push(sp);
+      } else {
+        await api.unlinkServiceProject(r.id, from.id);
+      }
+    }
+    onNotify(`${a} no longer uses ${b}`);
+    return async () => {
+      for (const r of touched) if (!r.remove) await api.linkServiceProject(r.id, from.id);
+      for (const sp of gone) await relink(sp, from.id);
+    };
+  }
+
+  /** A step that takes back something just added, while nothing is stored on it. */
+  function added(label: string, kind: Ball["kind"], id: string, again: () => Promise<string | null>): Step {
+    let current = id;
+    return {
+      label: `adding ${label}`,
+      undo: () => removeIfEmpty(kind, current, label),
+      redo: async () => {
+        const next = await again();
+        if (next) current = next;
+      },
+    };
+  }
+
+  /** Delete something undo is taking back -- unless it now holds something. */
+  async function removeIfEmpty(kind: Ball["kind"], id: string, label: string) {
+    const d = dataRef.current;
+    if (!d) throw new Error("The vault is not open.");
+    const busy = new Error(`${label} holds things now. Delete it from its menu instead.`);
+    switch (kind) {
+      case "email":
+        if ([...d.accounts.values()].some((a) => a.identity_id === id)) throw busy;
+        await api.deleteIdentity(id);
+        return;
+      case "account": {
+        const holds =
+          d.secrets.some((s) => s.entry.secret.account_id === id) ||
+          [...d.orgs.values()].some((o) => o.account_id === id) ||
+          d.resources.some(
+            (r) => r.service_project.account_id === id && (r.secret_count > 0 || !isImplicit(r)),
+          );
+        if (holds) throw busy;
+        await api.deleteAccount(id);
+        return;
+      }
+      case "org":
+        if (d.resources.some((r) => r.service_project.organization_id === id)) throw busy;
+        await api.deleteOrganization(id);
+        return;
+      case "resource":
+        if ((d.resourceById.get(id)?.secret_count ?? 0) > 0) throw busy;
+        await api.deleteServiceProject(id);
+        return;
+      case "project": {
+        if (d.secrets.some((s) => s.entry.secret.project_id === id)) throw busy;
+        // The resources only its own lines stood for go with it.
+        for (const r of d.resources) {
+          if (isImplicit(r) && r.secret_count === 0 && r.used_by[0]?.id === id) {
+            await api.deleteServiceProject(r.service_project.id);
+          }
+        }
+        await api.deleteProject(id);
+        return;
+      }
     }
   }
 
@@ -567,14 +789,14 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     at: Point | null,
     owner: Ball | null = null,
     forProject: string | null = projectId,
-  ) {
-    if (locked) return;
+  ): Promise<string | null> {
+    if (locked) return null;
     const spot = at ?? spotInView();
     const to = owner ?? nearestEmail(emails, place, spot);
     if (!to) {
       onNotify("Add your email first: every service belongs to an email.");
       setDialog({ kind: "email", ball: null, at: freeSpot({ x: spot.x - 300, y: spot.y }, place.values()) });
-      return;
+      return null;
     }
     try {
       const label = serviceLabel(typed, provider);
@@ -582,34 +804,40 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       await placeNew({ kind: "account", id: account.id }, spot);
       if (forProject) await use(account.id, forProject, account);
       else onNotify(`Added ${label} under ${to.label} · draw a line to another email to move it`);
+      record(added(label, "account", account.id, () => addService(provider, typed, spot, to, forProject)));
       // The list stays open, so several services can be added in a row.
       await changed();
+      return account.id;
     } catch (e: unknown) {
       onNotify(message(e), true);
+      return null;
     }
   }
 
-  async function add(d: Dialog, values: AddValues) {
+  /** Add what a dialog asked for. Returns the new thing's id, where it is a ball. */
+  async function add(d: Dialog, values: AddValues): Promise<string | null> {
+    const cur = dataRef.current;
+    let made: { kind: Ball["kind"]; id: string; label: string } | null = null;
     switch (d.kind) {
       case "email": {
         const identity = await api.createIdentityManual(values.label || values.name, values.name);
         await placeNew({ kind: "identity", id: identity.id }, d.at);
         onNotify(`Added ${values.name}`);
+        made = { kind: "email", id: identity.id, label: values.name };
         break;
       }
       case "project": {
-        const existing = data?.projects.find((p) => p.name.toLowerCase() === values.name.toLowerCase());
+        const existing = cur?.projects.find((p) => p.name.toLowerCase() === values.name.toLowerCase());
         if (existing) throw new Error(`There is already a project called ${existing.name}.`);
         const project = await api.createProject(values.name, null);
         await placeNew({ kind: "project", id: project.id }, d.at);
         if (d.ball?.kind === "resource") {
           await api.linkServiceProject(d.ball.id, project.id);
         } else if (d.ball?.kind === "account") {
-          await reload();
           const resource = await api.createServiceProjectManual(
             d.ball.id,
             null,
-            data?.accounts.get(d.ball.id)?.provider ?? "unknown",
+            cur?.accounts.get(d.ball.id)?.provider ?? "unknown",
             project.name,
             null,
             "unknown",
@@ -617,35 +845,36 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           await api.linkServiceProject(resource.id, project.id);
         }
         onNotify(`Added ${project.name} · draw a line from it to each service it runs on`);
+        made = { kind: "project", id: project.id, label: project.name };
         break;
       }
       case "service":
         setDialog(null);
-        await addService(
+        return addService(
           providerForName(values.name),
           values.name,
           d.at,
           d.ball?.kind === "email" ? d.ball : null,
           d.ball?.kind === "project" ? d.ball.id : projectId,
         );
-        return;
       case "org": {
-        const account = d.ball ? data?.accounts.get(d.ball.id) : undefined;
-        if (!account) return;
-        const taken = [...(data?.orgs.values() ?? [])].find(
+        const account = d.ball ? cur?.accounts.get(d.ball.id) : undefined;
+        if (!account) return null;
+        const taken = [...(cur?.orgs.values() ?? [])].find(
           (o) => o.account_id === account.id && o.name.toLowerCase() === values.name.toLowerCase(),
         );
         if (taken) throw new Error(`${account.label} already has an organization called ${taken.name}.`);
         const org = await api.createOrganization(account.id, values.name);
         await placeNew({ kind: "organization", id: org.id }, d.at);
         onNotify(`Added ${org.name} in ${account.label} · drag from it to add its projects`);
+        made = { kind: "org", id: org.id, label: org.name };
         break;
       }
       case "resource": {
-        const org = d.ball?.kind === "org" ? data?.orgs.get(d.ball.id) : undefined;
-        const account = data?.accounts.get(org?.account_id ?? d.ball?.id ?? "");
-        if (!account) return;
-        const taken = data?.resources.find(
+        const org = d.ball?.kind === "org" ? cur?.orgs.get(d.ball.id) : undefined;
+        const account = cur?.accounts.get(org?.account_id ?? d.ball?.id ?? "");
+        if (!account) return null;
+        const taken = cur?.resources.find(
           (r) =>
             r.service_project.account_id === account.id &&
             r.service_project.name.toLowerCase() === values.name.toLowerCase(),
@@ -671,12 +900,13 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         }
         await placeNew({ kind: "service_project", id: resource.id }, d.at);
         onNotify(`Added ${resource.name} in ${org?.name ?? account.label} · draw a line from your project to it`);
+        made = { kind: "resource", id: resource.id, label: resource.name };
         break;
       }
       case "api":
       case "password":
       case "secret": {
-        if (!d.ball) return;
+        if (!d.ball) return null;
         const owner: SecretOwner = {
           project_id: d.ball.kind === "project" ? d.ball.id : null,
           service_project_id: d.ball.kind === "resource" ? d.ball.id : null,
@@ -688,48 +918,75 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         break;
       }
       case "field":
-        if (!d.ball) return;
+        if (!d.ball) return null;
         await api.addCustomField(entityOf(d.ball), values.name, values.value);
         onNotify(`Added ${values.name}`);
         break;
     }
     setDialog(null);
+    if (made) {
+      const what = made;
+      record(added(what.label, what.kind, what.id, () => add(d, values)));
+    }
     await changed();
+    return made?.id ?? null;
   }
 
-  async function rename(key: string, raw: string | null) {
-    setRenaming(null);
-    const ball = byKey.get(key);
-    const value = raw?.trim();
-    if (!ball || !value || locked) return;
-    try {
-      if (ball.kind === "email") {
-        if (value.includes("@") && value !== ball.label) {
+  /** What a ball is called now, in the terms a rename to `value` would change. */
+  function nameOf(kind: Ball["kind"], id: string, value: string): string | null {
+    const d = dataRef.current;
+    if (!d) return null;
+    switch (kind) {
+      case "email": {
+        const person = d.people.find((p) => p.identity.id === id)?.identity;
+        return (value.includes("@") ? person?.email : person?.label) ?? null;
+      }
+      case "account":
+        return d.accounts.get(id)?.label ?? null;
+      case "org":
+        return d.orgs.get(id)?.name ?? null;
+      case "resource":
+        return d.resourceById.get(id)?.service_project.name ?? null;
+      case "project":
+        return d.projects.find((p) => p.id === id)?.name ?? null;
+    }
+  }
+
+  /** Rename to `value`. For an email, a value with an @ is a new address and anything else the person's name. */
+  async function renameTo(kind: Ball["kind"], id: string, value: string) {
+    const d = dataRef.current;
+    if (!d) throw new Error("The vault is not open.");
+    switch (kind) {
+      case "email": {
+        if (value.includes("@")) {
+          const current = d.people.find((p) => p.identity.id === id)?.identity.email;
           // A new address: add it as the person's main one, drop the old.
-          const old = (await api.identityEmails(ball.id)).find((e) => e.address === ball.label);
-          await api.addIdentityEmail(ball.id, value, true);
-          if (old) await api.removeIdentityEmail(ball.id, old.id);
-        } else if (!value.includes("@")) {
-          await api.updateIdentity(ball.id, value);
+          const old = (await api.identityEmails(id)).find((e) => e.address === current);
+          await api.addIdentityEmail(id, value, true);
+          if (old) await api.removeIdentityEmail(id, old.id);
         } else {
-          return;
+          await api.updateIdentity(id, value);
         }
-      } else if (ball.kind === "account") {
-        const account = data?.accounts.get(ball.id);
-        if (!account || value === account.label) return;
-        await api.updateAccount(account.id, value, {
+        return;
+      }
+      case "account": {
+        const account = d.accounts.get(id);
+        if (!account) throw new Error("That service is no longer in your vault.");
+        await api.updateAccount(id, value, {
           login_email: account.login_email,
           username: account.username,
           url: account.url,
           notes: account.notes,
         });
-      } else if (ball.kind === "org") {
-        if (value === ball.label) return;
-        await api.renameOrganization(ball.id, value);
-      } else if (ball.kind === "resource") {
-        const r = data?.resourceById.get(ball.id)?.service_project;
-        if (!r || value === r.name) return;
-        await api.updateResource(r.id, {
+        return;
+      }
+      case "org":
+        await api.renameOrganization(id, value);
+        return;
+      case "resource": {
+        const r = d.resourceById.get(id)?.service_project;
+        if (!r) throw new Error("That project is no longer in your vault.");
+        await api.updateResource(id, {
           name: value,
           provider_ref: r.provider_ref,
           region: r.region,
@@ -737,10 +994,28 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           url: r.url,
           notes: r.notes,
         });
-      } else {
-        if (value === ball.label) return;
-        await api.updateProject(ball.id, value, null);
+        return;
       }
+      case "project":
+        await api.updateProject(id, value, null);
+        return;
+    }
+  }
+
+  async function rename(key: string, raw: string | null) {
+    setRenaming(null);
+    const ball = byKey.get(key);
+    const value = raw?.trim();
+    if (!ball || !value || locked) return;
+    const before = nameOf(ball.kind, ball.id, value);
+    if (before === null || before === value) return;
+    try {
+      await renameTo(ball.kind, ball.id, value);
+      record({
+        label: `renaming ${before}`,
+        undo: () => renameTo(ball.kind, ball.id, before),
+        redo: () => renameTo(ball.kind, ball.id, value),
+      });
       onNotify(`Renamed to ${value}`);
       await changed();
     } catch (e: unknown) {
@@ -821,7 +1096,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     setLocked(next);
     writeLocked(next);
     setRenaming(null);
-    onNotify(next ? "Map locked: nothing can be moved, connected or deleted" : "Map unlocked: you can edit again");
+    onNotify(
+      next
+        ? "Layout locked: nothing can be moved, connected or deleted"
+        : "Editing the map: drag, connect, rename and delete. Press Done when you are finished.",
+    );
   }
 
   function focusOn(key: string) {
@@ -849,7 +1128,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     }
     items.push({ label: "Find…", hint: "⌘K", onSelect: () => setFinder(true) });
     items.push({ label: "Fit to screen", onSelect: () => void flow.fitView({ ...FIT, duration: motion(300) }) });
-    items.push({ label: locked ? "Unlock map" : "Lock map", onSelect: toggleLock });
+    items.push({ label: locked ? "Edit map" : "Done editing", onSelect: toggleLock });
     return { title: "Map", items };
   }
 
@@ -892,6 +1171,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       if (!ball.noEmail) items.push({ label: "Copy email", onSelect: () => void copyText("the address", ball.label) });
       if (edit) {
         items.push({ label: "Add service", items: serviceItems(freeSpot({ x: near.x + 220, y: near.y }, place.values()), ball) });
+        const works = new Set(model.lines.filter((l) => l.kind === "works" && l.source === ball.key).map((l) => l.target));
+        items.push({
+          label: "Works on",
+          items: projectBalls.filter((p) => !works.has(p.key)).map((p) => ({ label: p.label, onSelect: () => void connect(ball, p) })),
+        });
         items.push({ label: "Add", items: [field] });
         if (!ball.primary && !ball.noEmail) items.push({ label: "Make main email", onSelect: () => void makePrimary(ball) });
         items.push(rename_, del);
@@ -965,6 +1249,13 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
               onSelect: () => void connect(ball, a),
             })),
         });
+        const people = new Set(model.lines.filter((l) => l.kind === "works" && l.target === ball.key).map((l) => l.source));
+        items.push({
+          label: "Who works on it",
+          items: model.balls
+            .filter((b) => b.kind === "email" && !people.has(b.key))
+            .map((b) => ({ label: b.label, onSelect: () => void connect(ball, b) })),
+        });
         items.push({
           label: "Add",
           items: [{ label: "Variable…", onSelect: () => setDialog({ kind: "secret", ball, at: null }) }, field],
@@ -1021,7 +1312,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         title: `${b} belongs to ${a}`,
         items:
           locked || !ball
-            ? [{ label: "Unlock the map to change this", disabled: true }]
+            ? [{ label: "Press Edit map to change this", disabled: true }]
             : [
                 {
                   label: "Move to email",
@@ -1030,12 +1321,20 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
               ],
       };
     }
+    if (line.kind === "works") {
+      return {
+        title: `${a} works on ${b}`,
+        items: locked
+          ? [{ label: "Press Edit map to change this", disabled: true }]
+          : [{ label: "Remove link", danger: true, onSelect: () => void removeLine(line) }],
+      };
+    }
     if (line.kind === "holds") {
       const inOrg = parseKey(line.source)?.kind === "org";
       return {
         title: `${b} is in ${a}`,
         items: locked
-          ? [{ label: "Unlock the map to change this", disabled: true }]
+          ? [{ label: "Press Edit map to change this", disabled: true }]
           : inOrg
             ? [{ label: `Take out of ${a}`, danger: true, onSelect: () => void removeLine(line) }]
             : [{ label: `Drag ${b} to another ${inOrg ? "organization" : "account"} to move it`, disabled: true }],
@@ -1044,7 +1343,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     return {
       title: `${a} uses ${b}`,
       items: locked
-        ? [{ label: "Unlock the map to change this", disabled: true }]
+        ? [{ label: "Press Edit map to change this", disabled: true }]
         : [{ label: "Remove link", danger: true, onSelect: () => void removeLine(line) }],
     };
   }
@@ -1060,9 +1359,15 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     }
     const typing = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if (typing || dialog || finder) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
+      e.preventDefault();
+      void travel(e.key.toLowerCase() === "z" && !e.shiftKey);
+      return;
+    }
     if (e.key === "Escape") {
       setSelected(null);
       setSelectedLine(null);
+      setNodes((n) => n.map((x) => (x.selected ? { ...x, selected: false } : x)));
     }
     if ((e.key === "Delete" || e.key === "Backspace") && !locked) {
       const line = selectedLine ? model.lines.find((l) => l.key === selectedLine) : null;
@@ -1084,6 +1389,8 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   if (!data) return <div className="empty">Loading…</div>;
 
   const selectedBall = selected ? byKey.get(selected) ?? null : null;
+  const undoStep = history.current.past.at(-1);
+  const redoStep = history.current.future.at(-1);
   const builtMenu = menu
     ? menu.items
       ? { title: menu.title ?? "", items: menu.items }
@@ -1100,7 +1407,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   return (
     <div
       ref={wrapRef}
-      className={`ledger-canvas${locked ? " locked" : ""}${projectKey ? " focus" : ""}`}
+      className={`ledger-canvas${locked ? " locked" : ""}${projectKey ? " focus" : ""}${
+        nodes.filter((n) => n.selected).length > 1 ? " multi" : ""
+      }`}
       onContextMenu={(e) => e.preventDefault()}
     >
       <div className="cv-toolbar">
@@ -1111,13 +1420,41 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         )}
         <button
           type="button"
-          className={`cv-lock${locked ? " on" : ""}`}
-          aria-pressed={locked}
+          className={`cv-lock${locked ? "" : " editing"}`}
+          aria-pressed={!locked}
           onClick={toggleLock}
-          title={locked ? "Locked: nothing can be moved, connected or deleted. Click to edit." : "Lock the map so nothing changes by accident."}
+          title={
+            locked
+              ? "The layout is locked: you can look, search and copy. Click to move, connect, rename or delete."
+              : "Lock the layout again so nothing changes by accident."
+          }
         >
-          {locked ? "🔒 Locked" : "🔓 Editing"}
+          {locked ? "✎ Edit map" : "✓ Done editing"}
         </button>
+        {!locked && (
+          <>
+            <button
+              type="button"
+              className="st-find"
+              aria-label={undoStep ? `Undo ${undoStep.label}` : "Nothing to undo"}
+              title={undoStep ? `Undo ${undoStep.label} (⌘Z)` : "Nothing to undo"}
+              disabled={!undoStep}
+              onClick={() => void travel(true)}
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              className="st-find"
+              aria-label={redoStep ? `Redo ${redoStep.label}` : "Nothing to redo"}
+              title={redoStep ? `Redo ${redoStep.label} (⇧⌘Z)` : "Nothing to redo"}
+              disabled={!redoStep}
+              onClick={() => void travel(false)}
+            >
+              ↷
+            </button>
+          </>
+        )}
         <button type="button" className="st-find" onClick={() => setFinder(true)}>
           Find <kbd>⌘K</kbd>
         </button>
@@ -1133,9 +1470,19 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodesChange={(changes: NodeChange<BallNode>[]) => setNodes((n) => applyNodeChanges(changes, n))}
-          onNodeDragStop={(_, node) => {
-            setMoved((m) => new Map(m).set(node.id, node.position));
-            void savePosition(node.id, node.position);
+          onNodeDragStop={(_, node, dragged) => {
+            // Several selected balls move together, and are put back together.
+            const group = dragged.length > 0 ? dragged : [node];
+            const before = new Map(group.map((n) => [n.id, place.get(n.id) ?? n.position]));
+            const after = new Map(group.map((n) => [n.id, n.position]));
+            void setPositions(after);
+            if (projectKey) return;
+            record({
+              label: group.length > 1 ? `moving ${group.length} balls` : `moving ${byKey.get(node.id)?.label ?? "a ball"}`,
+              undo: () => setPositions(before),
+              redo: () => setPositions(after),
+              reload: false,
+            });
           }}
           onConnect={(c: Connection) => {
             const a = byKey.get(c.source);
@@ -1183,7 +1530,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           nodeOrigin={[0.5, 0.5]}
           nodesConnectable={!locked}
           nodesDraggable={!locked}
-          elementsSelectable={false}
+          // Shift-drag draws a box; Ctrl/Cmd-click adds one ball at a time.
+          elementsSelectable={!locked}
+          selectionKeyCode="Shift"
           deleteKeyCode={null}
           // Double-click renames; the zoom handler would swallow it first.
           zoomOnDoubleClick={false}
@@ -1265,6 +1614,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           }
           whereIs={(b) => (b.kind === "account" ? ownerOf(b.id)?.label : byKey.get(b.parent ?? "")?.label) ?? null}
           have={new Set(accountBalls.map((a) => a.provider ?? ""))}
+          loose={
+            focusProject
+              ? []
+              : model.balls.filter((b) => !model.lines.some((l) => l.source === b.key || l.target === b.key))
+          }
+          onFind={focusOn}
           canvas={wrapRef}
           onPlace={(item, client) => {
             const at = client ? flow.screenToFlowPosition(client) : null;
@@ -1314,7 +1669,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           under={dialog.ball?.label ?? null}
           initialName={dialog.name}
           onCancel={() => setDialog(null)}
-          onSubmit={(values) => add(dialog, values)}
+          onSubmit={async (values) => {
+            await add(dialog, values);
+          }}
         />
       )}
     </div>
@@ -1372,7 +1729,14 @@ function HowItWorks({ onClose }: { onClose: () => void }) {
           <strong>Edit</strong>: right-click a ball or a line; double-click to rename.
         </li>
         <li>
-          <strong>Lock</strong> the map when you are done: nothing moves or gets deleted until you unlock it.
+          <strong>Several at once</strong>: Shift-drag a box around balls, or Ctrl/⌘-click them, then drag them together.
+        </li>
+        <li>
+          <strong>Undo</strong>: ⌘Z / Ctrl+Z, redo with ⇧⌘Z / Ctrl+Y -- for moves, lines, renames and things you just added.
+          Deleting is final, which is why it asks first.
+        </li>
+        <li>
+          <strong>Done editing</strong> locks the layout again: nothing moves or gets deleted until you press Edit map.
         </li>
       </ul>
       <button type="button" onClick={onClose}>
@@ -1397,6 +1761,8 @@ function Shelf({
   existing,
   whereIs,
   have,
+  loose,
+  onFind,
   canvas,
   onPlace,
   onUnlock,
@@ -1409,6 +1775,9 @@ function Shelf({
   whereIs: (ball: Ball) => string | null;
   /** Providers there is already an account for. */
   have: Set<string>;
+  /** Balls with no line to anything yet. */
+  loose: Ball[];
+  onFind: (key: string) => void;
   canvas: React.RefObject<HTMLDivElement | null>;
   /** Add an item: where it was dropped, or null when it was clicked. */
   onPlace: (item: ShelfItem, client: Point | null) => void;
@@ -1479,10 +1848,10 @@ function Shelf({
     <aside className="cv-shelf" aria-label="Add to the map">
       <div className="cv-shelf-head">
         <strong>{focus ? `Services for ${focus.label}` : "Add to your map"}</strong>
-        <small>{locked ? "The map is locked." : "Click to add, or drag onto the map."}</small>
+        <small>{locked ? "The layout is locked." : "Click to add, or drag onto the map."}</small>
         {locked && (
           <button type="button" onClick={onUnlock}>
-            Unlock to edit
+            ✎ Edit map
           </button>
         )}
       </div>
@@ -1492,6 +1861,35 @@ function Shelf({
           {chip({ kind: "email" }, "Email", <span className="cv-chip-glyph email">@</span>)}
           {chip({ kind: "project" }, "Project", <span className="cv-chip-glyph project">P</span>)}
         </div>
+      )}
+
+      {loose.length > 0 && (
+        <>
+          <div className="cv-shelf-title">Not connected yet</div>
+          <div className="cv-shelf-list" aria-label="Not connected yet">
+            {loose.map((b) => (
+              <button
+                type="button"
+                key={b.key}
+                className="cv-chip"
+                onClick={() => onFind(b.key)}
+                title="Show it on the map"
+              >
+                <span className="cv-chip-icon">
+                  {b.provider ? (
+                    <ProviderIcon provider={b.provider} name={b.label} size={18} />
+                  ) : (
+                    <span className={`cv-chip-glyph ${b.kind}`}>{b.kind === "email" ? "@" : "P"}</span>
+                  )}
+                </span>
+                <span className="cv-chip-text">
+                  <span>{b.label}</span>
+                  <small>{kindLabel(b)}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {focus && existing.length > 0 && (
@@ -1609,7 +2007,9 @@ function Details({
         {ball.provider && <ProviderIcon provider={ball.provider} name={ball.label} size={22} />}
         <div>
           <div className="st-info-kind">{kindLabel(ball)}</div>
-          <div className="st-info-name">{ball.label}</div>
+          <div className="st-info-name" title={ball.label}>
+            {ball.label}
+          </div>
         </div>
         <span className="spacer" />
         <button type="button" className="ghost" aria-label="Close details" onClick={onClose}>
