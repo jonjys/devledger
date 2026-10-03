@@ -8,9 +8,20 @@
 
 pub mod schema;
 
+mod accounts;
 mod connections;
+mod custom_fields;
 mod enums;
-mod repo;
+mod graph;
+mod identities;
+mod organizations;
+mod projects;
+mod relations;
+mod rows;
+mod secrets;
+mod service_projects;
+mod subscriptions;
+mod types;
 
 use std::path::Path;
 
@@ -22,7 +33,7 @@ use crate::crypto::{self, LABEL_DATABASE};
 use crate::error::{CoreError, Result};
 use crate::secret::SecretBytes;
 
-pub use repo::{
+pub use types::{
     AccountDetails, AccountNode, AttentionItem, AttentionKind, AuditEntry, IdentityNode,
     OrganizationNode, ProjectRefLabel, ProjectSummary, SecretListing, SecretOwner,
     ServiceProjectSummary, SubscriptionSummary, VaultEntry,
