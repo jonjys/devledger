@@ -12,6 +12,12 @@ check() { printf '\n== %s\n' "$1"; }
 bad() { printf '  FAIL: %s\n' "$1"; fail=1; }
 ok() { printf '  ok: %s\n' "$1"; }
 
+# The IPC layer is every Rust file under src-tauri/src, not just lib.rs: the
+# commands live in modules, and a guard that reads one file goes blind the day
+# a command moves. Same for the connector crate.
+IPC_SRC=apps/desktop/src-tauri/src
+CONNECT_SRC=crates/devledger-connect/src
+
 check "The crate holding key material has no HTTP client"
 # DevLedger is local-first but not permanently offline: a connector may reach a
 # provider during an explicit Connect, Refresh or Discover. That networking is
@@ -39,7 +45,7 @@ else
 fi
 
 check "The connector is read-only and host-allowlisted"
-if grep -qE '\.post\(|\.put\(|\.patch\(|\.delete\(' crates/devledger-connect/src/*.rs; then
+if grep -rqE --include=*.rs '\.post\(|\.put\(|\.patch\(|\.delete\(' "$CONNECT_SRC"; then
   bad "the connector issues a non-GET request"
 else
   ok "only GET requests are issued"
@@ -80,7 +86,7 @@ if grep -q 'aead::seal' crates/devledger-core/src/connect_vault.rs; then
 else
   bad "connector credentials are not sealed"
 fi
-if grep -qE 'fn connection_token' apps/desktop/src-tauri/src/lib.rs; then
+if grep -rqE --include=*.rs 'fn connection_token' "$IPC_SRC"; then
   bad "the stored credential is exposed over IPC"
 else
   ok "no IPC command returns a stored credential"
@@ -106,7 +112,9 @@ check "Connector calls are routed by connector id"
 # connector_connect and connector_refresh, ignoring the connector id it was
 # given. With a second connector that sends one provider's credential to
 # another. Every call now goes through the dispatch in devledger-connect.
-if grep -nE 'devledger_connect::[a-z_]+::(verify|discover)\(' apps/desktop/src-tauri/src/lib.rs | grep -q .; then
+# Also refuses importing a provider module (`use devledger_connect::supabase`),
+# which would make a bare `supabase::verify(` call possible.
+if grep -rnE --include=*.rs 'devledger_connect::[a-z_]+::(verify|discover)\(|use devledger_connect::[a-z_]+(::|;)' "$IPC_SRC" | grep -q .; then
   bad "the IPC layer calls a provider client directly instead of dispatching by id"
 else
   ok "connector calls go through verify_with / discover_with"
@@ -142,9 +150,15 @@ else
 fi
 
 check "Exactly one IPC command returns plaintext"
-reveal_count=$(grep -c 'IpcResult<String>' apps/desktop/src-tauri/src/lib.rs)
+# Counted across the whole IPC layer, in either spelling of the return type,
+# and the one that is allowed must be reveal_secret.
+plaintext=$(grep -rnE --include=*.rs 'IpcResult<String>|Result<String, *IpcError>' "$IPC_SRC")
+reveal_count=$(printf '%s' "$plaintext" | grep -c .)
 if [ "$reveal_count" -ne 1 ]; then
   bad "expected 1 command returning String, found $reveal_count"
+  printf '%s\n' "$plaintext" | sed 's/^/    /'
+elif ! printf '%s' "$plaintext" | grep -qE 'fn reveal_secret\('; then
+  bad "the one plaintext-returning command is not reveal_secret: $plaintext"
 else
   ok "reveal_secret is the only plaintext-returning command"
 fi
