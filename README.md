@@ -1,32 +1,50 @@
 # DevLedger
 
-A local-first ledger for the accounts, projects and credentials a developer
-accumulates. Paste a `.env` block, a Supabase URL or a billing page into one
-box; DevLedger works out what it is, shows you what it will do, and stores it
-encrypted on your own machine.
+**Every account, key and project a developer signs up for, on one map.**
+
+Which email owns which GitHub, Vercel and Supabase account. Which project uses
+which database. Where every API key lives, and what it all costs each month.
+DevLedger keeps it in one encrypted file on your own computer.
+
+- **Try it in your browser:** [devledger-six.vercel.app/demo](https://devledger-six.vercel.app/demo)
+  runs the real app on made-up sample data. Nothing is saved or sent anywhere.
+- **Download:** [latest release](https://github.com/jonjys/devledger/releases/latest)
+  for Windows, Linux and Android. Checksums and install notes are on
+  [the website](https://devledger-six.vercel.app/#download).
+
+![The DevLedger map](apps/desktop/web/public/screenshot-map.png)
 
 No cloud. No account. No telemetry. The only time DevLedger touches the network
 is when you explicitly connect or refresh a provider account, and even then it
 only ever reads.
 
-## Where the milestones stand
+## Installing
 
-| Milestone | Scope | State |
-| --- | --- | --- |
-| **M1** | Secure foundation: Argon2id, XChaCha20-Poly1305, zeroizing secret types, redaction and provenance, blind-index duplicate detection | Done — 19 tests |
-| **M2** | Deterministic Smart Paste: detectors, JWT claim inspection, subscription parsing, account/project inference, evidence levels | Done — 18 tests |
-| **M3** | Current stable Rust, Tauri v2 shell, SQLCipher persistence, unlock/onboarding, desktop shell, review sheet, Project Vault | Done — 22 Rust tests + 26 frontend tests |
-| **M4** | Multi-account separation, shared resources, project links, subscriptions and attention queue | Done |
-| **M5** | Read-only Supabase connector with explicit review before import | Done |
-| **M6** | Visual stack, manual quick-add flow and 20-service catalog | Done |
-| **Launch** | Overview dashboard, Indie/Dev display, skill-tree editing, secrets and attention views, installer release workflow | Done |
-| **0.9** | Manual-first from install: "+ Add" to type any word and say what it is (project, email, username, password, key, variable, own field), fields you name yourself, a Secrets page that includes account passwords | Done |
-| **0.8** | Hand entry for everything: several addresses per person, any service by name, login details, account passwords, per-environment variables, the Ledger view. Migration data-loss fix, connector routing fix, idle lock | Done |
+Every file on the release page is built by the
+[release workflow](https://github.com/jonjys/devledger/actions/workflows/release.yml)
+from the tagged source, and GitHub lists a SHA-256 next to each one.
 
-185 Rust tests and 110 TypeScript tests, plus a screenshot-based UI smoke test
-that drives the release binary through onboarding and into the Ledger.
+**Windows.** The installer is not code-signed yet, so the first run shows
+*"Windows protected your PC"*. That is about the missing signature; click
+**More info → Run anyway**. To check you have the file GitHub built:
 
-The launch build keeps the 0.6 ledger (encrypted vault, Smart Paste, Supabase connect, visual stack) and adds the shell it ships with: a sidebar, an Overview home screen, Indie versus Dev labels, and by-hand create, move and delete for accounts, resources and subscriptions.
+```powershell
+Get-FileHash .\DevLedger_0.12.0_x64-setup.exe -Algorithm SHA256
+```
+
+and compare it with the checksum on the release page or the website.
+
+**Linux.** `chmod +x` the `.AppImage` and run it, or install the `.deb`.
+**Android.** Install the `.apk` after allowing installs from your browser.
+**iPhone.** The `.ipa` is unsigned and needs a sideloading tool; see below.
+There is no macOS build yet.
+
+## Status
+
+Version 0.12. Pre-release software that has not had an independent security
+audit: the guarantees in [`docs/SECURITY.md`](docs/SECURITY.md) are the design
+intent, checked by the test suite and `scripts/security-check.sh`, not the
+result of external review. A forgotten passphrase cannot be recovered.
 
 ## Running it
 
@@ -75,6 +93,8 @@ crates/devledger-core/     Security, parsing and persistence. No UI, no network.
 crates/devledger-connect/  Connectors. The only crate that opens a socket.
 apps/desktop/src-tauri/    Tauri v2 shell: IPC commands and capability config.
 apps/desktop/src/          React + TypeScript frontend.
+apps/desktop/src/web/      Website only: demo backend, Tauri shims, landing script.
+apps/desktop/web/          Website pages. Built by vite.web.config.ts, deployed by vercel.json.
 scripts/security-check.sh  The invariants CI enforces on every push.
 docs/                      Architecture, threat model and decision records.
 ```
@@ -137,6 +157,10 @@ cargo test --workspace
 cd apps/desktop
 npm run typecheck
 npm test
+
+# The website: a landing page and the app running on in-memory sample data.
+npm run dev:web            # http://localhost:1430
+npm run build:web          # static site in apps/desktop/dist-web/, what Vercel serves
 
 # Boot the built app on a virtual display and screenshot each screen.
 # Linux only; needs xvfb, xdotool and imagemagick.

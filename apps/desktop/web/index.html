@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>DevLedger: every dev account, key and project on one map</title>
+    <meta
+      name="description"
+      content="A local, encrypted desktop app for developers: which email owns which GitHub, Vercel and Supabase account, which project uses what, where every API key lives and what it all costs. Try it in your browser."
+    />
+    <meta property="og:title" content="DevLedger" />
+    <meta
+      property="og:description"
+      content="Every dev account, key and project you've signed up for, on one map. Local and encrypted."
+    />
+    <meta property="og:image" content="/screenshot-map.png" />
+    <meta name="theme-color" content="#0b0d16" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><img src="/icon.png" alt="" width="28" height="28" />DevLedger</a>
+      <nav>
+        <a href="#how">How it works</a>
+        <a href="#security">Security</a>
+        <a href="#download">Download</a>
+        <a href="https://github.com/jonjys/devledger" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">For developers with too many accounts</p>
+        <h1>Every account, key and project you've signed up for, <span>on one map.</span></h1>
+        <p class="lede">
+          Which email owns which GitHub, Vercel and Supabase account. Which project uses which database.
+          Where every API key lives, and what it all costs each month. DevLedger keeps it in one encrypted
+          file on your own computer.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="/demo">Try it in your browser</a>
+          <a class="btn" href="#download">Download <span class="version" data-version></span></a>
+        </div>
+        <p class="fineprint">
+          The browser demo runs on made-up sample data. No sign-up, nothing is saved, nothing is sent anywhere.
+        </p>
+        <a class="shot" href="/demo" aria-label="Open the demo">
+          <img
+            src="/screenshot-map.png"
+            alt="The DevLedger map: an email in the middle, with GitHub, Vercel, Supabase and Stripe accounts around it and the projects that use them"
+            width="1440"
+            height="900"
+          />
+        </a>
+      </section>
+
+      <section id="how" class="section">
+        <h2>What it does</h2>
+        <div class="grid">
+          <article>
+            <h3>The map</h3>
+            <p>
+              Email → service account → organization → project, drawn as a map you can drag around. See at a
+              glance that three side projects share one Supabase account, or which login a forgotten repo lives
+              under.
+            </p>
+          </article>
+          <article>
+            <h3>A vault per project</h3>
+            <p>
+              Keys are filed where they belong: on the project, the database or the account. Copy one key, or
+              the whole project as a <code>.env</code> file for staging or production, without the value ever
+              being shown.
+            </p>
+          </article>
+          <article>
+            <h3>Smart Paste</h3>
+            <p>
+              Paste a <code>.env</code> file or a dashboard page and DevLedger finds the keys, project refs and
+              plans in it, tells you what it thinks they belong to and asks when it isn't sure. Nothing is saved
+              until you review it.
+            </p>
+          </article>
+          <article>
+            <h3>Subscriptions and trials</h3>
+            <p>Every plan with its price and renewal date, and a warning before a trial quietly turns into a bill.</p>
+          </article>
+          <article>
+            <h3>Needs attention</h3>
+            <p>
+              Keys filed against nothing, resources no project uses, an account with no email. The gaps in your
+              setup, listed instead of discovered at 2 a.m.
+            </p>
+          </article>
+          <article>
+            <h3>Connect Supabase</h3>
+            <p>
+              Optional: give DevLedger a Supabase access token and it reads your organizations and projects so
+              you don't type them in. It only sends read requests, and only when you press the button.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="security" class="section">
+        <h2>What happens to your data</h2>
+        <p class="section-lede">
+          Short version: it stays on your computer, encrypted, and DevLedger has no server to send it to.
+        </p>
+        <div class="grid two">
+          <article>
+            <h3>One encrypted file, on your machine</h3>
+            <p>
+              Everything lives in a single SQLCipher database. There is no DevLedger account, no cloud sync, no
+              tracking or usage reporting. Your passphrase is turned into a key with Argon2id (64 MiB, 3 passes)
+              and is never stored.
+            </p>
+          </article>
+          <article>
+            <h3>Keys are sealed twice</h3>
+            <p>
+              On top of the database encryption, every key is sealed on its own with XChaCha20-Poly1305. The
+              interface only ever receives a masked preview like <code>sk_t…3333</code>; the full value is
+              returned only when you press Reveal.
+            </p>
+          </article>
+          <article>
+            <h3>Copy without showing</h3>
+            <p>
+              Copy puts a key straight on the clipboard from the encrypted core, without it passing through the
+              interface, and clears the clipboard again after 30 seconds.
+            </p>
+          </article>
+          <article>
+            <h3>Locks itself</h3>
+            <p>
+              After 15 minutes without use the vault locks, the keys are dropped from memory and the clipboard
+              is cleared. There is no passphrase recovery: lose it and the data is gone, by design.
+            </p>
+          </article>
+          <article>
+            <h3>The network, only when you ask</h3>
+            <p>
+              The app window itself cannot reach the internet. The only outgoing traffic is to Supabase's API,
+              when you press Connect or Refresh: read requests, to an allowlisted host.
+            </p>
+          </article>
+          <article>
+            <h3>What it can't protect you from</h3>
+            <p>
+              Malware on your computer while the vault is unlocked. A forgotten passphrase. It is early
+              software and has not had an independent security audit. The full threat model is
+              <a href="https://github.com/jonjys/devledger/blob/main/docs/SECURITY.md" target="_blank" rel="noreferrer"
+                >on GitHub</a
+              >.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="download" class="section">
+        <h2>Download</h2>
+        <p class="section-lede">
+          <span data-release-line>The latest release is on GitHub.</span>
+          Free. Every file below is built by GitHub Actions straight from the public source code, and the build
+          logs are
+          <a href="https://github.com/jonjys/devledger/actions/workflows/release.yml" target="_blank" rel="noreferrer"
+            >public</a
+          >.
+        </p>
+
+        <div class="notice">
+          <h3>Before you run the Windows installer</h3>
+          <p>
+            The installer is not code-signed yet (a signing certificate is on the way). Until it is, Windows
+            shows a blue <em>“Windows protected your PC”</em> box the first time. That warning is about the
+            missing signature, not something found in the file. To continue, click <strong>More info</strong> →
+            <strong>Run anyway</strong>.
+          </p>
+          <p>Want to be sure you got the exact file GitHub built? Compare its checksum with the one listed below:</p>
+          <pre><code><span class="dim"># Windows (PowerShell)</span>
+Get-FileHash .\DevLedger_<span data-version-bare>x.y.z</span>_x64-setup.exe -Algorithm SHA256
+
+<span class="dim"># Linux</span>
+sha256sum DevLedger_<span data-version-bare>x.y.z</span>_amd64.AppImage</code></pre>
+          <p>Not ready to install anything? <a href="/demo">Try the demo first</a>, it is the same app.</p>
+        </div>
+
+        <div class="downloads" data-downloads>
+          <p>
+            <a class="btn primary" href="https://github.com/jonjys/devledger/releases/latest">
+              Open the latest release on GitHub
+            </a>
+          </p>
+        </div>
+
+        <div class="grid two platforms">
+          <article>
+            <h3>Windows</h3>
+            <p>
+              The <code>-setup.exe</code> installs for your user only and needs no admin rights. The
+              <code>.msi</code> is the same app for managed installs.
+            </p>
+          </article>
+          <article>
+            <h3>Linux</h3>
+            <p>The <code>.AppImage</code> runs anywhere (<code>chmod +x</code> it first); the <code>.deb</code> is for Debian and Ubuntu.</p>
+          </article>
+          <article>
+            <h3>Android</h3>
+            <p>Install the <code>.apk</code> after allowing installs from your browser. Early, but it is the full app.</p>
+          </article>
+          <article>
+            <h3>iPhone and Mac</h3>
+            <p>
+              Not in the App Store yet, and there is no Mac build yet. The <code>.ipa</code> is unsigned and only
+              installs with a sideloading tool. Until then, the browser demo runs on any device (the map is easiest on a bigger screen).
+            </p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>DevLedger · built in the open</span>
+      <span>
+        <a href="https://github.com/jonjys/devledger" target="_blank" rel="noreferrer">Source</a>
+        <a href="https://github.com/jonjys/devledger/issues" target="_blank" rel="noreferrer">Report a problem</a>
+        <a href="https://github.com/jonjys/devledger/releases" target="_blank" rel="noreferrer">All releases</a>
+      </span>
+    </footer>
+
+    <script type="module" src="../src/web/site/landing.ts"></script>
+  </body>
+</html>
