@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --config vite.web.config.ts",
     "build": "vite build",
+    "build:web": "vite build --config vite.web.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
