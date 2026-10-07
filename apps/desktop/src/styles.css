@@ -1449,3 +1449,61 @@ select option { background: var(--panel); color: var(--text); }
   background: #0A0A0A; color: #E5E5E5; border: 1px solid #2A2A2A; border-radius: 6px;
   padding: 5px 8px; font: inherit; color-scheme: dark;
 }
+
+/* The tab bar's short labels exist for phones only. */
+.nav-short { display: none; }
+
+/* ---- phone: the map, the tab bar and the paste bar ----------------------------
+   Below 800px the shell is a phone app (iPhone, Android, the browser demo). The
+   map gets the full width; the side panel moves under it and only takes room
+   when there is something in it: the palette while editing, or the details of
+   the ball you tapped. Every tab fits in the bar without sideways scrolling. */
+@media (max-width: 800px) {
+  .nav-group { flex: 1 1 auto; }
+  .side-nav { overflow-x: auto; }
+  .nav-item {
+    flex: 1 1 0;
+    min-width: 46px;
+    padding: 6px 2px;
+  }
+  .nav-label { font-size: 9.5px; white-space: nowrap; }
+  /* The full name stays for screen readers; the short one is what fits. */
+  .nav-label.has-short {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .nav-short { display: block; }
+  table.secrets { display: block; overflow-x: auto; }
+  table.secrets td, table.secrets th { white-space: nowrap; }
+  .side-foot { padding-top: 2px; }
+  .lock-btn { padding: 3px 10px; font-size: 11.5px; }
+
+  .pastebar { padding: 8px 10px; }
+  .pastebar-icon { display: none; }
+  .pastebar-input { white-space: nowrap; overflow: hidden; font-size: 12px; padding: 8px 10px; }
+  .pastebar .analyze { padding: 7px 10px; }
+
+  .ledger-canvas { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .ledger-canvas.focus { height: 70vh; }
+  .cv-shelf, .ledger-canvas .cv-details {
+    height: auto; max-height: 36vh;
+    border-left: 0; border-top: 1px solid #1F1F1F;
+  }
+  /* Locked, the palette only says "the layout is locked": the map needs the room. */
+  .ledger-canvas.locked .cv-shelf { display: none; }
+
+  .ledger-view.map .ledger-switch, .ledger-switch { right: 10px; top: 10px; }
+  .ledger-switch button { padding: 5px 9px; }
+  .cv-toolbar { left: 10px; right: 120px; top: 10px; gap: 6px; flex-wrap: wrap; }
+  .cv-toolbar button { padding: 5px 9px; font-size: 11.5px; white-space: nowrap; }
+  .cv-toolbar kbd { display: none; }
+  .ledger-list-pane { padding: 54px 12px 40px; }
+
+  /* Above the tab bar, not on top of it. */
+  .toast {
+    bottom: calc(118px + env(safe-area-inset-bottom));
+    width: calc(100% - 24px); max-width: 420px; text-align: center;
+  }
+  .vp-bar { flex-wrap: wrap; justify-content: space-between; }
+  .vp-find { order: 3; flex: 1 1 100%; max-width: none; }
+}
