@@ -45,12 +45,15 @@
           The browser demo runs on made-up sample data. No sign-up, nothing is saved, nothing is sent anywhere.
         </p>
         <a class="shot" href="/demo" aria-label="Open the demo">
-          <img
+          <picture>
+            <source media="(max-width: 600px)" srcset="/screenshot-phone.png" width="780" height="1560" />
+            <img
             src="/screenshot-map.png"
             alt="The DevLedger map: an email in the middle, with GitHub, Vercel, Supabase and Stripe accounts around it and the projects that use them"
             width="1440"
             height="900"
           />
+          </picture>
         </a>
       </section>
 

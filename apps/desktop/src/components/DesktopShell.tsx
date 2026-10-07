@@ -33,6 +33,8 @@ type BadgeKind = "trials" | "attention";
 interface NavItem {
   id: View;
   label: string;
+  /** What the phone tab bar shows when the full label does not fit. */
+  short?: string;
   icon: IconName;
   badge?: BadgeKind;
 }
@@ -44,17 +46,17 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { id: "projects", label: "Projects", icon: "projects" },
       { id: "ledger", label: "Ledger", icon: "ledger" },
       { id: "overview", label: "Overview", icon: "overview" },
-      { id: "connections", label: "Connections", icon: "connections" },
+      { id: "connections", label: "Connections", short: "Services", icon: "connections" },
     ],
   },
   {
     section: "Finance",
-    items: [{ id: "subscriptions", label: "Subscriptions", icon: "subscriptions", badge: "trials" }],
+    items: [{ id: "subscriptions", label: "Subscriptions", short: "Billing", icon: "subscriptions", badge: "trials" }],
   },
   { section: "Vault", items: [{ id: "secrets", label: "Secrets", icon: "secrets" }] },
   {
     section: "Alerts",
-    items: [{ id: "attention", label: "Needs attention", icon: "attention", badge: "attention" }],
+    items: [{ id: "attention", label: "Needs attention", short: "Alerts", icon: "attention", badge: "attention" }],
   },
 ];
 
@@ -290,7 +292,12 @@ function DesktopShellInner({ onLock }: Props) {
                     <span className="nav-icon">
                       <Icon name={item.icon} />
                     </span>
-                    <span className="nav-label">{item.label}</span>
+                    <span className={`nav-label${item.short ? " has-short" : ""}`}>{item.label}</span>
+                    {item.short && (
+                      <span className="nav-label nav-short" aria-hidden="true">
+                        {item.short}
+                      </span>
+                    )}
                     {count > 0 && (
                       <span
                         className={`nav-badge${item.badge === "attention" ? " alert" : ""}${
