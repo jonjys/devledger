@@ -118,6 +118,9 @@ connectors can make outbound HTTPS requests from Rust, only after the user
 presses Connect or Refresh. The current build ships a Supabase connector;
 catalog entries without a native connector remain manual-entry shortcuts.
 
+The optional AI assistant is the one other source of traffic, and it is off
+until the user adds their own Anthropic API key. See below.
+
 `scripts/security-check.sh` checks that HTTP dependencies stay confined to the
 connector crate and that no secret-returning IPC command has been added without
 an explicit review point.
@@ -125,6 +128,39 @@ an explicit review point.
 The Tauri capability file grants only window controls and `clipboard-manager:
 allow-write-text`. There is no filesystem, shell, process or HTTP permission.
 The CSP names no remote origin and forbids `unsafe-eval`.
+
+## The AI assistant
+
+The assistant is optional and off by default. Switching it on means pasting an
+Anthropic API key; DevLedger checks it with one read of Anthropic's model list
+and seals it with the vault AEAD key, under its own associated data, in a
+`settings` table. It is never returned over IPC; Rust reads it for the length
+of one request and hands it to `devledger-connect`.
+
+What a question sends is built in `devledger-core::assistant` from metadata,
+and the user can read the exact text before sending it ("What is sent?"):
+
+- **Never sent:** secret values, their masked previews, notes on anything, and
+  custom fields. The outline module may not even name these;
+  `scripts/security-check.sh` fails if it reads a preview, a value or a note.
+- **Replaced:** every email address becomes a placeholder (`<email-1>`) before
+  sending, and the real address is put back into the answer on the user's
+  machine.
+- **Swept:** the finished text, including anything typed into a question, goes
+  through the same credential sweep as stored provenance, so a key pasted into
+  a question or a label is cut out.
+- **Sent:** names of people, accounts, organizations, resources, projects and
+  keys, how they connect, environments, regions, key kinds, recorded plans and
+  prices, and the gaps DevLedger flagged.
+
+The request goes to `api.anthropic.com` only: it is checked against a one-host
+allowlist, redirects are refused, and the security check fails if the
+allowlist grows. It is the only `POST` in the codebase. The user's account with
+Anthropic sees what is sent under Anthropic's own data terms.
+
+The browser demo on the website runs the assistant through a small serverless
+function holding the site's own key. It only accepts an outline in the demo's
+shape, rate-limits visitors, and only ever sees the demo's invented data.
 
 ## Key hierarchy
 

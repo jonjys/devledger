@@ -4,16 +4,17 @@
 //! separate from `devledger-core` means the crate that holds key material has
 //! no HTTP client at all, which `scripts/security-check.sh` verifies.
 //!
-//! Everything here is read-only and explicit:
+//! Everything here is explicit, and the connectors are read-only:
 //!
-//! - Only `GET` requests are issued. There is no code path that writes to a
-//!   provider.
+//! - Connectors only issue `GET` requests. There is no code path that writes
+//!   to a provider. The one `POST` in the crate is the AI assistant's question
+//!   to the Claude API ([`assistant`]), which writes nothing anywhere either.
 //! - Every request is checked against a per-connector host allowlist before a
 //!   connection is opened, so a malformed or tampered base URL cannot redirect
 //!   a credential somewhere else.
 //! - Redirects are refused, for the same reason.
-//! - A request only happens because the user pressed Connect, Refresh or
-//!   Discover. Nothing polls, and nothing is sent anywhere on startup.
+//! - A request only happens because the user pressed Connect, Refresh,
+//!   Discover or asked the assistant something. Nothing polls, and nothing is sent anywhere on startup.
 //!
 //! The network-facing surface is deliberately thin: a fetch, then pure parsing
 //! functions that the tests exercise directly without a mock server.
@@ -21,6 +22,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod assistant;
 pub mod supabase;
 
 use std::time::Duration;
@@ -68,6 +70,10 @@ pub enum ConnectError {
     /// A URL outside the connector's allowlist was constructed.
     #[error("refused to contact {0}: it is not an allowed host for this connector")]
     HostNotAllowed(String),
+
+    /// The model declined to answer.
+    #[error("{0}")]
+    Declined(String),
 
     /// A connector id with no implementation behind it.
     ///

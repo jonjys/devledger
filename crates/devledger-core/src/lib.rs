@@ -14,6 +14,7 @@
 //! - [`model`] -- Identity / Account / Organization / Project and relations
 //! - [`redact`] -- provenance capture with secrets stripped
 //! - [`paste`] -- the deterministic Smart Paste pipeline
+//! - [`assistant`] -- the metadata-only outline the AI assistant is allowed to send
 //! - [`connect`] -- Connect & Discover: connector descriptors, discovery
 //!   snapshots and reconciliation. Defines no I/O; the `devledger-connect`
 //!   crate does the fetching and hands back a snapshot.
@@ -21,6 +22,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod assistant;
 pub mod connect;
 pub mod connect_vault;
 pub mod crypto;

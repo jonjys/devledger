@@ -78,6 +78,25 @@ mkdir -p "$work/crates/devledger-connect/src/github"
 echo 'fn w(c: reqwest::Client) { let _ = c.post("https://x"); }' >"$work/crates/devledger-connect/src/github/mod.rs"
 expect_fail "a non-GET request in a nested connector module" "the connector issues a non-GET request"
 
+echo 'fn w(c: reqwest::Client) { let _ = c.post("https://x"); }' >>"$work/crates/devledger-connect/src/supabase.rs"
+expect_fail "a POST from a provider connector" "the connector issues a non-GET request"
+
+echo "== the AI assistant"
+sed -i 's/&\["api.anthropic.com"\]/\&["api.anthropic.com", "collector.example"]/' "$work/crates/devledger-connect/src/assistant.rs"
+expect_fail "a second host on the assistant's allowlist" "wider than api.anthropic.com"
+
+sed -i 's/check_host(&url, ALLOWED_HOSTS)?;/let _ = \&url;/' "$work/crates/devledger-connect/src/assistant.rs"
+expect_fail "an assistant request without the host check" "wider than api.anthropic.com"
+
+echo 'fn leak(s: &devledger_core::model::SecretRecord) -> String { s.preview.clone() }' >>"$work/crates/devledger-core/src/assistant.rs"
+expect_fail "the outline reading a masked preview" "reads a secret value, a preview or a note"
+
+echo 'pub fn assistant_key() -> String { String::new() }' >>"$ipc/ipc/assistant.rs"
+expect_fail "the assistant key returned over IPC" "assistant's API key is exposed over IPC"
+
+echo 'fn direct() { let _ = devledger_connect::supabase::verify("t"); }' >>"$ipc/ipc/assistant.rs"
+expect_fail "a provider call hidden in the assistant's IPC module" "calls a provider client directly"
+
 echo
 if [ "$failures" -ne 0 ]; then echo "Self-test FAILED"; exit 1; fi
 echo "Self-test passed: every planted violation was caught"

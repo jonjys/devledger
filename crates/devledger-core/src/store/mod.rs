@@ -20,6 +20,7 @@ mod relations;
 mod rows;
 mod secrets;
 mod service_projects;
+mod settings;
 mod subscriptions;
 mod types;
 

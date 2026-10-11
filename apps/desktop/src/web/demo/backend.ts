@@ -38,6 +38,7 @@ import type {
   VaultEntry,
 } from "../../lib/types";
 
+import { buildOutline, restore, type DemoTask } from "./outline";
 import { maskPreview, newId, now, seed, type DemoDb } from "./seed";
 
 /** What the shim throws: the same `{code, message}` the Rust side sends. */
@@ -67,6 +68,57 @@ export function reset() {
   db = seed();
   unlocked = true;
   audit = [];
+}
+
+/** How the demo reaches the assistant: the site's own function, which holds the API key. */
+export interface AssistantReply {
+  text: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  truncated: boolean;
+}
+let assistantTransport: (task: string, user: string) => Promise<AssistantReply> = async (task, user) => {
+  const res = await fetch("/api/assistant", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ task, user }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Partial<AssistantReply> & { error?: string };
+  if (!res.ok) fail("assistant", body.error ?? `The assistant is not available right now (HTTP ${res.status}).`);
+  return body as AssistantReply;
+};
+export function setAssistantTransport(send: typeof assistantTransport) {
+  assistantTransport = send;
+}
+
+export const ASSISTANT_KEY_DEMO =
+  "In this demo the assistant runs on DevLedger's own key, so there is nothing to set. In the desktop app it uses your Anthropic key, sealed in your vault.";
+
+function demoTask(a: Args): DemoTask {
+  if (a.task === "review") return { task: "review" };
+  if (a.task === "leak") return { task: "leak", secretId: String(a.secretId ?? "") };
+  return { task: "ask", question: String(a.question ?? "") };
+}
+
+function prepareOutline(a: Args) {
+  try {
+    return buildOutline(
+      {
+        people: overview(),
+        projects: commands.list_projects!({}) as ProjectSummary[],
+        resources: [...db.resources].sort(byName).map(resourceSummary),
+        secrets: commands.list_all_secrets!({}) as SecretListing[],
+        subscriptions: subscriptions(),
+        worksOn: db.worksOn,
+        attention: needsAttention(),
+      },
+      demoTask(a),
+      String(a.language ?? "en"),
+    );
+  } catch (e) {
+    return invalid(e instanceof Error ? e.message : String(e));
+  }
 }
 
 /** Copy text to the clipboard, the way Rust does for the desktop app. */
@@ -483,6 +535,20 @@ const commands: Record<string, (a: Args) => unknown> = {
   connector_report: () => invalid(CONNECT_DESKTOP_ONLY),
   connector_import: () => invalid(CONNECT_DESKTOP_ONLY),
   connector_disconnect: () => invalid(CONNECT_DESKTOP_ONLY),
+
+  // the assistant: the demo's runs on the site's key, with the same outline rules
+  assistant_status: () => ({ enabled: true, model: "claude-opus-5-5" }),
+  assistant_set_key: () => invalid(ASSISTANT_KEY_DEMO),
+  assistant_clear_key: () => invalid(ASSISTANT_KEY_DEMO),
+  assistant_preview: (a) => {
+    const prepared = prepareOutline(a);
+    return { system: "(DevLedger's fixed instructions)", user: prepared.user, addresses_hidden: prepared.placeholders.length };
+  },
+  assistant_ask: async (a) => {
+    const prepared = prepareOutline(a);
+    const reply = await assistantTransport(String(a.task), prepared.user);
+    return { ...reply, text: restore(reply.text, prepared.placeholders) };
+  },
 
   // reading
   ledger_overview: overview,

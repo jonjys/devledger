@@ -5,7 +5,7 @@
 
 import * as api from "../../lib/api";
 import apiSource from "../../lib/api.ts?raw";
-import { DEMO_COMMANDS, handle, reset, setClipboard } from "./backend";
+import { DEMO_COMMANDS, handle, reset, setAssistantTransport, setClipboard } from "./backend";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => handle(command, args),
@@ -102,5 +102,30 @@ describe("demo backend", () => {
     const [p] = await api.listProjects();
     p!.project.name = "changed";
     expect((await api.listProjects()).some((x) => x.project.name === "changed")).toBe(false);
+  });
+
+  it("sends the assistant an outline with no values, previews or addresses", async () => {
+    const secrets = await api.listAllSecrets();
+    const preview = await api.assistantPreview({ task: "review" });
+    for (const { entry } of secrets) {
+      expect(preview.user).not.toContain(await api.revealSecret(entry.secret.id));
+      expect(preview.user).not.toContain(entry.secret.preview);
+    }
+    expect(preview.user).not.toMatch(/@example\.(com|org)/);
+    expect(preview.user).toContain("STRIPE_SECRET_KEY");
+    expect(preview.addresses_hidden).toBeGreaterThan(0);
+  });
+
+  it("asks through the site and puts the real addresses back", async () => {
+    // Built at run time so the source never holds a key-shaped string.
+    const pasted = ["sk", "live", "FAKE0000DEMO1111TEST2222"].join("_");
+    let sent = "";
+    setAssistantTransport(async (_task, user) => {
+      sent = user;
+      return { text: "Move it off <email-1>.", model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, truncated: false };
+    });
+    const answer = await api.assistantAsk({ task: "ask", question: `Is ${pasted} safe?` });
+    expect(sent).not.toContain(pasted);
+    expect(answer.text).toMatch(/Move it off \S+@example\.(com|org)\./);
   });
 });

@@ -14,9 +14,17 @@ DevLedger keeps it in one encrypted file on your own computer.
 
 ![The DevLedger map](apps/desktop/web/public/screenshot-map.png)
 
-No cloud. No account. No telemetry. The only time DevLedger touches the network
-is when you explicitly connect or refresh a provider account, and even then it
-only ever reads.
+**New in 0.13: an AI assistant that never sees a key.** Add your own Anthropic
+API key and ask DevLedger to review your setup, plan the rotation of a leaked
+key, or answer questions about what is connected to what. Only names and
+connections are sent: never a key value or a preview of one, never a note, and
+every email address is swapped for a placeholder that is put back on your
+machine. "What is sent?" shows the exact text first. Details in
+[`docs/SECURITY.md`](docs/SECURITY.md#the-ai-assistant).
+
+No cloud. No account. No telemetry. DevLedger only touches the network when you
+press a button: Connect or Refresh on a provider account (read requests only),
+or a question to the assistant, if you switched it on.
 
 ## Installing
 
@@ -29,7 +37,7 @@ from the tagged source, and GitHub lists a SHA-256 next to each one.
 **More info → Run anyway**. To check you have the file GitHub built:
 
 ```powershell
-Get-FileHash .\DevLedger_0.12.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\DevLedger_0.13.0_x64-setup.exe -Algorithm SHA256
 ```
 
 and compare it with the checksum on the release page or the website.
@@ -41,7 +49,7 @@ There is no macOS build yet.
 
 ## Status
 
-Version 0.12. Pre-release software that has not had an independent security
+Version 0.13. Pre-release software that has not had an independent security
 audit: the guarantees in [`docs/SECURITY.md`](docs/SECURITY.md) are the design
 intent, checked by the test suite and `scripts/security-check.sh`, not the
 result of external review. A forgotten passphrase cannot be recovered.

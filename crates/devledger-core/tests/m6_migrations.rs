@@ -293,3 +293,32 @@ fn upgrading_to_v6_keeps_every_field_and_lets_organizations_carry_them() {
     store.delete_organization(org.id).expect("delete");
     assert!(store.custom_fields_for(&entity).expect("fields").is_empty());
 }
+
+#[test]
+fn upgrading_to_v7_adds_settings_and_touches_nothing_else() {
+    let mut store = Store::open_in_memory_at_version(&key(), 6).expect("v6 database");
+    store
+        .execute_batch_for_test(
+            "INSERT INTO identities (id, label, email, email_blind_index, created_at)
+                 VALUES ('11111111-0000-4000-8000-000000000000', 'me', NULL, NULL, '2026-01-01T00:00:00Z');",
+        )
+        .expect("v6 rows");
+    store.migrate_now().expect("upgrade");
+
+    assert_eq!(
+        store
+            .scalar_for_test("SELECT count(*) FROM identities")
+            .unwrap(),
+        1,
+        "existing rows survive"
+    );
+    assert_eq!(store.setting("anything").expect("read"), None);
+    store.set_setting("k", b"sealed bytes").expect("write");
+    store.set_setting("k", b"replaced").expect("overwrite");
+    assert_eq!(
+        store.setting("k").expect("read").as_deref(),
+        Some(&b"replaced"[..])
+    );
+    assert!(store.delete_setting("k").expect("delete"));
+    assert!(!store.delete_setting("k").expect("second delete is a no-op"));
+}

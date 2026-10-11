@@ -21,10 +21,10 @@
 //! letting it look like a working vault.
 
 /// The schema version this build expects.
-pub const CURRENT_VERSION: i64 = 6;
+pub const CURRENT_VERSION: i64 = 7;
 
 /// Ordered migration steps. Index `n` upgrades the database to version `n + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
 
 const V1: &str = r#"
 CREATE TABLE identities (
@@ -546,4 +546,17 @@ BEGIN
     DELETE FROM custom_fields
      WHERE entity_kind = 'service_project' AND entity_id = OLD.id;
 END;
+"#;
+
+/// Version 7: a small key-value table for vault-wide settings.
+///
+/// Its first use is the AI assistant's API key, which is sealed with the vault
+/// AEAD key before it is written, exactly like a connector's credential. Only
+/// a new table: nothing existing is touched, so the upgrade cannot lose data.
+const V7: &str = r#"
+CREATE TABLE settings (
+    key        TEXT PRIMARY KEY,
+    value      BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);
 "#;

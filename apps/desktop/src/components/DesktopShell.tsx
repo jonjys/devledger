@@ -6,6 +6,7 @@ import { ModeProvider, useMode } from "../lib/mode";
 import { trialsFrom } from "../lib/overview";
 import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/types";
 
+import AssistantView from "./AssistantView";
 import AttentionView from "./AttentionView";
 import ConnectionsView from "./ConnectionsView";
 import OverviewView from "./OverviewView";
@@ -18,6 +19,7 @@ import SmartPasteBar from "./SmartPasteBar";
 import SubscriptionsView from "./SubscriptionsView";
 
 type View =
+  | "assistant"
   | "overview"
   | "ledger"
   | "projects"
@@ -45,6 +47,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { id: "projects", label: "Projects", icon: "projects" },
       { id: "ledger", label: "Ledger", icon: "ledger" },
+      { id: "assistant", label: "Assistant", short: "AI", icon: "assistant" },
       { id: "overview", label: "Overview", icon: "overview" },
       { id: "connections", label: "Connections", short: "Services", icon: "connections" },
     ],
@@ -123,6 +126,13 @@ function Icon({ name }: { name: IconName }) {
           <path d="M20 12v3" />
         </svg>
       );
+    case "assistant":
+      return (
+        <svg {...common}>
+          <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" />
+          <path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" />
+        </svg>
+      );
     case "attention":
       return (
         <svg {...common}>
@@ -181,6 +191,7 @@ function DesktopShellInner({ onLock }: Props) {
   const [toast, setToast] = useState<{ text: string; bad: boolean } | null>(null);
   // Projects is the start page.
   const [view, setView] = useState<View>("projects");
+  const [leakId, setLeakId] = useState<string | null>(null);
   // The project a paste was made inside, so the review files it there.
   const [pasteTarget, setPasteTarget] = useState<string | null>(null);
   const [attentionCount, setAttentionCount] = useState(0);
@@ -400,7 +411,18 @@ function DesktopShellInner({ onLock }: Props) {
             <SubscriptionsView onNotify={notify} onChanged={refresh} />
           )}
 
-          {view === "secrets" && <SecretsView onNotify={notify} refreshKey={refreshKey} />}
+          {view === "secrets" && (
+            <SecretsView
+              onNotify={notify}
+              refreshKey={refreshKey}
+              onLeak={(id) => {
+                setLeakId(id);
+                setView("assistant");
+              }}
+            />
+          )}
+
+          {view === "assistant" && <AssistantView onNotify={notify} leakSecretId={leakId} />}
 
           {view === "attention" && (
             <AttentionView onNotify={notify} refreshKey={refreshKey} onChanged={refresh} />
