@@ -1507,3 +1507,71 @@ select option { background: var(--panel); color: var(--text); }
   .vp-bar { flex-wrap: wrap; justify-content: space-between; }
   .vp-find { order: 3; flex: 1 1 100%; max-width: none; }
 }
+
+/* ---- costs: what it all adds up to ------------------------------------------------
+   One hero number (this month so far, ticking), a row of tiles, and a bar per
+   service in a single hue: the bars compare size, so they do not need colours. */
+.subs-tabs { margin: -6px 0 16px; }
+.costs { max-width: 920px; }
+.costs-hero { padding: 22px 24px; display: flex; flex-direction: column; gap: 8px; }
+.costs-hero-num {
+  font-size: 54px; font-weight: 750; letter-spacing: -0.025em; line-height: 1.05;
+  color: var(--text);
+}
+.costs-tail { font-size: 22px; font-weight: 600; color: var(--text-faint); letter-spacing: 0; margin-left: 1px; }
+.costs-rate { color: var(--text-dim); font-size: 13.5px; }
+.costs-month { height: 6px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; margin-top: 6px; }
+.costs-month span { display: block; height: 100%; background: var(--accent); border-radius: 0 3px 3px 0; }
+.costs-tiles .stat-num { font-size: 22px; }
+.costs-bars h3, .costs-other h3 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--text-dim); }
+.costs-bars ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.costs-bars li { display: grid; grid-template-columns: 130px 1fr auto; align-items: center; gap: 12px; }
+.costs-bar-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.costs-bar-track { height: 14px; display: flex; }
+.costs-bar {
+  height: 14px; background: var(--accent); border-radius: 0 4px 4px 0;
+  transition: width 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: costs-grow 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: left center;
+}
+.costs-bar-value { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text); min-width: 80px; text-align: right; }
+.costs-other { margin-top: 22px; }
+@keyframes costs-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .costs-bar { animation: none; transition: none; }
+}
+@media (max-width: 800px) {
+  .costs-hero-num { font-size: 40px; }
+  .costs-tail { font-size: 17px; }
+  .costs-bars li { grid-template-columns: 90px 1fr auto; gap: 8px; }
+  .costs-bar-value { min-width: 64px; }
+}
+
+/* ---- threads on the map ---------------------------------------------------------
+   A faint thread drifts along every line; a tapped ball's chain carries sparks;
+   a freshly drawn line spins out like silk. All of it stops for reduced motion. */
+.ledger-canvas .cv-thread {
+  stroke: #E5E5E5; stroke-opacity: 0.22; stroke-width: 1.4; stroke-linecap: round;
+  stroke-dasharray: 1.5 13; animation: cv-thread-flow 2.4s linear infinite;
+}
+.ledger-canvas .cv-thread.reverse { animation-direction: reverse; }
+.ledger-canvas .cv-thread.lit {
+  stroke: #FFD39A; stroke-opacity: 0.85; stroke-width: 2; stroke-dasharray: 3 11;
+  animation-duration: 0.9s;
+}
+.ledger-canvas .cv-spark { fill: #FFE7C2; filter: drop-shadow(0 0 4px #FF8C00) drop-shadow(0 0 8px rgba(255, 140, 0, 0.6)); }
+.ledger-canvas .cv-silk {
+  stroke: #FFD39A; stroke-width: 2.5; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: cv-silk-spin 0.7s cubic-bezier(0.3, 0.7, 0.3, 1) forwards, cv-silk-fade 0.6s ease 0.8s forwards;
+}
+.ledger-canvas .cv-spinner {
+  fill: #FFFFFF; filter: drop-shadow(0 0 6px #FF8C00) drop-shadow(0 0 12px rgba(255, 140, 0, 0.7));
+  animation: cv-silk-fade 0.5s ease 0.75s forwards;
+}
+@keyframes cv-thread-flow { to { stroke-dashoffset: -14.5; } }
+@keyframes cv-silk-spin { to { stroke-dashoffset: 0; } }
+@keyframes cv-silk-fade { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ledger-canvas .cv-thread, .ledger-canvas .cv-spark, .ledger-canvas .cv-silk, .ledger-canvas .cv-spinner { display: none; }
+}

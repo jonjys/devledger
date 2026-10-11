@@ -286,7 +286,7 @@ export function seed(): DemoDb {
   };
   sub(vercel, "Pro", "active", 2000);
   sub(supabase, "Pro", "active", 2500);
-  sub(sideOpenAi, "Pay as you go", "trialing", null, 9);
+  sub(sideOpenAi, "Plus", "trialing", 2000, 9);
   sub(sideSupabase, "Free", "free", null);
 
   return db;

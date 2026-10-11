@@ -5,6 +5,7 @@ import { formatTime, providerLabel } from "../lib/format";
 import { useMode } from "../lib/mode";
 import type { BillingInterval, SubscriptionStatus, SubscriptionSummary } from "../lib/types";
 
+import CostsPanel from "./CostsPanel";
 import Modal from "./Modal";
 
 interface Props {
@@ -40,6 +41,7 @@ export default function SubscriptionsView({ onNotify, onChanged }: Props) {
   const [rows, setRows] = useState<SubscriptionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [tab, setTab] = useState<"list" | "costs">("list");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,8 +85,31 @@ export default function SubscriptionsView({ onNotify, onChanged }: Props) {
         </div>
       </div>
 
+      <div className="tabs subs-tabs" role="tablist" aria-label="Subscriptions view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "list"}
+          className={tab === "list" ? "active" : ""}
+          onClick={() => setTab("list")}
+        >
+          Subscriptions
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "costs"}
+          className={tab === "costs" ? "active" : ""}
+          onClick={() => setTab("costs")}
+        >
+          Costs
+        </button>
+      </div>
+
       {loading ? (
         <div className="empty">Loading…</div>
+      ) : tab === "costs" ? (
+        <CostsPanel rows={rows} />
       ) : rows.length === 0 ? (
         <div className="empty">
           <p style={{ margin: 0, fontWeight: 600 }}>No subscriptions recorded</p>

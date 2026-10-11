@@ -189,6 +189,24 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     });
   }, [balls, place, selected, lit, renaming, locked, onRename]);
 
+  // Lines that just appeared because the user drew them get the spinning-silk
+  // entrance. A reload or a switch of view brings many lines at once; those
+  // simply appear.
+  const seenLines = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const keys = new Set(lines.map((l) => l.key));
+    const before = seenLines.current;
+    seenLines.current = keys;
+    if (!before) return;
+    const added = [...keys].filter((k) => !before.has(k));
+    if (!added.length || added.length > 3) return;
+    setFresh(new Set(added));
+    const t = window.setTimeout(() => setFresh(new Set()), 1400);
+    return () => window.clearTimeout(t);
+  }, [lines]);
+  const moving = useMemo(() => motion(1) > 0, []);
+
   const edges: Edge<LineData>[] = useMemo(
     () =>
       lines.map((l) => ({
@@ -204,9 +222,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           lit: lit !== null && lit.has(l.source) && lit.has(l.target),
           dim: lit !== null && !(lit.has(l.source) && lit.has(l.target)),
           selected: selectedLine === l.key,
+          fresh: fresh.has(l.key),
+          moving,
         },
       })),
-    [lines, lit, selectedLine],
+    [lines, lit, selectedLine, fresh, moving],
   );
 
   // Bring the whole map into view when it first has something on it. A

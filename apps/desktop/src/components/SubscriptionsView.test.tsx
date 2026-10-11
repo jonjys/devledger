@@ -84,4 +84,17 @@ describe("Subscriptions screen", () => {
 
     await waitFor(() => expect(mocked.deleteSubscription).toHaveBeenCalledWith("sub-1"));
   });
+
+  it("adds the costs up on their own tab, ticking through the month", async () => {
+    mocked.listSubscriptions.mockResolvedValue([
+      summary({ id: "a", plan: "Pro", amount_cents: 2000 }),
+      summary({ id: "b", plan: "Team", amount_cents: 12000, interval: "yearly" }),
+    ]);
+    const user = userEvent.setup();
+    render(<SubscriptionsView onNotify={vi.fn()} />);
+    await user.click(await screen.findByRole("tab", { name: "Costs" }));
+    expect(screen.getByText("Per month").nextSibling).toHaveTextContent("$30.00");
+    expect(screen.getByText("Per year").nextSibling).toHaveTextContent("$360.00");
+    expect(screen.getByText(/Spent so far in/)).toBeInTheDocument();
+  });
 });

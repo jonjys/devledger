@@ -169,19 +169,58 @@ export interface LineData extends Record<string, unknown> {
   lit: boolean;
   dim: boolean;
   selected: boolean;
+  /** Just drawn: the thread spins out from one ball to the other. */
+  fresh?: boolean;
+  /** Animate at all: off when the system asks for less motion. */
+  moving?: boolean;
 }
 
-/** A straight line from ball to ball. Lit lines get a soft second stroke as their glow. */
+/**
+ * A straight line from ball to ball, with its threads.
+ *
+ * At rest a faint thread drifts along every line. Tap a ball and its whole chain
+ * lights up, with sparks running the way things flow: from you to what you own,
+ * and from a service into the project that uses it. A line that was just drawn
+ * spins out from its first ball like silk.
+ */
 export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
   const d = data as LineData | undefined;
   const path = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
   const cls = ["cv-line", d?.kind ?? "", d?.lit ? "lit" : "", d?.dim ? "dim" : "", d?.selected ? "selected" : ""]
     .filter(Boolean)
     .join(" ");
+  const moving = d?.moving ?? false;
+  // A project draws the line to the service it uses; what flows is the other way.
+  const reverse = d?.kind === "uses";
+  const length = Math.hypot(targetX - sourceX, targetY - sourceY);
+  const run = `${Math.max(1.1, length / 160).toFixed(2)}s`;
+  const along = reverse ? { keyPoints: "1;0", keyTimes: "0;1", calcMode: "linear" as const } : {};
   return (
     <>
       {(d?.lit || d?.selected) && <path d={path} className="cv-line-glow" fill="none" />}
       <BaseEdge id={id} path={path} className={cls} interactionWidth={18} />
+      {moving && !d?.dim && (
+        <path
+          d={path}
+          className={`cv-thread${d?.lit ? " lit" : ""}${reverse ? " reverse" : ""}`}
+          fill="none"
+          pointerEvents="none"
+        />
+      )}
+      {moving && d?.lit &&
+        [0, 0.5].map((offset) => (
+          <circle key={offset} r={3.2} className="cv-spark" pointerEvents="none">
+            <animateMotion dur={run} begin={`${offset * parseFloat(run)}s`} repeatCount="indefinite" path={path} {...along} />
+          </circle>
+        ))}
+      {moving && d?.fresh && (
+        <>
+          <path d={path} pathLength={1} className="cv-silk" fill="none" pointerEvents="none" />
+          <circle r={4.5} className="cv-spinner" pointerEvents="none">
+            <animateMotion dur="0.7s" repeatCount="1" fill="freeze" path={path} />
+          </circle>
+        </>
+      )}
     </>
   );
 }
