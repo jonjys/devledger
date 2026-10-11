@@ -14,6 +14,8 @@ import type { VaultEntry } from "../lib/types";
 interface Props {
   onNotify: (message: string, bad?: boolean) => void;
   refreshKey: number;
+  /** Open the assistant with a rotation plan for this key. */
+  onLeak?: (secretId: string) => void;
 }
 
 interface Row {
@@ -22,7 +24,7 @@ interface Row {
 }
 
 /** Every secret in the vault -- on projects, resources and accounts -- in one table. */
-export default function SecretsView({ onNotify, refreshKey }: Props) {
+export default function SecretsView({ onNotify, refreshKey, onLeak }: Props) {
   const { dev } = useMode();
   const [rows, setRows] = useState<Row[]>([]);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
@@ -159,6 +161,15 @@ export default function SecretsView({ onNotify, refreshKey }: Props) {
                         <button type="button" onClick={() => toggleReveal(entry.secret.id)}>
                           {plaintext !== undefined ? "Hide" : "Reveal"}
                         </button>
+                        {onLeak && (
+                          <button
+                            type="button"
+                            title="Get a step-by-step plan for rotating this key"
+                            onClick={() => onLeak(entry.secret.id)}
+                          >
+                            Leaked?
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="danger"

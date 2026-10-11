@@ -680,3 +680,27 @@ export interface SecretListing {
   entry: VaultEntry;
   owner: string;
 }
+
+// --- the AI assistant -------------------------------------------------------
+
+export interface AssistantStatus {
+  enabled: boolean;
+  model: string;
+}
+
+/** Exactly what asking would send: instructions plus a metadata-only outline. */
+export interface AssistantPreview {
+  system: string;
+  user: string;
+  /** How many email addresses were swapped for placeholders. */
+  addresses_hidden: number;
+}
+
+export interface AssistantAnswer {
+  /** Markdown, with the real addresses put back. */
+  text: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  truncated: boolean;
+}

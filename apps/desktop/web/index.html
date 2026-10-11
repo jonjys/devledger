@@ -22,6 +22,7 @@
       <a class="brand" href="/"><img src="/icon.png" alt="" width="28" height="28" />DevLedger</a>
       <nav>
         <a href="#how">How it works</a>
+        <a href="#ai">AI</a>
         <a href="#security">Security</a>
         <a href="#download">Download</a>
         <a href="https://github.com/jonjys/devledger" target="_blank" rel="noreferrer">GitHub</a>
@@ -65,7 +66,7 @@
             <p>
               Email → service account → organization → project, drawn as a map you can drag around. See at a
               glance that three side projects share one Supabase account, or which login a forgotten repo lives
-              under.
+              under. Works for any service, Instagram and TikTok included.
             </p>
           </article>
           <article>
@@ -103,6 +104,40 @@
             </p>
           </article>
         </div>
+      </section>
+
+      <section id="ai" class="section ai-section">
+        <p class="eyebrow">New · AI assistant</p>
+        <h2>Ask your ledger. It never sees a key.</h2>
+        <p class="section-lede">
+          Bring your own Anthropic key and DevLedger's assistant reads the map, not your secrets: names and
+          connections go out, key values and your email addresses never do. You can read exactly what is sent
+          before you send it.
+        </p>
+        <div class="grid">
+          <article>
+            <h3>“A key leaked”</h3>
+            <p>
+              Pick the key. Get a rotation plan: where to revoke it, the new one, and every project and
+              environment that has to change, in order.
+            </p>
+          </article>
+          <article>
+            <h3>Review my setup</h3>
+            <p>
+              Server-only keys in client variables, resources nobody uses, production tied to one personal login,
+              and subscriptions you could stop paying for. Most important first.
+            </p>
+          </article>
+          <article>
+            <h3>Ask anything</h3>
+            <p>
+              “What breaks if I delete my old Vercel account?” “What am I paying for twice?” Answers come from
+              your own map.
+            </p>
+          </article>
+        </div>
+        <p class="fineprint left"><a href="/demo">Try it in the demo</a>, on invented data, no key needed.</p>
       </section>
 
       <section id="security" class="section">
@@ -144,8 +179,9 @@
           <article>
             <h3>The network, only when you ask</h3>
             <p>
-              The app window itself cannot reach the internet. The only outgoing traffic is to Supabase's API,
-              when you press Connect or Refresh: read requests, to an allowlisted host.
+              The app window itself cannot reach the internet. Outgoing traffic happens only when you press a
+              button: Connect or Refresh for Supabase (read requests, allowlisted host), or a question to the AI
+              assistant, if you switched it on.
             </p>
           </article>
           <article>

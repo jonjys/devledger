@@ -123,6 +123,7 @@ impl AppState {
 
 mod ipc;
 
+use ipc::assistant::*;
 use ipc::connectors::*;
 use ipc::lifecycle::*;
 use ipc::manual::*;
@@ -218,6 +219,11 @@ pub fn run() {
             connector_report,
             connector_import,
             connector_disconnect,
+            assistant_status,
+            assistant_set_key,
+            assistant_clear_key,
+            assistant_preview,
+            assistant_ask,
             update_identity,
             delete_identity,
             identity_emails,

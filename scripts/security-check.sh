@@ -45,10 +45,14 @@ else
 fi
 
 check "The connector is read-only and host-allowlisted"
-if grep -rqE --include=*.rs '\.post\(|\.put\(|\.patch\(|\.delete\(' "$CONNECT_SRC"; then
+# The AI assistant's one POST (a question to the Claude API) lives in its own
+# module and is checked separately below; every other file may only read.
+ASSISTANT_SRC=crates/devledger-connect/src/assistant.rs
+if grep -rlE --include=*.rs '\.post\(|\.put\(|\.patch\(|\.delete\(' "$CONNECT_SRC" \
+     | grep -vx "$ASSISTANT_SRC" | grep -q .; then
   bad "the connector issues a non-GET request"
 else
-  ok "only GET requests are issued"
+  ok "connectors only issue GET requests"
 fi
 # Matches check_host and check_host_inner: what matters is that the request
 # path runs an allowlist check, not which spelling it uses.
@@ -68,6 +72,27 @@ if grep -q 'redirect::Policy::none()' crates/devledger-connect/src/lib.rs; then
   ok "redirects are refused, so a bearer token cannot follow one off-host"
 else
   bad "redirects are not disabled"
+fi
+
+check "The AI assistant sends only to Anthropic, and only an outline"
+if grep -qE '^pub const ALLOWED_HOSTS: &\[&str\] = &\["api\.anthropic\.com"\];' "$ASSISTANT_SRC" \
+   && grep -q 'check_host(&url, ALLOWED_HOSTS)' "$ASSISTANT_SRC"; then
+  ok "the assistant is allowlisted to api.anthropic.com"
+else
+  bad "the assistant's host allowlist is missing or wider than api.anthropic.com"
+fi
+# The outline is built in core from metadata. It must never touch a value, a
+# masked preview, or anything that decrypts.
+if grep -nE '\.preview|expose\(|reveal|secret_envelope|aead::|notes' crates/devledger-core/src/assistant.rs \
+     | grep -vE '^\s*[0-9]+:\s*//' | grep -q .; then
+  bad "the assistant outline reads a secret value, a preview or a note"
+else
+  ok "the assistant outline is built from metadata only"
+fi
+if grep -rqE --include=*.rs 'fn assistant_key' "$IPC_SRC"; then
+  bad "the assistant's API key is exposed over IPC"
+else
+  ok "no IPC command returns the assistant's API key"
 fi
 
 check "No telemetry or analytics endpoint is referenced"
@@ -114,7 +139,9 @@ check "Connector calls are routed by connector id"
 # another. Every call now goes through the dispatch in devledger-connect.
 # Also refuses importing a provider module (`use devledger_connect::supabase`),
 # which would make a bare `supabase::verify(` call possible.
-if grep -rnE --include=*.rs 'devledger_connect::[a-z_]+::(verify|discover)\(|use devledger_connect::[a-z_]+(::|;)' "$IPC_SRC" | grep -q .; then
+# The assistant is not a provider connector, so calling it by name is fine.
+if grep -rnE --include=*.rs 'devledger_connect::[a-z_]+::(verify|discover)\(|use devledger_connect::[a-z_]+(::|;)' "$IPC_SRC" \
+     | grep -v 'devledger_connect::assistant' | grep -q .; then
   bad "the IPC layer calls a provider client directly instead of dispatching by id"
 else
   ok "connector calls go through verify_with / discover_with"

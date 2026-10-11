@@ -506,3 +506,72 @@ fn auth_kind_tag(auth: &AuthKind) -> &'static str {
         AuthKind::OAuth2Pkce { .. } => "oauth2_pkce",
     }
 }
+
+/// Where the AI assistant's API key is kept, sealed with the vault AEAD key.
+const ASSISTANT_KEY_SETTING: &str = "assistant.anthropic_key";
+
+/// Associated data binding the sealed key to its purpose, so the ciphertext
+/// cannot be swapped in for a connector credential or a secret.
+const ASSISTANT_KEY_AAD: &[u8] = b"devledger/assistant/anthropic";
+
+impl Vault {
+    /// Store the Anthropic API key the assistant uses, sealed like a connector
+    /// credential. The caller has already checked it works.
+    pub fn set_assistant_key(&self, key: &SecretString) -> Result<()> {
+        let trimmed = key.expose().trim();
+        if !trimmed.starts_with("sk-ant-") {
+            return Err(CoreError::Invalid(
+                "that does not look like an Anthropic API key; they start with sk-ant-".into(),
+            ));
+        }
+        let sealed = aead::seal(self.aead_key()?, ASSISTANT_KEY_AAD, trimmed.as_bytes())?;
+        let store = self.store()?;
+        store.set_setting(ASSISTANT_KEY_SETTING, &sealed)?;
+        store.audit(
+            "assistant.key.set",
+            None,
+            None,
+            "Stored an API key for the assistant",
+        )
+    }
+
+    /// Whether the assistant has a key to work with.
+    pub fn assistant_enabled(&self) -> Result<bool> {
+        Ok(self.store()?.setting(ASSISTANT_KEY_SETTING)?.is_some())
+    }
+
+    /// Forget the assistant's key.
+    pub fn clear_assistant_key(&self) -> Result<()> {
+        let store = self.store()?;
+        if store.delete_setting(ASSISTANT_KEY_SETTING)? {
+            store.audit(
+                "assistant.key.clear",
+                None,
+                None,
+                "Removed the assistant's API key",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Hand back the assistant's key for one request.
+    ///
+    /// The only caller is the desktop layer's assistant command, which passes
+    /// it straight to `devledger-connect`. It is never returned over IPC.
+    pub fn assistant_key(&self) -> Result<SecretString> {
+        let store = self.store()?;
+        let sealed = store
+            .setting(ASSISTANT_KEY_SETTING)?
+            .ok_or_else(|| CoreError::NotFound("no API key is set for the assistant".into()))?;
+        let plaintext = aead::open(self.aead_key()?, ASSISTANT_KEY_AAD, &sealed)?;
+        let text = String::from_utf8(plaintext.expose().to_vec())
+            .map_err(|_| CoreError::Crypto("stored key is not valid UTF-8".into()))?;
+        store.audit(
+            "assistant.key.use",
+            None,
+            None,
+            "Read the assistant's API key for a request",
+        )?;
+        Ok(SecretString::new(text))
+    }
+}

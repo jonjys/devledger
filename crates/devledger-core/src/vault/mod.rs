@@ -10,6 +10,7 @@
 //! review sheet is open. It is keyed by analysis id, never serialized, and
 //! cleared on lock.
 
+mod assistant;
 mod editing;
 mod ledger;
 mod lifecycle;

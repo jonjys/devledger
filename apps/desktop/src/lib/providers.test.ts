@@ -27,4 +27,12 @@ describe("provider registry", () => {
     expect(providerForName("")).toBe("unknown");
     expect(providerInfo("My NAS")).toBeNull();
   });
+
+  it("knows social and creator accounts by name, with their logos", () => {
+    expect(providerForName("instagram")).toBe("other:Instagram");
+    expect(providerForName("Twitter")).toBe("other:X");
+    expect(providerForName("facebook business")).toBe("other:Meta Business");
+    expect(providerInfo("other:TikTok")?.icon).not.toBeNull();
+    expect(providerInfo("Metricool")?.name).toBe("Metricool");
+  });
 });

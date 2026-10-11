@@ -1,0 +1,16 @@
+{
+  "name": "devledger-site-functions",
+  "private": true,
+  "type": "module",
+  "description": "Serverless functions for the DevLedger website. The desktop app lives in apps/desktop.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

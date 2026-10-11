@@ -8,27 +8,38 @@
 // Cloudflare account under whatever label the user typed -- often an email.
 
 import {
+  siBluesky,
+  siBuffer,
   siClaude,
   siClerk,
   siCloudflare,
   siDigitalocean,
   siDiscord,
+  siFacebook,
   siFirebase,
   siFlydotio,
   siGithub,
   siGmail,
   siGoogle,
   siGooglegemini,
+  siGumroad,
+  siHootsuite,
   siHuggingface,
+  siInstagram,
+  siLemonsqueezy,
   siLinear,
+  siMailchimp,
   siMailgun,
+  siMeta,
   siMistralai,
   siMongodb,
   siNeon,
   siNetlify,
   siNotion,
   siOpenrouter,
+  siPatreon,
   siPaypal,
+  siPinterest,
   siPlanetscale,
   siPostgresql,
   siRailway,
@@ -37,10 +48,17 @@ import {
   siResend,
   siSentry, // catalog-only: a logo, not an error reporter
   siShopify,
+  siSnapchat,
   siStripe,
+  siSubstack,
   siSupabase,
+  siThreads,
+  siTiktok,
+  siTwitch,
   siUpstash,
   siVercel,
+  siX,
+  siYoutube,
   type SimpleIcon,
 } from "simple-icons";
 
@@ -157,6 +175,30 @@ export const PROVIDERS: ProviderInfo[] = [
   other("Discord", "Bots and webhooks.", "token", siDiscord),
   other("PayPal", "Payments and client secrets.", "client secret", siPaypal),
   other("Shopify", "Stores and admin tokens.", "shpat_…", siShopify),
+
+  // Social and creator accounts: who logs in with which address, who holds
+  // the 2FA backup codes, and which tools (Metricool, Buffer...) have access.
+  other("Instagram", "Account login, 2FA backup codes, connected tools.", "password", siInstagram),
+  other("TikTok", "Account login and connected tools.", "password", siTiktok),
+  other("Meta Business", "Business portfolio, pages and ad accounts.", "token", siMeta, false, ["Meta", "Facebook Business"]),
+  other("Facebook", "Account login and pages.", "password", siFacebook),
+  other("YouTube", "Channel login and connected tools.", "password", siYoutube),
+  other("X", "Account login and API keys.", "password", siX, false, ["Twitter"]),
+  other("Threads", "Account login.", "password", siThreads),
+  other("Bluesky", "Account login and app passwords.", "app password", siBluesky),
+  other("LinkedIn", "Profile and company page login.", "password", null),
+  other("Pinterest", "Account login.", "password", siPinterest),
+  other("Snapchat", "Account login.", "password", siSnapchat),
+  other("Twitch", "Channel login and stream keys.", "stream key", siTwitch),
+  other("Metricool", "Scheduling: which social accounts it can post to.", "password", null),
+  other("Buffer", "Scheduling: which social accounts it can post to.", "password", siBuffer),
+  other("Hootsuite", "Scheduling: which social accounts it can post to.", "password", siHootsuite),
+  other("Later", "Scheduling: which social accounts it can post to.", "password", null),
+  other("Mailchimp", "Audiences and API keys.", "key-us1", siMailchimp),
+  other("Substack", "Publication login.", "password", siSubstack),
+  other("Patreon", "Creator page and payouts.", "password", siPatreon),
+  other("Gumroad", "Products and payouts.", "password", siGumroad),
+  other("Lemon Squeezy", "Store and API keys.", "key", siLemonsqueezy),
 ];
 
 function other(
@@ -165,8 +207,9 @@ function other(
   keyPlaceholder: string,
   icon: SimpleIcon | null,
   catalog = false,
+  aliases?: string[],
 ): ProviderInfo {
-  return { provider: `other:${name}`, name, summary, keyPlaceholder, icon, catalog };
+  return { provider: `other:${name}`, name, summary, keyPlaceholder, icon, catalog, ...(aliases ? { aliases } : {}) };
 }
 
 const OTHER_PREFIX = "other:";

@@ -9,6 +9,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   Account,
+  AssistantAnswer,
+  AssistantPreview,
+  AssistantStatus,
   AccountDetails,
   BillingInterval,
   CustomField,
@@ -448,3 +451,36 @@ export const connectorImport = (connectionId: string, accepted: string[]) =>
 /** Forget a connection. Imported data is kept. */
 export const connectorDisconnect = (connectionId: string) =>
   call<void>("connector_disconnect", { connectionId });
+
+// --- the AI assistant -------------------------------------------------------
+//
+// What it sends is built in Rust from metadata only: no key values, no
+// previews, and email addresses replaced by placeholders. `assistantPreview`
+// returns that exact text so it can be read before anything is sent. The API
+// key goes to Rust once, is sealed there, and never comes back.
+
+export type AssistantTask = "review" | "leak" | "ask";
+
+export interface AssistantRequest {
+  task: AssistantTask;
+  secretId?: string | null;
+  question?: string | null;
+}
+
+const assistantArgs = (r: AssistantRequest) => ({
+  task: r.task,
+  secretId: r.secretId ?? null,
+  question: r.question ?? null,
+  language: typeof navigator !== "undefined" ? navigator.language : "en",
+});
+
+export const assistantStatus = () => call<AssistantStatus>("assistant_status");
+
+export const assistantSetKey = (key: string) => call<AssistantStatus>("assistant_set_key", { key });
+
+export const assistantClearKey = () => call<AssistantStatus>("assistant_clear_key");
+
+export const assistantPreview = (r: AssistantRequest) =>
+  call<AssistantPreview>("assistant_preview", assistantArgs(r));
+
+export const assistantAsk = (r: AssistantRequest) => call<AssistantAnswer>("assistant_ask", assistantArgs(r));
