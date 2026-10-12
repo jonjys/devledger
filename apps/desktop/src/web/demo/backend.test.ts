@@ -104,6 +104,14 @@ describe("demo backend", () => {
     expect((await api.listProjects()).some((x) => x.project.name === "changed")).toBe(false);
   });
 
+  it("calls a NEXT_PUBLIC_ variable public, and a key server-only whatever its name", async () => {
+    const byName = new Map((await api.listAllSecrets()).map(({ entry }) => [entry.secret.name, entry]));
+    expect(byName.get("NEXT_PUBLIC_SITE_URL")!.client_unsafe).toBe(false);
+    expect(byName.get("STRIPE_SECRET_KEY")!.client_unsafe).toBe(true);
+    const preview = await api.assistantPreview({ task: "review" });
+    expect(preview.user.split("\n").find((l) => l.includes("NEXT_PUBLIC_SITE_URL"))).toContain("safe in client code");
+  });
+
   it("sends the assistant an outline with no values, previews or addresses", async () => {
     const secrets = await api.listAllSecrets();
     const preview = await api.assistantPreview({ task: "review" });

@@ -203,10 +203,15 @@ const PROVIDER_OF_KIND: Partial<Record<SecretRecord["kind"], Provider>> = {
   aws_secret_access_key: "aws",
 };
 
+// Mirrors store/secrets.rs: a plain variable with a public prefix is public by
+// its own name; a credential is server-only whatever it is called.
+const PUBLIC_PREFIX = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_)/i;
+
 function decorate(secret: SecretRecord): VaultEntry {
   return {
     secret,
-    client_unsafe: secret.kind !== "supabase_anon_key",
+    client_unsafe:
+      secret.kind !== "supabase_anon_key" && !(secret.kind === "env_var" && PUBLIC_PREFIX.test(secret.name)),
     provider: PROVIDER_OF_KIND[secret.kind] ?? "unknown",
     service_project_name: db.resources.find((r) => r.id === secret.service_project_id)?.name ?? null,
   };
