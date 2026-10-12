@@ -276,7 +276,7 @@ impl Store {
             None => None,
         };
         Ok(VaultEntry {
-            client_unsafe: secret.kind.is_client_unsafe(),
+            client_unsafe: is_client_unsafe(&secret),
             provider: secret.kind.provider(),
             service_project_name,
             secret,
@@ -508,4 +508,19 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// Whether this stored value must stay out of browser code.
+///
+/// Credential kinds are judged by kind alone: a service-role key named
+/// `NEXT_PUBLIC_...` is still server-only, and that name is the defect. A
+/// plain environment variable has no kind to judge by, so its name decides: a
+/// `NEXT_PUBLIC_`-style prefix is the developer declaring it public.
+fn is_client_unsafe(secret: &SecretRecord) -> bool {
+    if secret.kind == SecretKind::EnvVar
+        && crate::paste::detect::is_client_exposed_name(&secret.name)
+    {
+        return false;
+    }
+    secret.kind.is_client_unsafe()
 }

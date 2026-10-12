@@ -262,3 +262,63 @@ fn the_assistant_key_is_sealed_and_can_be_removed() {
     assert!(!vault.assistant_enabled().unwrap());
     assert!(matches!(vault.assistant_key(), Err(CoreError::NotFound(_))));
 }
+
+#[test]
+fn a_public_variable_is_not_called_server_only() {
+    let (_dir, mut vault) = common::unlocked_vault();
+    let project = vault.create_project("Site", None).expect("project");
+    let owner = SecretOwner {
+        project_id: Some(project.id),
+        service_project_id: None,
+        account_id: None,
+    };
+    let store = |vault: &mut Vault, kind, name: &str| {
+        vault
+            .store_secret(
+                &NewSecret {
+                    owner,
+                    kind,
+                    name: name.into(),
+                    environment: Environment::Production,
+                    notes: None,
+                },
+                &SecretString::new("https://example.com"),
+            )
+            .expect("store")
+    };
+    store(&mut vault, SecretKind::EnvVar, "NEXT_PUBLIC_SITE_URL");
+    store(&mut vault, SecretKind::EnvVar, "SESSION_SALT");
+    store(&mut vault, SecretKind::GenericApiKey, "VITE_PAYMENTS_KEY");
+
+    let unsafe_by_name = |name: &str| {
+        vault
+            .list_secrets(project.id)
+            .expect("list")
+            .into_iter()
+            .find(|e| e.secret.name == name)
+            .expect("found")
+            .client_unsafe
+    };
+    assert!(
+        !unsafe_by_name("NEXT_PUBLIC_SITE_URL"),
+        "a NEXT_PUBLIC_ variable is public by its own name"
+    );
+    assert!(
+        unsafe_by_name("SESSION_SALT"),
+        "a plain variable stays private"
+    );
+    assert!(
+        unsafe_by_name("VITE_PAYMENTS_KEY"),
+        "a key is server-only whatever it is named; the name is the leak"
+    );
+
+    let prepared = vault
+        .assistant_prepare(&Task::Review, "en")
+        .expect("prepare");
+    let line = prepared
+        .user
+        .lines()
+        .find(|l| l.contains("NEXT_PUBLIC_SITE_URL"))
+        .expect("listed");
+    assert!(line.contains("safe in client code"), "{line}");
+}
