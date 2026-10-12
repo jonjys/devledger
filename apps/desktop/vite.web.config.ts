@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// The website: a landing page at `/` and the real app at `/demo`, running on an
-// in-memory sample vault. The desktop build (`vite.config.ts`) is untouched;
+// The website: a landing page at `/`, the real app at `/demo` on an in-memory
+// sample vault, and at `/app` on the visitor's own vault, encrypted in their
+// browser. The desktop build (`vite.config.ts`) is untouched;
 // this config swaps the three Tauri modules the frontend imports for browser
 // shims, so the same components run with no Rust behind them.
 const here = (path: string) => decodeURIComponent(new URL(path, import.meta.url).pathname);
@@ -31,6 +32,7 @@ export default defineConfig({
       input: {
         site: here("web/index.html"),
         demo: here("web/demo/index.html"),
+        app: here("web/app/index.html"),
       },
     },
   },

@@ -6,8 +6,10 @@ Which email owns which GitHub, Vercel and Supabase account. Which project uses
 which database. Where every API key lives, and what it all costs each month.
 DevLedger keeps it in one encrypted file on your own computer.
 
-- **Try it in your browser:** [devledger-six.vercel.app/demo](https://devledger-six.vercel.app/demo)
-  runs the real app on made-up sample data. Nothing is saved or sent anywhere.
+- **Use it in your browser:** [devledger.nyttolabs.com/app](https://devledger.nyttolabs.com/app)
+  keeps your own vault, encrypted with your passphrase, in your browser. No
+  account and no server. The [demo](https://devledger.nyttolabs.com/demo) runs
+  the same app on made-up sample data.
 - **Download:** [latest release](https://github.com/jonjys/devledger/releases/latest)
   for Windows, Linux and Android. Checksums and install notes are on
   [the website](https://devledger-six.vercel.app/#download).
@@ -101,7 +103,7 @@ crates/devledger-core/     Security, parsing and persistence. No UI, no network.
 crates/devledger-connect/  Connectors. The only crate that opens a socket.
 apps/desktop/src-tauri/    Tauri v2 shell: IPC commands and capability config.
 apps/desktop/src/          React + TypeScript frontend.
-apps/desktop/src/web/      Website only: demo backend, Tauri shims, landing script.
+apps/desktop/src/web/      Website only: demo backend, web app vault, Tauri shims, landing script.
 apps/desktop/web/          Website pages. Built by vite.web.config.ts, deployed by vercel.json.
 scripts/security-check.sh  The invariants CI enforces on every push.
 docs/                      Architecture, threat model and decision records.

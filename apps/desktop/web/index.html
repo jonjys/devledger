@@ -39,11 +39,13 @@
           file on your own computer.
         </p>
         <div class="cta">
-          <a class="btn primary" href="/demo">Try it in your browser</a>
+          <a class="btn primary" href="/app">Open the web app</a>
+          <a class="btn" href="/demo">Try the demo</a>
           <a class="btn" href="#download">Download <span class="version" data-version></span></a>
         </div>
         <p class="fineprint">
-          The browser demo runs on made-up sample data. No sign-up, nothing is saved, nothing is sent anywhere.
+          The web app keeps your own vault, encrypted with your passphrase, in your browser. No sign-up, no server.
+          The demo runs on made-up sample data.
         </p>
         <a class="shot" href="/demo" aria-label="Open the demo">
           <picture>
@@ -137,7 +139,10 @@
             </p>
           </article>
         </div>
-        <p class="fineprint left"><a href="/demo">Try it in the demo</a>, on invented data, no key needed.</p>
+        <p class="fineprint left">
+          <a href="/demo">Try it in the demo</a> on invented data, or in <a href="/app">the web app</a> on your own.
+          No key needed.
+        </p>
       </section>
 
       <section id="security" class="section">
@@ -185,6 +190,15 @@
             </p>
           </article>
           <article>
+            <h3>In the browser</h3>
+            <p>
+              The <a href="/app">web app</a> keeps its vault in your browser's own storage, never on a server.
+              Your passphrase becomes an AES-256-GCM key with PBKDF2 (600,000 rounds) and the whole ledger is
+              sealed on every change. Clearing the site's data deletes it, and browser extensions can see what a
+              page shows, so production keys are safer in the desktop app.
+            </p>
+          </article>
+          <article>
             <h3>What it can't protect you from</h3>
             <p>
               Malware on your computer while the vault is unlocked. A forgotten passphrase. It is early
@@ -222,7 +236,10 @@ Get-FileHash .\DevLedger_<span data-version-bare>x.y.z</span>_x64-setup.exe -Alg
 
 <span class="dim"># Linux</span>
 sha256sum DevLedger_<span data-version-bare>x.y.z</span>_amd64.AppImage</code></pre>
-          <p>Not ready to install anything? <a href="/demo">Try the demo first</a>, it is the same app.</p>
+          <p>
+            Not ready to install anything? <a href="/app">Use the web app</a> or <a href="/demo">try the demo</a>,
+            it is the same app.
+          </p>
         </div>
 
         <div class="downloads" data-downloads>

@@ -21,3 +21,5 @@
 @media (max-width: 720px) {
   .demo-bar > span:nth-child(2) { display: none; }
 }
+.app-bar { background: linear-gradient(90deg, #8cecd61f, #6384ff26); }
+.app-bar strong { color: var(--mint, #8cecd6); }

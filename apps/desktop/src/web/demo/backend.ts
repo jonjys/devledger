@@ -39,7 +39,7 @@ import type {
 } from "../../lib/types";
 
 import { buildOutline, restore, type DemoTask } from "./outline";
-import { maskPreview, newId, now, seed, type DemoDb } from "./seed";
+import { emptyDb, maskPreview, newId, now, seed, setRandomIds, type DemoDb } from "./seed";
 
 /** What the shim throws: the same `{code, message}` the Rust side sends. */
 export interface DemoError {
@@ -54,20 +54,94 @@ const invalid = (message: string) => fail("invalid", message);
 const notFound = (what: string) => fail("not_found", `${what} not found`);
 
 export const PASTE_DESKTOP_ONLY =
-  "Smart Paste runs in the desktop app, where a paste is analysed inside the encrypted vault. In this demo, add things by hand with + Add or on the map.";
+  "Smart Paste runs in the desktop app, where a paste is analysed inside the encrypted vault. Here, add things by hand with + Add or on the map.";
 
 export const CONNECT_DESKTOP_ONLY =
-  "Connecting a provider runs in the desktop app. The demo stores no tokens and makes no requests to any provider.";
+  "Connecting a provider runs in the desktop app. The browser stores no provider tokens and makes no requests to any provider.";
 
 let db: DemoDb = seed();
 let unlocked = true;
 let audit: AuditEntry[] = [];
 
+/**
+ * The web app's encrypted store (src/web/app/store.ts). Absent in the demo,
+ * which keeps everything in memory and opens without a passphrase.
+ */
+export interface PersistentVault {
+  exists(): boolean;
+  create(passphrase: string, contents: { db: DemoDb; audit: AuditEntry[] }): Promise<void>;
+  open(passphrase: string): Promise<{ db: DemoDb; audit: AuditEntry[] }>;
+  save(contents: { db: DemoDb; audit: AuditEntry[] }): Promise<void>;
+  close(): void;
+}
+let vault: PersistentVault | null = null;
+
+/** Mirrors the desktop app: under 12 characters is refused. */
+export const MIN_PASSPHRASE = 12;
+/** Mirrors the desktop app: the vault locks after 15 minutes without a call. */
+export const IDLE_LOCK_MS = 15 * 60_000;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
 /** Start over with the sample vault. Used by tests and the demo's reset button. */
 export function reset() {
+  vault = null;
+  setRandomIds(false);
+  clearTimeout(idleTimer);
   db = seed();
   unlocked = true;
   audit = [];
+}
+
+/**
+ * Run on a real, persistent vault instead of the sample one: the web app.
+ * It starts locked and empty; the passphrase screen creates or opens it.
+ */
+export function runOnPersistentVault(store: PersistentVault) {
+  vault = store;
+  setRandomIds(true);
+  db = emptyDb();
+  unlocked = false;
+  audit = [];
+}
+
+/** Commands that only read, so they need no save afterwards. */
+const READS =
+  /^(vault_status|list_|ledger_overview|identity_graph|needs_attention|accounts_for_identity|organizations_for_account|identity_emails|identity_project_links|service_projects_for_project|account_secrets|relations_for|recent_audit|secret_provenance|custom_fields|project_environments|env_conflicts|project_deletion_impact|assistant_status|assistant_preview|smart_paste_discard)/;
+
+function lockNow() {
+  clearTimeout(idleTimer);
+  vault?.close();
+  db = emptyDb();
+  audit = [];
+  unlocked = false;
+}
+
+function touch() {
+  clearTimeout(idleTimer);
+  if (vault && unlocked) idleTimer = setTimeout(lockNow, IDLE_LOCK_MS);
+}
+
+async function openVault(passphrase: unknown, creating: boolean) {
+  const pass = typeof passphrase === "string" ? passphrase : "";
+  if (pass.length < MIN_PASSPHRASE) invalid(`the passphrase must be at least ${MIN_PASSPHRASE} characters`);
+  if (creating) {
+    if (vault!.exists()) invalid("a vault already exists in this browser");
+    db = emptyDb();
+    audit = [];
+    await vault!.create(pass, { db, audit });
+  } else {
+    if (!vault!.exists()) invalid("there is no vault in this browser yet");
+    let opened: { db: DemoDb; audit: AuditEntry[] };
+    try {
+      opened = await vault!.open(pass);
+    } catch {
+      return fail("invalid_passphrase", "That passphrase does not open this vault.");
+    }
+    db = opened.db;
+    audit = opened.audit;
+  }
+  unlocked = true;
+  return { initialized: true, unlocked };
 }
 
 /** How the demo reaches the assistant: the site's own function, which holds the API key. */
@@ -93,7 +167,7 @@ export function setAssistantTransport(send: typeof assistantTransport) {
 }
 
 export const ASSISTANT_KEY_DEMO =
-  "In this demo the assistant runs on DevLedger's own key, so there is nothing to set. In the desktop app it uses your Anthropic key, sealed in your vault.";
+  "In the browser the assistant runs on DevLedger's own key, so there is nothing to set. In the desktop app it uses your Anthropic key, sealed in your vault.";
 
 function demoTask(a: Args): DemoTask {
   if (a.task === "review") return { task: "review" };
@@ -508,11 +582,18 @@ type Args = Record<string, any>;
 const OPEN = new Set(["vault_status", "vault_initialize", "vault_unlock", "vault_lock", "list_connectors"]);
 
 const commands: Record<string, (a: Args) => unknown> = {
-  // vault lifecycle: the demo has no passphrase; any entry opens it.
-  vault_status: () => ({ initialized: true, unlocked }),
-  vault_initialize: () => ((unlocked = true), { initialized: true, unlocked }),
-  vault_unlock: () => ((unlocked = true), { initialized: true, unlocked }),
-  vault_lock: () => ((unlocked = false), { initialized: true, unlocked }),
+  // vault lifecycle: the demo has no passphrase and any entry opens it; the
+  // web app opens its encrypted store.
+  vault_status: () => ({ initialized: vault ? vault.exists() : true, unlocked }),
+  vault_initialize: ({ passphrase }) =>
+    vault ? openVault(passphrase, true) : ((unlocked = true), { initialized: true, unlocked }),
+  vault_unlock: ({ passphrase }) =>
+    vault ? openVault(passphrase, false) : ((unlocked = true), { initialized: true, unlocked }),
+  vault_lock: () => {
+    if (vault) lockNow();
+    else unlocked = false;
+    return { initialized: true, unlocked };
+  },
 
   // Smart Paste and connectors need the real vault and the network.
   smart_paste_analyze: () => invalid(PASTE_DESKTOP_ONLY),
@@ -902,6 +983,10 @@ export async function handle<T>(command: string, args: Args = {}): Promise<T> {
   if (!unlocked && !OPEN.has(command)) fail("vault_locked", "the vault is locked");
   // A copy, so the UI can never mutate the store by holding on to a result.
   const result = await run!(args);
+  // The web app seals the ledger after every change, before answering, so a
+  // closed tab never loses an edit the UI has already shown as done.
+  if (vault && unlocked && !READS.test(command)) await vault.save({ db, audit });
+  touch();
   return (result === undefined ? undefined : structuredClone(result)) as T;
 }
 
