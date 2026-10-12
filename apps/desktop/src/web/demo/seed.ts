@@ -39,9 +39,19 @@ export interface DemoDb {
 }
 
 let counter = 0;
+let random = false;
 
-/** A fresh v4-shaped id. Deterministic, so the demo reads the same on every load. */
+/**
+ * Switch to random ids, for the web app: its ledger outlives a page load, so a
+ * counter that restarts at 1 would hand out ids already in use.
+ */
+export function setRandomIds(on = true) {
+  random = on;
+}
+
+/** A fresh v4-shaped id. Deterministic in the demo, so it reads the same on every load. */
 export function newId(): string {
+  if (random) return crypto.randomUUID();
   counter += 1;
   const hex = counter.toString(16).padStart(12, "0");
   return `de300000-0000-4000-8000-${hex}`;
@@ -61,10 +71,9 @@ export function maskPreview(value: string): string {
   return `${chars.slice(0, head).join("")}…${chars.slice(n - tail).join("")}`;
 }
 
-export function seed(): DemoDb {
-  counter = 0;
-  const at = "2026-09-01T09:00:00Z";
-  const db: DemoDb = {
+/** A ledger with nothing in it: where the web app starts. */
+export function emptyDb(): DemoDb {
+  return {
     identities: [],
     emails: [],
     accounts: [],
@@ -78,6 +87,12 @@ export function seed(): DemoDb {
     subscriptions: [],
     fields: [],
   };
+}
+
+export function seed(): DemoDb {
+  counter = 0;
+  const at = "2026-09-01T09:00:00Z";
+  const db = emptyDb();
 
   const person = (label: string, address: string) => {
     const identity: Identity = {

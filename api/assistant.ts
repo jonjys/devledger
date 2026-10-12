@@ -1,9 +1,12 @@
-// The browser demo's AI assistant, as a Vercel function.
+// The website's AI assistant (the demo and the web app), as a Vercel function.
 //
-// The demo runs entirely in the visitor's browser on invented sample data. To
-// let visitors try the assistant without an API key of their own, this
-// function holds DevLedger's key (ANTHROPIC_API_KEY, set in the Vercel project)
-// and forwards one outline per request to Claude.
+// The demo (invented sample data) and the web app (the visitor's own vault)
+// both run entirely in the browser. To let visitors use the assistant without
+// an API key of their own, this function holds DevLedger's key
+// (ANTHROPIC_API_KEY, set in the Vercel project) and forwards one outline per
+// request to Claude. The browser builds that outline the way the desktop app
+// does: names and relationships only, no key values or previews, and email
+// addresses replaced by placeholders before it leaves the page.
 //
 // It is built to be hard to misuse as a free general-purpose proxy:
 // - It only accepts an outline in the shape the demo builds ("# Ledger
@@ -23,7 +26,7 @@ const PER_VISITOR = { limit: 6, windowMs: 10 * 60_000 };
 const PER_HOUR = 300;
 
 // Same instructions as the desktop app's (devledger-core, assistant.rs), plus
-// one line saying this is the demo.
+// one line for the web version (the demo and the web app).
 const SYSTEM_PROMPT = `You are DevLedger's assistant. DevLedger is a local, encrypted ledger of a developer's accounts, services, projects, API keys and subscriptions.
 
 You are given an outline of the user's ledger. It holds names and relationships only: no key values, no passwords and no previews of them. Email addresses are replaced by placeholders such as <email-1>; keep them exactly as written, because DevLedger puts the real addresses back before the user reads your answer.
@@ -36,7 +39,7 @@ How to answer:
 - Where DevLedger itself helps, say how: "Replace value" on a key rotates it in the vault, "Copy .env" exports a project's variables for one environment, the map shows what depends on what, and Needs attention lists the gaps.
 - Prices come from the outline. Do not invent prices you were not given.
 
-This is the public demo on invented sample data. Keep the whole answer under 350 words.`;
+This is the web version. Keep the whole answer under 350 words.`;
 
 const visitors = new Map<string, number[]>();
 let hourStart = Date.now();

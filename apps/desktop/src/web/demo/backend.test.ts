@@ -5,7 +5,16 @@
 
 import * as api from "../../lib/api";
 import apiSource from "../../lib/api.ts?raw";
-import { DEMO_COMMANDS, handle, reset, setAssistantTransport, setClipboard } from "./backend";
+import { BrowserVault, STORAGE_KEY } from "../app/store";
+import {
+  DEMO_COMMANDS,
+  IDLE_LOCK_MS,
+  handle,
+  reset,
+  runOnPersistentVault,
+  setAssistantTransport,
+  setClipboard,
+} from "./backend";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => handle(command, args),
@@ -135,5 +144,44 @@ describe("demo backend", () => {
     const answer = await api.assistantAsk({ task: "ask", question: `Is ${pasted} safe?` });
     expect(sent).not.toContain(pasted);
     expect(answer.text).toMatch(/Move it off \S+@example\.(com|org)\./);
+  });
+});
+
+describe("web app vault", () => {
+  const PASS = "a long enough passphrase";
+  let raw: Map<string, string>;
+
+  beforeEach(() => {
+    raw = new Map();
+    runOnPersistentVault(new BrowserVault({ get: (k) => raw.get(k) ?? null, set: (k, v) => void raw.set(k, v) }));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    reset();
+  });
+
+  it("starts with no vault, then keeps what you add across a lock", async () => {
+    expect(await api.vaultStatus()).toEqual({ initialized: false, unlocked: false });
+    await expect(api.listProjects()).rejects.toMatchObject({ code: "vault_locked" });
+    await expect(api.vaultInitialize("short")).rejects.toMatchObject({ code: "invalid" });
+
+    await api.vaultInitialize(PASS);
+    expect(await api.ledgerOverview()).toEqual([]);
+    const shop = await api.createProject("Shop", "The web shop");
+    expect(shop.id).not.toMatch(/^de300000-/);
+    expect(raw.get(STORAGE_KEY)).not.toContain("Shop");
+
+    await api.vaultLock();
+    expect(await api.vaultStatus()).toEqual({ initialized: true, unlocked: false });
+    await expect(api.vaultUnlock("this is the wrong one")).rejects.toMatchObject({ code: "invalid_passphrase" });
+    await api.vaultUnlock(PASS);
+    expect((await api.listProjects()).map((p) => p.project.name)).toEqual(["Shop"]);
+  });
+
+  it("locks itself after 15 minutes without use", async () => {
+    vi.useFakeTimers();
+    await api.vaultInitialize(PASS);
+    vi.advanceTimersByTime(IDLE_LOCK_MS + 1);
+    expect(await api.vaultStatus()).toEqual({ initialized: true, unlocked: false });
   });
 });

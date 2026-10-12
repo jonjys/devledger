@@ -158,9 +158,36 @@ allowlist, redirects are refused, and the security check fails if the
 allowlist grows. It is the only `POST` in the codebase. The user's account with
 Anthropic sees what is sent under Anthropic's own data terms.
 
-The browser demo on the website runs the assistant through a small serverless
-function holding the site's own key. It only accepts an outline in the demo's
-shape, rate-limits visitors, and only ever sees the demo's invented data.
+The website (the demo and the web app) runs the assistant through a small
+serverless function holding the site's own key. It only accepts an outline in
+the shape the browser builds, and it rate-limits visitors. The demo's outline
+is invented data. The web app's outline is built from the visitor's own ledger
+under the same rules as above: no values, previews, notes or custom fields, and
+placeholders for every address. It is sent only when the visitor presses a
+button, and "What is sent?" shows the exact text first.
+
+## The web app
+
+`/app` on the website runs the same interface on a vault kept in the
+browser, for people who will not install anything. It has no server side and
+no account: the ledger never leaves the browser except as an assistant outline
+the user chooses to send.
+
+- **At rest:** the whole ledger, values included, is one AES-256-GCM blob in
+  the site's `localStorage`. The key comes from the passphrase through
+  PBKDF2-SHA256 with 600,000 rounds and a random 16-byte salt. WebCrypto holds
+  it as non-extractable; every save uses a fresh 12-byte IV and fixed
+  associated data. A wrong passphrase fails authentication.
+- **Weaker than the desktop app:** PBKDF2 is cheaper to brute-force than
+  Argon2id, so a long passphrase matters more here. There is no second,
+  per-secret seal. Once unlocked, values live in page memory, where a malicious
+  browser extension or a cross-site scripting bug could read them; the site's
+  CSP allows only its own scripts. It locks after 15 minutes without use.
+- **Durability:** clearing the site's data, or a browser that evicts storage,
+  deletes the vault. There is no recovery and no sync.
+
+Production credentials belong in the desktop app; the web app suits mapping
+accounts and projects, and keys you could rotate without pain.
 
 ## Key hierarchy
 
