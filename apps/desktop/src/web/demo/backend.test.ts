@@ -178,6 +178,17 @@ describe("web app vault", () => {
     expect((await api.listProjects()).map((p) => p.project.name)).toEqual(["Shop"]);
   });
 
+  it("keeps the layout in the encrypted vault, across a lock", async () => {
+    await api.vaultInitialize(PASS);
+    expect(await api.uiLayoutGet()).toEqual({ layout: null });
+    await expect(api.uiLayoutSet("[1]")).rejects.toMatchObject({ code: "invalid" });
+    await api.uiLayoutSet(JSON.stringify({ v: 1, boxes: [{ id: "n", kind: "note", text: "secret plan" }] }));
+    expect(raw.get(STORAGE_KEY)).not.toContain("secret plan");
+    await api.vaultLock();
+    await api.vaultUnlock(PASS);
+    expect((await api.uiLayoutGet()).layout).toContain("secret plan");
+  });
+
   it("locks itself after 15 minutes without use", async () => {
     vi.useFakeTimers();
     await api.vaultInitialize(PASS);

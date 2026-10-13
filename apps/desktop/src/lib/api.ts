@@ -452,6 +452,17 @@ export const connectorImport = (connectionId: string, accepted: string[]) =>
 export const connectorDisconnect = (connectionId: string) =>
   call<void>("connector_disconnect", { connectionId });
 
+// --- the interface layout ----------------------------------------------------
+//
+// Home boxes, tab order and saved templates, as one JSON document kept in the
+// vault. `lib/layout.ts` owns its shape; the backend only stores it.
+
+export const uiLayoutGet = () => call<{ layout: string | null }>("ui_layout_get");
+
+export const uiLayoutSet = (layout: string) => call<void>("ui_layout_set", { layout });
+
+export const uiLayoutReset = () => call<void>("ui_layout_reset");
+
 // --- the AI assistant -------------------------------------------------------
 //
 // What it sends is built in Rust from metadata only: no key values, no

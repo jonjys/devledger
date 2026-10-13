@@ -36,6 +36,8 @@ export interface DemoDb {
   worksOn: [string, string][];
   subscriptions: Subscription[];
   fields: CustomField[];
+  /** The interface layout (home boxes, tabs, templates) as JSON, once changed. */
+  layout?: string | null;
 }
 
 let counter = 0;
@@ -86,6 +88,7 @@ export function emptyDb(): DemoDb {
     worksOn: [],
     subscriptions: [],
     fields: [],
+    layout: null,
   };
 }
 

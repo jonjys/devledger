@@ -106,7 +106,7 @@ export function runOnPersistentVault(store: PersistentVault) {
 
 /** Commands that only read, so they need no save afterwards. */
 const READS =
-  /^(vault_status|list_|ledger_overview|identity_graph|needs_attention|accounts_for_identity|organizations_for_account|identity_emails|identity_project_links|service_projects_for_project|account_secrets|relations_for|recent_audit|secret_provenance|custom_fields|project_environments|env_conflicts|project_deletion_impact|assistant_status|assistant_preview|smart_paste_discard)/;
+  /^(vault_status|list_|ledger_overview|identity_graph|needs_attention|accounts_for_identity|organizations_for_account|identity_emails|identity_project_links|service_projects_for_project|account_secrets|relations_for|recent_audit|secret_provenance|custom_fields|project_environments|env_conflicts|project_deletion_impact|assistant_status|assistant_preview|smart_paste_discard|ui_layout_get)/;
 
 function lockNow() {
   clearTimeout(idleTimer);
@@ -623,6 +623,24 @@ const commands: Record<string, (a: Args) => unknown> = {
   connector_disconnect: () => invalid(CONNECT_DESKTOP_ONLY),
 
   // the assistant: the demo's runs on the site's key, with the same outline rules
+  // the interface layout: a JSON document the frontend owns, kept with the ledger
+  ui_layout_get: () => ({ layout: db.layout ?? null }),
+  ui_layout_set: ({ layout }) => {
+    const text = typeof layout === "string" ? layout : "";
+    if (text.length > 256 * 1024) invalid("the layout is too large (over 256 KB)");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) invalid("the layout must be a JSON object");
+    db.layout = text;
+  },
+  ui_layout_reset: () => {
+    db.layout = null;
+  },
+
   assistant_status: () => ({ enabled: true, model: "claude-opus-5-5" }),
   assistant_set_key: () => invalid(ASSISTANT_KEY_DEMO),
   assistant_clear_key: () => invalid(ASSISTANT_KEY_DEMO),

@@ -42,3 +42,44 @@ describe("the sidebar", () => {
     expect(screen.getByLabelText("Find Project")).toBeInTheDocument();
   });
 });
+
+describe("the layout", () => {
+  it("opens on the saved start page and shows only the saved tabs, in order", async () => {
+    mocked.uiLayoutGet.mockResolvedValue({
+      layout: JSON.stringify({ v: 1, boxes: [{ id: "n", kind: "note", title: "Today", text: "ship it" }], tabs: ["home", "secrets", "projects"], start: "home", templates: [] }),
+    });
+    mocked.identityGraph.mockResolvedValue([]);
+    render(<DesktopShell onLock={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Today" })).toHaveTextContent("ship it");
+    const menu = screen.getByRole("navigation", { name: "Menu" });
+    const tabs = within(menu)
+      .getAllByRole("button")
+      .map((b) => b.textContent?.trim())
+      .filter((t) => t !== "⋯More");
+    expect(tabs).toEqual(["Home", "Secrets", "Projects"]);
+    expect(within(menu).queryByRole("button", { name: "Ledger" })).toBeNull();
+  });
+
+  it("saves a change to the layout, and flushes it before locking", async () => {
+    const user = userEvent.setup();
+    const onLock = vi.fn();
+    mocked.uiLayoutGet.mockResolvedValue({
+      layout: JSON.stringify({ v: 1, boxes: [], tabs: ["home", "projects"], start: "home", templates: [] }),
+    });
+    mocked.uiLayoutSet.mockResolvedValue(undefined);
+    mocked.identityGraph.mockResolvedValue([]);
+    render(<DesktopShell onLock={onLock} />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+    await user.click(screen.getByRole("button", { name: "+ Add a box" }));
+    await user.click(screen.getByRole("button", { name: /^Note/ }));
+    await user.click(screen.getByRole("button", { name: "Lock vault" }));
+
+    expect(mocked.uiLayoutSet).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(mocked.uiLayoutSet.mock.calls[0]![0]);
+    expect(saved.boxes.map((b: { kind: string }) => b.kind)).toEqual(["note"]);
+    expect(onLock).toHaveBeenCalled();
+  });
+});

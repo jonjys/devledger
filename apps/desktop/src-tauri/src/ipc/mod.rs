@@ -3,6 +3,7 @@
 
 pub mod assistant;
 pub mod connectors;
+pub mod layout;
 pub mod lifecycle;
 pub mod manual;
 pub mod paste;

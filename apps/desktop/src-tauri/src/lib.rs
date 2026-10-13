@@ -125,6 +125,7 @@ mod ipc;
 
 use ipc::assistant::*;
 use ipc::connectors::*;
+use ipc::layout::*;
 use ipc::lifecycle::*;
 use ipc::manual::*;
 use ipc::paste::*;
@@ -222,6 +223,9 @@ pub fn run() {
             assistant_status,
             assistant_set_key,
             assistant_clear_key,
+            ui_layout_get,
+            ui_layout_set,
+            ui_layout_reset,
             assistant_preview,
             assistant_ask,
             update_identity,
