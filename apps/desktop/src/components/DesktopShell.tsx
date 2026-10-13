@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "../lib/api";
 import { plural } from "../lib/format";
+import { parseLayout, recommendedLayout, serializeLayout, type Layout, type ViewId } from "../lib/layout";
 import { ModeProvider, useMode } from "../lib/mode";
 import { trialsFrom } from "../lib/overview";
 import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/types";
@@ -9,7 +10,8 @@ import type { PasteAnalysis, ProjectSummary, ReviewSubmission } from "../lib/typ
 import AssistantView from "./AssistantView";
 import AttentionView from "./AttentionView";
 import ConnectionsView from "./ConnectionsView";
-import OverviewView from "./OverviewView";
+import HomeView from "./HomeView";
+import LayoutPanel, { VIEW_LABEL } from "./LayoutPanel";
 import AddAnythingDialog, { type WordKind } from "./AddAnythingDialog";
 import LedgerView from "./LedgerView";
 import Projects from "./Projects";
@@ -18,50 +20,33 @@ import SecretsView from "./SecretsView";
 import SmartPasteBar from "./SmartPasteBar";
 import SubscriptionsView from "./SubscriptionsView";
 
-type View =
-  | "assistant"
-  | "overview"
-  | "ledger"
-  | "projects"
-  | "connections"
-  | "subscriptions"
-  | "secrets"
-  | "attention";
+type View = ViewId;
 
 type IconName = View;
 
 type BadgeKind = "trials" | "attention";
 
 interface NavItem {
-  id: View;
   label: string;
   /** What the phone tab bar shows when the full label does not fit. */
   short?: string;
-  icon: IconName;
   badge?: BadgeKind;
 }
 
-const NAV: { section: string; items: NavItem[] }[] = [
-  {
-    section: "Workspace",
-    items: [
-      { id: "projects", label: "Projects", icon: "projects" },
-      { id: "ledger", label: "Ledger", icon: "ledger" },
-      { id: "assistant", label: "Assistant", short: "AI", icon: "assistant" },
-      { id: "overview", label: "Overview", icon: "overview" },
-      { id: "connections", label: "Connections", short: "Services", icon: "connections" },
-    ],
-  },
-  {
-    section: "Finance",
-    items: [{ id: "subscriptions", label: "Subscriptions", short: "Billing", icon: "subscriptions", badge: "trials" }],
-  },
-  { section: "Vault", items: [{ id: "secrets", label: "Secrets", icon: "secrets" }] },
-  {
-    section: "Alerts",
-    items: [{ id: "attention", label: "Needs attention", short: "Alerts", icon: "attention", badge: "attention" }],
-  },
-];
+/** Every tab there is. Which ones show, and in what order, is the user's layout. */
+const NAV: Record<View, NavItem> = {
+  home: { label: VIEW_LABEL.home },
+  projects: { label: VIEW_LABEL.projects },
+  ledger: { label: VIEW_LABEL.ledger },
+  assistant: { label: VIEW_LABEL.assistant, short: "AI" },
+  connections: { label: VIEW_LABEL.connections, short: "Services" },
+  subscriptions: { label: VIEW_LABEL.subscriptions, short: "Billing", badge: "trials" },
+  secrets: { label: VIEW_LABEL.secrets },
+  attention: { label: VIEW_LABEL.attention, short: "Alerts", badge: "attention" },
+};
+
+/** How many tabs fit in the phone's bottom bar before the rest go under More. */
+const PHONE_TABS = 4;
 
 /** Minimal line icons, kept inline so the app pulls in no icon dependency. */
 function Icon({ name }: { name: IconName }) {
@@ -76,13 +61,12 @@ function Icon({ name }: { name: IconName }) {
     strokeLinejoin: "round" as const,
   };
   switch (name) {
-    case "overview":
+    case "home":
       return (
         <svg {...common}>
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
+          <path d="M3 11 12 4l9 7" />
+          <path d="M5 10v10h14V10" />
+          <path d="M10 20v-5h4v5" />
         </svg>
       );
     case "ledger":
@@ -189,8 +173,14 @@ function DesktopShellInner({ onLock }: Props) {
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; bad: boolean } | null>(null);
-  // Projects is the start page.
-  const [view, setView] = useState<View>("projects");
+  // The user's layout: home boxes, which tabs show and where the app opens.
+  // Until it loads, the recommended one.
+  const [layout, setLayout] = useState<Layout>(recommendedLayout);
+  const [view, setView] = useState<View>(() => recommendedLayout().start);
+  const [panel, setPanel] = useState(false);
+  const [more, setMore] = useState(false);
+  const pendingLayout = useRef<string | null>(null);
+  const saveTimer = useRef<number | undefined>(undefined);
   const [leakId, setLeakId] = useState<string | null>(null);
   // The project a paste was made inside, so the review files it there.
   const [pasteTarget, setPasteTarget] = useState<string | null>(null);
@@ -225,6 +215,65 @@ function DesktopShellInner({ onLock }: Props) {
   useEffect(() => {
     refresh().catch((e: unknown) => notify(e instanceof Error ? e.message : String(e), true));
   }, [refresh, notify]);
+
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => api.uiLayoutGet())
+      .then(({ layout: saved }) => {
+        if (!live) return;
+        const l = parseLayout(saved);
+        setLayout(l);
+        setView(l.start);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const flushLayout = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    const json = pendingLayout.current;
+    pendingLayout.current = null;
+    if (json === null) return;
+    try {
+      await api.uiLayoutSet(json);
+    } catch (e: unknown) {
+      notify(e instanceof Error ? e.message : String(e), true);
+    }
+  }, [notify]);
+
+  /** Show the change at once; save it shortly after, so typing in a note is one write. */
+  const changeLayout = useCallback(
+    (next: Layout) => {
+      setLayout(next);
+      pendingLayout.current = serializeLayout(next);
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => void flushLayout(), 500);
+    },
+    [flushLayout],
+  );
+
+  useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+
+  // Hiding the open tab moves to the start page. (A box on Home may still open
+  // a hidden view; that is a deliberate tap, not a menu.)
+  useEffect(() => {
+    setView((v) => (layout.tabs.includes(v) ? v : layout.start));
+  }, [layout.tabs, layout.start]);
+
+  async function lock() {
+    await flushLayout();
+    onLock();
+  }
+
+  function go(id: View) {
+    // Projects in the menu always means the list, even from inside a project.
+    if (id === "projects") setSelected(null);
+    setView(id);
+    setMore(false);
+  }
 
   async function analyze(text: string, projectId: string | null = null) {
     setPasteTarget(projectId);
@@ -281,62 +330,107 @@ function DesktopShellInner({ onLock }: Props) {
           <span className="beta">BETA</span>
         </div>
 
-        <nav className="side-nav">
-          {NAV.map((group) => (
-            <div key={group.section} className="nav-group">
-              <div className="nav-section">{group.section}</div>
-              {group.items.map((item) => {
-                const count = item.badge ? badgeValue(item.badge) : 0;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={`nav-item${view === item.id ? " active" : ""}`}
-                    aria-current={view === item.id}
-                    onClick={() => {
-                      // Projects in the sidebar always means the list, even
-                      // from inside a project.
-                      if (item.id === "projects") setSelected(null);
-                      setView(item.id);
-                    }}
-                  >
-                    <span className="nav-icon">
-                      <Icon name={item.icon} />
+        <nav className="side-nav" aria-label="Menu">
+          <div className="nav-group">
+            <div className="nav-section">Menu</div>
+            {layout.tabs.map((id, index) => {
+              const item = NAV[id];
+              const count = item.badge ? badgeValue(item.badge) : 0;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`nav-item${view === id ? " active" : ""}${index >= PHONE_TABS ? " nav-overflow" : ""}`}
+                  aria-current={view === id}
+                  onClick={() => go(id)}
+                >
+                  <span className="nav-icon">
+                    <Icon name={id} />
+                  </span>
+                  <span className={`nav-label${item.short ? " has-short" : ""}`}>{item.label}</span>
+                  {item.short && (
+                    <span className="nav-label nav-short" aria-hidden="true">
+                      {item.short}
                     </span>
-                    <span className={`nav-label${item.short ? " has-short" : ""}`}>{item.label}</span>
-                    {item.short && (
-                      <span className="nav-label nav-short" aria-hidden="true">
-                        {item.short}
-                      </span>
-                    )}
-                    {count > 0 && (
-                      <span
-                        className={`nav-badge${item.badge === "attention" ? " alert" : ""}${
-                          item.badge === "attention" && unidentified > 0 ? " pulse" : ""
-                        }`}
-                        title={
-                          item.badge === "attention" && unidentified > 0
-                            ? `${plural(unidentified, "entry", "entries")} with no email`
-                            : undefined
-                        }
-                      >
-                        {count}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+                  )}
+                  {count > 0 && (
+                    <span
+                      className={`nav-badge${item.badge === "attention" ? " alert" : ""}${
+                        item.badge === "attention" && unidentified > 0 ? " pulse" : ""
+                      }`}
+                      title={
+                        item.badge === "attention" && unidentified > 0
+                          ? `${plural(unidentified, "entry", "entries")} with no email`
+                          : undefined
+                      }
+                    >
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className={`nav-item nav-more${more ? " active" : ""}`}
+              aria-expanded={more}
+              onClick={() => setMore((m) => !m)}
+            >
+              <span className="nav-icon" aria-hidden="true">
+                ⋯
+              </span>
+              <span className="nav-label">More</span>
+            </button>
+          </div>
         </nav>
 
         <div className="side-foot">
           <ModeToggle />
-          <button type="button" className="lock-btn" onClick={onLock}>
+          <button type="button" className="link-btn customize-btn" onClick={() => setPanel(true)}>
+            Customize menu & layout
+          </button>
+          <button type="button" className="lock-btn" onClick={() => void lock()}>
             Lock vault
           </button>
         </div>
       </aside>
+
+      {more && (
+        <div className="more-backdrop" onClick={() => setMore(false)}>
+          <div className="more-sheet" role="dialog" aria-label="More" onClick={(e) => e.stopPropagation()}>
+            {layout.tabs.slice(PHONE_TABS).map((id) => (
+              <button key={id} type="button" className={`more-item${view === id ? " active" : ""}`} onClick={() => go(id)}>
+                <Icon name={id} />
+                <span>{NAV[id].label}</span>
+                {NAV[id].badge && badgeValue(NAV[id].badge!) > 0 && (
+                  <span className={`nav-badge${NAV[id].badge === "attention" ? " alert" : ""}`}>
+                    {badgeValue(NAV[id].badge!)}
+                  </span>
+                )}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMore(false);
+                setPanel(true);
+              }}
+            >
+              <span aria-hidden="true">✎</span>
+              <span>Customize menu & layout</span>
+            </button>
+            <button type="button" className="more-item" onClick={() => void lock()}>
+              <span aria-hidden="true">🔒</span>
+              <span>Lock vault</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {panel && (
+        <LayoutPanel layout={layout} onLayout={changeLayout} onClose={() => setPanel(false)} onNotify={notify} />
+      )}
 
       <div className="app-main">
         <SmartPasteBar
@@ -363,10 +457,17 @@ function DesktopShellInner({ onLock }: Props) {
         )}
 
         <div className={`content${view === "ledger" ? " full" : ""}`}>
-          {view === "overview" && (
-            <OverviewView
+          {view === "home" && (
+            <HomeView
+              layout={layout}
+              onLayout={changeLayout}
+              onOpenLayoutPanel={() => setPanel(true)}
               onNotify={notify}
-              onNavigate={(v) => setView(v as View)}
+              onNavigate={(v) => go(v as View)}
+              onOpenProject={(id) => {
+                setSelected(id);
+                setView("projects");
+              }}
               onChanged={refresh}
               refreshKey={refreshKey}
               onAdd={(kind) => setAddingAnything(kind)}

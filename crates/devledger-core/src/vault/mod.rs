@@ -12,6 +12,7 @@
 
 mod assistant;
 mod editing;
+mod layout;
 mod ledger;
 mod lifecycle;
 mod manual_entry;

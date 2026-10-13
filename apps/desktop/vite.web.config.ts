@@ -12,6 +12,8 @@ export default defineConfig({
   root: here("web"),
   publicDir: here("web/public"),
   plugins: [react()],
+  // Lets the shared UI drop what only the desktop app can do (Smart Paste).
+  define: { "import.meta.env.VITE_DEVLEDGER_WEB": JSON.stringify("1") },
   resolve: {
     alias: [
       { find: /^@tauri-apps\/api\/core$/, replacement: here("src/web/shims/tauri-core.ts") },

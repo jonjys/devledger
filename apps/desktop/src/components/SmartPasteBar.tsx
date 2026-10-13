@@ -1,5 +1,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { WEB } from "../lib/platform";
+
 interface Props {
   onAnalyze: (text: string) => void;
   busy: boolean;
@@ -28,6 +30,17 @@ export default function SmartPasteBar({ onAnalyze, busy, extra }: Props) {
       event.preventDefault();
       submit();
     }
+  }
+
+  // In the browser there is no Smart Paste to send a paste to, so the bar
+  // keeps only "+ Add" instead of an input that can only say no.
+  if (WEB) {
+    return (
+      <div className="pastebar pastebar-web">
+        <span className="pastebar-note">Add things by hand here. Smart Paste is in the desktop app.</span>
+        {extra}
+      </div>
+    );
   }
 
   return (
