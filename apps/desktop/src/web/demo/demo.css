@@ -23,3 +23,83 @@
 }
 .app-bar { background: linear-gradient(90deg, #8cecd61f, #6384ff26); }
 .app-bar strong { color: var(--mint, #8cecd6); }
+
+/* The web app: bar, request counter, backup buttons, first-visit tip. */
+.web-shell { display: flex; flex-direction: column; height: 100%; }
+.web-shell > .demo-app { flex: 1; min-height: 0; height: auto; }
+.web-shell .demo-bar { overflow: visible; flex-shrink: 0; position: relative; z-index: 50; }
+.bar-btn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.bar-btn:hover { border-color: var(--accent); }
+.bar-error { color: var(--crit, #ff6b6b); }
+.net { position: relative; }
+.net summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+}
+.net summary::-webkit-details-marker { display: none; }
+.net-dot { width: 7px; height: 7px; border-radius: 50%; background: #8cecd6; box-shadow: 0 0 8px #8cecd6; }
+.net-some .net-dot { background: var(--warn, #f5c451); box-shadow: 0 0 8px var(--warn, #f5c451); }
+.net-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(380px, 90vw);
+  white-space: normal;
+  background: var(--panel, #141828);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  box-shadow: 0 12px 40px #00000080;
+}
+.net-pop p { margin: 0 0 8px; }
+.net-pop p:last-child { margin-bottom: 0; }
+.net-pop ul { margin: 0 0 8px; padding-left: 16px; max-height: 140px; overflow: auto; }
+.net-pop a { color: var(--accent); }
+.start-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 14px;
+  background: #8cecd614;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.start-tip strong { color: var(--text); }
+.start-tip > strong { color: #8cecd6; white-space: nowrap; }
+.start-tip a { color: var(--accent); }
+.start-tip button {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+@media (max-width: 720px) {
+  .app-bar .demo-bar-links > a { display: none; }
+  .start-tip > strong { display: none; }
+}

@@ -33,6 +33,7 @@ export default defineConfig({
         site: here("web/index.html"),
         demo: here("web/demo/index.html"),
         app: here("web/app/index.html"),
+        trust: here("web/trust/index.html"),
       },
     },
   },

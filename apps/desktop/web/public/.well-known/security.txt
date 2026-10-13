@@ -1,0 +1,6 @@
+# Found a security problem in DevLedger? Please report it privately.
+Contact: https://github.com/jonjys/devledger/security/advisories/new
+Expires: 2027-10-12T00:00:00.000Z
+Policy: https://github.com/jonjys/devledger/blob/main/docs/SECURITY.md
+Canonical: https://devledger.nyttolabs.com/.well-known/security.txt
+Preferred-Languages: en, sv

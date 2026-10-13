@@ -149,3 +149,38 @@ export const localBacking: Backing = {
   get: (k) => window.localStorage.getItem(k),
   set: (k, v) => window.localStorage.setItem(k, v),
 };
+
+/**
+ * The sealed vault as it sits in storage, for a backup file. It is already
+ * encrypted under the passphrase, so the file is as safe as the vault itself
+ * and opens with the same passphrase.
+ */
+export function exportBackup(backing: Backing): string | null {
+  return backing.get(STORAGE_KEY);
+}
+
+/** Whether a file's text has the shape of a vault this version can open. */
+export function isBackup(text: string): boolean {
+  try {
+    const s = JSON.parse(text) as Partial<Sealed>;
+    return (
+      s.v === 1 &&
+      s.kdf === "pbkdf2-sha256" &&
+      typeof s.rounds === "number" &&
+      s.rounds >= 100_000 &&
+      [s.salt, s.iv, s.ct].every((x) => typeof x === "string" && x.length > 0)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Put a backup in place, for a browser with no vault yet. It never replaces
+ * an existing vault: that would be the one way to lose data by clicking.
+ */
+export function restoreBackup(backing: Backing, text: string): void {
+  if (backing.get(STORAGE_KEY) !== null) throw new Error("this browser already has a vault");
+  if (!isBackup(text)) throw new Error("that file is not a DevLedger backup");
+  backing.set(STORAGE_KEY, text.trim());
+}
