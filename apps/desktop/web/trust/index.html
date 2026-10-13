@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>DevLedger: don't trust us, check</title>
+    <meta
+      name="description"
+      content="How to check for yourself that DevLedger keeps your vault on your device: the network tab, the CSP, the source and the builds. Plus what the website does and does not collect."
+    />
+    <meta name="theme-color" content="#0b0d16" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><img src="/icon.png" alt="" width="28" height="28" />DevLedger</a>
+      <nav>
+        <a href="#verify">Verify</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#report">Report</a>
+        <a href="/app">Web app</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Trust</p>
+        <h1>Don't trust us. <span>Check.</span></h1>
+        <p class="lede">
+          A tool that holds your keys should not ask for faith. Everything below can be checked in a few minutes,
+          with tools you already have, without taking our word for anything.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="#verify">How to check</a>
+          <a class="btn" href="https://github.com/jonjys/devledger" target="_blank" rel="noreferrer">Read the source</a>
+        </div>
+      </section>
+
+      <section id="start" class="section">
+        <h2>Start without keys</h2>
+        <p class="section-lede">
+          You don't have to put a single secret in to get something out of DevLedger. Add which email owns which
+          account, which project uses which database and what each plan costs. The map, Costs and Needs attention all
+          work on names alone. Add keys later, when you have checked the rest, and keep production keys in the
+          desktop app.
+        </p>
+      </section>
+
+      <section id="verify" class="section">
+        <h2>Verify it yourself</h2>
+        <div class="grid two">
+          <article>
+            <h3>1. Watch the network</h3>
+            <p>
+              Open the <a href="/app">web app</a>, then your browser's developer tools (F12, or right-click →
+              Inspect) and the <strong>Network</strong> tab. Filter on <code>Fetch/XHR</code>. Create a vault, add
+              projects and keys, lock and unlock. The list stays empty. The one exception is pressing a button under
+              Assistant, which sends the outline you can read first under “What is sent?”.
+            </p>
+          </article>
+          <article>
+            <h3>2. The counter in the app</h3>
+            <p>
+              The pill in the web app's top bar counts every request the page makes that could carry data out:
+              fetch, XHR and beacons. It is wired in before any other code loads, and WebSockets are refused
+              outright. Click it to see each request. It should agree with the Network tab.
+            </p>
+          </article>
+          <article>
+            <h3>3. The walls around the page</h3>
+            <p>
+              In the Network tab, click the page itself and look at its response headers. The
+              <code>Content-Security-Policy</code> says <code>connect-src 'self' https://api.github.com</code>: the
+              browser itself blocks this page from sending anything to any other address, even if a line of code
+              tried.
+            </p>
+          </article>
+          <article>
+            <h3>4. Where the encryption happens</h3>
+            <p>
+              The web app's vault is
+              <a
+                href="https://github.com/jonjys/devledger/blob/main/apps/desktop/src/web/app/store.ts"
+                target="_blank"
+                rel="noreferrer"
+                >one short file</a
+              >: PBKDF2 (600,000 rounds) into an AES-256-GCM key the browser will not let script read, a fresh IV on
+              every save. In the developer tools under <strong>Application → Local Storage</strong> you can see what
+              is stored: ciphertext only.
+            </p>
+          </article>
+          <article>
+            <h3>5. The downloads</h3>
+            <p>
+              Every installer is built by GitHub Actions from the public source, with
+              <a href="https://github.com/jonjys/devledger/actions/workflows/release.yml" target="_blank" rel="noreferrer"
+                >public build logs</a
+              >, and published with its SHA-256 checksum. The <a href="/#download">download section</a> shows how
+              to compare it with the file you got.
+            </p>
+          </article>
+          <article>
+            <h3>6. Build it yourself</h3>
+            <p>
+              <code>git clone https://github.com/jonjys/devledger</code>, then <code>npm ci</code> and
+              <code>npm run build:web</code> in <code>apps/desktop</code> builds this exact website, or
+              <code>npm run tauri build</code> the desktop app. Nothing in it needs an account or a key of ours.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="backup" class="section">
+        <h2>You can always leave</h2>
+        <p class="section-lede">
+          The web app's <strong>Backup</strong> button downloads your vault as a file, still encrypted with your
+          passphrase. <strong>Restore backup</strong> opens it in another browser or on another computer. There is no
+          lock-in and no copy with us, which also means no recovery if you lose both the passphrase and the file.
+        </p>
+      </section>
+
+      <section id="privacy" class="section">
+        <h2>Privacy</h2>
+        <div class="grid two">
+          <article>
+            <h3>What we never get</h3>
+            <p>
+              Your vault, your keys, your passphrase and your list of accounts. There is no DevLedger account, no
+              database of users and nothing to sync to. The site sets no cookies and runs no analytics or tracking.
+            </p>
+          </article>
+          <article>
+            <h3>What hosting sees</h3>
+            <p>
+              The site is served by Vercel, which, like any web host, sees the requests for the pages and files
+              (address, time, which file) and keeps its own server logs under its own terms. The home page asks
+              GitHub's API, from your browser, which release is the latest.
+            </p>
+          </article>
+          <article>
+            <h3>The AI assistant</h3>
+            <p>
+              Only when you press one of its buttons. What it sends is an outline of names and connections, with no
+              key values and with every email address replaced by a placeholder, and you can read it before it goes.
+              On the website it passes through our function to Anthropic, which answers it; our function does not
+              store it. In the desktop app it goes straight to Anthropic with your own key.
+            </p>
+          </article>
+          <article>
+            <h3>The desktop app</h3>
+            <p>
+              Talks to the network only when you press Connect or Refresh for a provider, or ask the assistant. No
+              updates checks, no crash reports, no telemetry. The
+              <a href="https://github.com/jonjys/devledger/blob/main/docs/SECURITY.md" target="_blank" rel="noreferrer"
+                >threat model</a
+              >
+              says exactly what it protects against and what it does not.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="report" class="section">
+        <h2>Found a problem?</h2>
+        <p class="section-lede">
+          Report a security problem privately through
+          <a href="https://github.com/jonjys/devledger/security/advisories/new" target="_blank" rel="noreferrer"
+            >GitHub's security advisories</a
+          >
+          (also listed in <a href="/.well-known/security.txt">security.txt</a>). Anything else goes in the
+          <a href="https://github.com/jonjys/devledger/issues" target="_blank" rel="noreferrer">issue tracker</a>.
+          DevLedger is early software and has not had an independent audit yet; we would rather hear about a flaw
+          from you than read about it.
+        </p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>DevLedger · built in the open</span>
+      <span>
+        <a href="/">Home</a>
+        <a href="/app">Web app</a>
+        <a href="https://github.com/jonjys/devledger" target="_blank" rel="noreferrer">Source</a>
+      </span>
+    </footer>
+
+    <script type="module" src="../../src/web/site/trust.ts"></script>
+  </body>
+</html>

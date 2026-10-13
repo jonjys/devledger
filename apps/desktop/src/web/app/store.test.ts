@@ -2,7 +2,14 @@
 
 import type { AuditEntry } from "../../lib/types";
 import { emptyDb } from "../demo/seed";
-import { BrowserVault, STORAGE_KEY, WrongPassphrase, type Backing } from "./store";
+import {
+  BrowserVault,
+  STORAGE_KEY,
+  WrongPassphrase,
+  exportBackup,
+  restoreBackup,
+  type Backing,
+} from "./store";
 
 const PASS = "correct horse battery staple";
 const VALUE = ["sk", "live", "FAKE0000WEBVAULT1111NOTREAL"].join("_");
@@ -63,5 +70,27 @@ describe("browser vault", () => {
     expect(JSON.parse(backing.raw.get(STORAGE_KEY)!).iv).not.toBe(first);
     vault.close();
     await expect(vault.save(contents())).rejects.toThrow(/locked/);
+  });
+});
+
+describe("backups", () => {
+  it("restores into an empty browser and opens with the same passphrase", async () => {
+    const from = memory();
+    await new BrowserVault(from).create(PASS, contents());
+    const file = exportBackup(from)!;
+    expect(file).not.toContain(VALUE);
+
+    const to = memory();
+    restoreBackup(to, file);
+    const opened = await new BrowserVault(to).open(PASS);
+    expect(opened.db.values.get("k1")).toBe(VALUE);
+  });
+
+  it("refuses a file that is not a backup, and never replaces a vault", async () => {
+    const to = memory();
+    expect(() => restoreBackup(to, '{"hello":"world"}')).toThrow(/not a DevLedger backup/);
+    expect(() => restoreBackup(to, "not json")).toThrow(/not a DevLedger backup/);
+    await new BrowserVault(to).create(PASS, contents());
+    expect(() => restoreBackup(to, exportBackup(to)!)).toThrow(/already has a vault/);
   });
 });
