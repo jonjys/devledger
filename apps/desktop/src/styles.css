@@ -1764,3 +1764,32 @@ select option { background: var(--panel); color: var(--text); }
   .pastebar-note { display: none; }
   .pastebar-web .add-anything-btn { flex: 1; padding: 10px; font-size: 14px; }
 }
+
+/* ---- phone: tables become cards ------------------------------------------------
+   Secrets, project variables and subscriptions are tables on a desk. On a phone
+   each row is a card instead, so nothing (least of all Copy and Reveal) sits
+   off the right edge. */
+@media (max-width: 800px) {
+  table.secrets, table.secrets tbody { display: block; overflow: visible; }
+  table.secrets thead { display: none; }
+  table.secrets tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+    padding: 12px 14px; margin: 0 0 10px; border: 1px solid var(--border);
+    border-radius: 12px; background: var(--panel);
+  }
+  table.secrets tr:hover td { background: transparent; }
+  table.secrets td, table.secrets th { white-space: normal; }
+  table.secrets td { display: block; padding: 0; border: 0; min-width: 0; }
+  table.secrets td:first-child, table.secrets td:last-child { flex-basis: 100%; }
+  table.secrets td:empty { display: none; }
+  table.secrets .revealed { word-break: break-all; }
+  table.secrets .row-acts { justify-content: flex-start; flex-wrap: wrap; padding-top: 4px; }
+  table.secrets .row-acts button { padding: 8px 12px; font-size: 13px; }
+}
+@media (max-width: 800px) {
+  /* Page headers with an action: title on top, the button full width under it. */
+  .vault-head { flex-wrap: wrap; gap: 10px; }
+  .vault-head > .spacer { display: none; }
+  .vault-head > .acts { flex-basis: 100%; }
+  .vault-head > .acts > button { width: 100%; }
+}
