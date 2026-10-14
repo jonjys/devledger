@@ -12,9 +12,18 @@ DevLedger keeps it in one encrypted file on your own computer.
   the same app on made-up sample data.
 - **Download:** [latest release](https://github.com/jonjys/devledger/releases/latest)
   for Windows, Linux and Android. Checksums and install notes are on
-  [the website](https://devledger-six.vercel.app/#download).
+  [the website](https://devledger.nyttolabs.com/#download).
 
 ![The DevLedger map](apps/desktop/web/public/screenshot-map.png)
+
+**New in 0.14: make it yours.** Overview becomes Home, a page of boxes you
+arrange: numbers, projects, trials, spend, needs attention, key names and notes
+you write yourself. Choose which tabs the menu shows and in what order, start
+from one of six templates, save your own and share it as a code. On a phone the
+bar holds four tabs and More, and tables become cards. The layout is stored in
+your vault. The website also has a [web app](https://devledger.nyttolabs.com/app)
+that keeps its own encrypted vault in your browser, with backups you can
+download, and a [page on how to check all this yourself](https://devledger.nyttolabs.com/trust).
 
 **New in 0.13: an AI assistant that never sees a key.** Add your own Anthropic
 API key and ask DevLedger to review your setup, plan the rotation of a leaked
@@ -39,7 +48,7 @@ from the tagged source, and GitHub lists a SHA-256 next to each one.
 **More info → Run anyway**. To check you have the file GitHub built:
 
 ```powershell
-Get-FileHash .\DevLedger_0.13.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\DevLedger_0.14.0_x64-setup.exe -Algorithm SHA256
 ```
 
 and compare it with the checksum on the release page or the website.
@@ -51,7 +60,7 @@ There is no macOS build yet.
 
 ## Status
 
-Version 0.13. Pre-release software that has not had an independent security
+Version 0.14. Pre-release software that has not had an independent security
 audit: the guarantees in [`docs/SECURITY.md`](docs/SECURITY.md) are the design
 intent, checked by the test suite and `scripts/security-check.sh`, not the
 result of external review. A forgotten passphrase cannot be recovered.

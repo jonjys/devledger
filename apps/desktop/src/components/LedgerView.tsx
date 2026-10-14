@@ -16,6 +16,22 @@ interface Props {
 type Mode = "map" | "list";
 
 const ZOOM_KEY = "devledger.listZoom";
+const MODE_KEY = "devledger.ledgerMode";
+
+/**
+ * The map unless the user chose otherwise. On a phone-sized screen the list
+ * opens first: the whole map squeezed into 390 pixels is too small to read,
+ * and the map is one tap away.
+ */
+function readMode(): Mode {
+  try {
+    const m = window.localStorage.getItem(MODE_KEY);
+    if (m === "map" || m === "list") return m;
+  } catch {
+    // Storage blocked: fall through to the screen-size default.
+  }
+  return window.innerWidth <= 800 ? "list" : "map";
+}
 const ZOOMS = [0.7, 0.8, 0.9, 1, 1.1];
 
 function readZoom(): number {
@@ -34,7 +50,16 @@ function readZoom(): number {
  * it stays; the map is what opens. The list can be zoomed out to see more.
  */
 export default function LedgerView({ onNotify, onChanged, refreshKey, onOpenProject }: Props) {
-  const [mode, setMode] = useState<Mode>("map");
+  const [mode, setModeState] = useState<Mode>(readMode);
+
+  function setMode(next: Mode) {
+    setModeState(next);
+    try {
+      window.localStorage.setItem(MODE_KEY, next);
+    } catch {
+      // Not remembered; nothing else to do.
+    }
+  }
   const [zoom, setZoom] = useState(readZoom);
 
   function zoomBy(step: number) {

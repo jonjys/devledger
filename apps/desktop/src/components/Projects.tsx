@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import * as api from "../lib/api";
 import { formatTime, plural } from "../lib/format";
+import { WEB } from "../lib/platform";
 import { pasteHints } from "../lib/pasteHints";
 import type { ProjectSummary } from "../lib/types";
 
@@ -315,36 +316,39 @@ function ProjectDetail({
 
       {tab === "overview" ? (
         <div className="vp-overview">
-          <section className="vp-paste" aria-label="Paste">
-            <textarea
-              aria-label={`Paste into ${name}`}
-              placeholder={`Paste a .env file, an API key (re_…, sk_…) or a few lines about ${name}. DevLedger works out what it is and files it here.`}
-              spellCheck={false}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) analyze();
-              }}
-            />
-            <div className="vp-paste-foot">
-              <span className="vp-hints" aria-live="polite">
-                {hints.length === 0
-                  ? text.trim()
-                    ? "Nothing recognised yet — analysis may still find something."
-                    : "Detects .env lines, Resend, Stripe, Anthropic, OpenAI and GitHub keys."
-                  : hints.map((h) => (
-                      <span key={h.label} className="vp-hint">
-                        {h.count > 1 ? `${h.count} × ` : ""}
-                        {h.label}
-                      </span>
-                    ))}
-              </span>
-              <span className="spacer" />
-              <button type="button" className="primary" onClick={analyze} disabled={!text.trim() || analyzing}>
-                {analyzing ? "Analyzing…" : `Add to ${name}`}
-              </button>
-            </div>
-          </section>
+          {/* Smart Paste needs the desktop app; in the browser this box could only refuse. */}
+          {!WEB && (
+            <section className="vp-paste" aria-label="Paste">
+              <textarea
+                aria-label={`Paste into ${name}`}
+                placeholder={`Paste a .env file, an API key (re_…, sk_…) or a few lines about ${name}. DevLedger works out what it is and files it here.`}
+                spellCheck={false}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) analyze();
+                }}
+              />
+              <div className="vp-paste-foot">
+                <span className="vp-hints" aria-live="polite">
+                  {hints.length === 0
+                    ? text.trim()
+                      ? "Nothing recognised yet — analysis may still find something."
+                      : "Detects .env lines, Resend, Stripe, Anthropic, OpenAI and GitHub keys."
+                    : hints.map((h) => (
+                        <span key={h.label} className="vp-hint">
+                          {h.count > 1 ? `${h.count} × ` : ""}
+                          {h.label}
+                        </span>
+                      ))}
+                </span>
+                <span className="spacer" />
+                <button type="button" className="primary" onClick={analyze} disabled={!text.trim() || analyzing}>
+                  {analyzing ? "Analyzing…" : `Add to ${name}`}
+                </button>
+              </div>
+            </section>
+          )}
 
           <section className="vp-tree" aria-label={`What ${name} runs on`}>
             <Suspense fallback={<div className="empty">Loading…</div>}>

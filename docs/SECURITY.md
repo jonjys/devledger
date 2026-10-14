@@ -228,6 +228,16 @@ without the credentials. Nothing in the graph is stored outside the SQLCipher
 file, and email addresses are additionally blind-indexed so duplicate detection
 never needs a plaintext comparison.
 
+The interface layout (the boxes on Home, their titles, notes typed into them,
+the tab order and saved templates) is one JSON document in the `settings`
+table under `ui.layout`. It is protected by the database encryption like the
+graph, not sealed a second time like secrets, so a note is the wrong place for
+a key. The core caps it at 256 KB and accepts only a JSON object; the interface
+keeps only box kinds and tabs it knows and caps every length when it reads it
+back. Changing it is not audited. A shared template code carries boxes, titles
+and note text, never ledger data, and the interface asks before sharing one
+whose notes have text.
+
 ## Reporting
 
 This is pre-release software and has not been independently audited. Treat the
