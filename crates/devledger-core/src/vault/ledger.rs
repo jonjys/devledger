@@ -65,6 +65,13 @@ impl Vault {
         self.unlocked()?.store.needs_attention()
     }
 
+    /// [`Vault::needs_attention`] as of a given moment. For tests of the
+    /// checks that depend on the date; the app always asks as of now.
+    #[doc(hidden)]
+    pub fn needs_attention_at(&self, now: OffsetDateTime) -> Result<Vec<AttentionItem>> {
+        self.unlocked()?.store.needs_attention_at(now)
+    }
+
     /// Every subscription, with the account behind it.
     pub fn list_subscriptions(&self) -> Result<Vec<SubscriptionSummary>> {
         self.unlocked()?.store.list_subscriptions()

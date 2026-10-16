@@ -12,6 +12,9 @@
 // - It only accepts an outline in the shape the demo builds ("# Ledger
 //   outline ..."), capped in size, and it supplies its own fixed instructions.
 // - Visitors are rate-limited per address, and the whole function per hour.
+//   The counters live in this function instance's memory, so they bound each
+//   warm instance rather than the whole deployment; the spend limit on the
+//   Anthropic account is the hard ceiling behind them.
 // - Answers are kept short and the model's effort is set low, so a request
 //   stays cheap and quick.
 //
@@ -100,7 +103,10 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const response = await client.beta.messages.create({
       model: MODEL,
-      max_tokens: 8000,
+      // A cost ceiling per request, with room to spare: the answer is asked to
+      // stay under 350 words (~500 tokens) and effort is low, so thinking is
+      // short. A cut-off answer comes back flagged as truncated.
+      max_tokens: 4000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       output_config: { effort: "low" },

@@ -526,7 +526,7 @@ function DesktopShellInner({ onLock }: Props) {
           {view === "assistant" && <AssistantView onNotify={notify} leakSecretId={leakId} />}
 
           {view === "attention" && (
-            <AttentionView onNotify={notify} refreshKey={refreshKey} onChanged={refresh} />
+            <AttentionView onNotify={notify} refreshKey={refreshKey} onChanged={refresh} onNavigate={go} />
           )}
         </div>
       </div>

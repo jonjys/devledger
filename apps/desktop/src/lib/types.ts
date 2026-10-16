@@ -450,7 +450,10 @@ export type AttentionKind =
   | "identity_without_email"
   | "orphan_secret"
   | "secret_value_missing"
-  | "ambiguous_provider_account";
+  | "ambiguous_provider_account"
+  | "stale_secret"
+  | "trial_ending_soon"
+  | "paying_twice";
 
 export interface AttentionItem {
   kind: AttentionKind;

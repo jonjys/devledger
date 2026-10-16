@@ -392,6 +392,79 @@ function needsAttention(): AttentionItem[] {
       });
     }
   }
+  items.push(...smartChecks(Date.now()));
+  return items;
+}
+
+// The date-based checks, as devledger-core's store/graph.rs words them.
+const DAY = 86_400_000;
+const STALE_AFTER_DAYS = 365;
+const TRIAL_WARNING_DAYS = 7;
+const CLIENT_SAFE = new Set(["supabase_anon_key", "env_var"]);
+
+export function smartChecks(now: number): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  for (const s of db.secrets) {
+    if (CLIENT_SAFE.has(s.kind)) continue;
+    const age = Math.floor((now - Date.parse(s.updated_at)) / DAY);
+    if (age > STALE_AFTER_DAYS) {
+      items.push({
+        kind: "stale_secret",
+        title: `${s.name} has not changed in ${Math.floor(age / 30)} months`,
+        detail:
+          "Keys that live for years end up in old laptops, chat logs and former colleagues' .env files. Create a new one with the provider, press Replace value, then revoke the old one.",
+        entity: { kind: "secret", id: s.id },
+      });
+    }
+  }
+  const today = Date.parse(new Date(now).toISOString().slice(0, 10));
+  const subs = subscriptions();
+  for (const s of subs) {
+    const sub = s.subscription;
+    if (sub.status !== "trialing" || !sub.trial_ends_at) continue;
+    const end = Date.parse(sub.trial_ends_at.slice(0, 10));
+    if (Number.isNaN(end)) continue;
+    const days = Math.round((end - today) / DAY);
+    if (days > TRIAL_WARNING_DAYS) continue;
+    const when =
+      days < 0
+        ? `ended ${-days === 1 ? "1 day" : `${-days} days`} ago`
+        : days === 0
+          ? "ends today"
+          : days === 1
+            ? "ends tomorrow"
+            : `ends in ${days} days`;
+    const per = sub.interval === "monthly" ? "/month" : sub.interval === "yearly" ? "/year" : "";
+    const price =
+      sub.amount_cents !== null && sub.currency
+        ? `It turns into ${(sub.amount_cents / 100).toFixed(2)} ${sub.currency}${per}`
+        : "It turns into a paid plan";
+    items.push({
+      kind: "trial_ending_soon",
+      title: `${sub.plan} trial on ${label(s.provider)} ${when}`,
+      detail: `${price} unless you cancel it with ${label(s.provider)}. Removing it here does not cancel it.`,
+      entity: { kind: "subscription", id: sub.id },
+    });
+  }
+  const paid = subs.filter(
+    (s) =>
+      (s.subscription.status === "active" || s.subscription.status === "past_due") &&
+      (s.subscription.amount_cents ?? 0) > 0 &&
+      s.provider !== "unknown",
+  );
+  const byProvider = new Map<string, SubscriptionSummary[]>();
+  for (const s of paid) byProvider.set(s.provider, [...(byProvider.get(s.provider) ?? []), s]);
+  for (const [provider, list] of byProvider) {
+    if (list.length < 2) continue;
+    items.push({
+      kind: "paying_twice",
+      title: `You pay for ${label(provider as Provider)} ${list.length} times`,
+      detail: `${list
+        .map((s) => `${s.subscription.plan} on ${s.identity_email ?? s.account_label}`)
+        .join(", ")}. Fine if each is needed; otherwise one of them could go.`,
+      entity: { kind: "subscription", id: list[0]!.subscription.id },
+    });
+  }
   return items;
 }
 

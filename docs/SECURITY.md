@@ -160,7 +160,10 @@ Anthropic sees what is sent under Anthropic's own data terms.
 
 The website (the demo and the web app) runs the assistant through a small
 serverless function holding the site's own key. It only accepts an outline in
-the shape the browser builds, and it rate-limits visitors. The demo's outline
+the shape the browser builds, and it rate-limits visitors. Those limits are
+counted in each warm function instance's memory, not across the whole
+deployment, so the spend limit set on the Anthropic account is the hard ceiling;
+each answer is also capped at 4,000 output tokens. The demo's outline
 is invented data. The web app's outline is built from the visitor's own ledger
 under the same rules as above: no values, previews, notes or custom fields, and
 placeholders for every address. It is sent only when the visitor presses a
