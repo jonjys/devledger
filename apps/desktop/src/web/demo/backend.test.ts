@@ -63,7 +63,35 @@ describe("demo backend", () => {
 
   it("flags a resource that holds keys but no project uses", async () => {
     const items = await api.needsAttention();
-    expect(items.map((i) => i.kind)).toEqual(["unlinked_service_project"]);
+    expect(items.map((i) => i.kind)).toEqual(["unlinked_service_project", "stale_secret", "trial_ending_soon"]);
+  });
+
+  it("words the date-based checks the way the vault does", async () => {
+    const items = await api.needsAttention();
+    expect(items.find((i) => i.kind === "stale_secret")!.title).toMatch(/^GITHUB_TOKEN has not changed in \d+ months$/);
+    const trial = items.find((i) => i.kind === "trial_ending_soon")!;
+    expect(trial.title).toBe("Plus trial on OpenAI ends in 5 days");
+    expect(trial.detail).toBe(
+      "It turns into 20.00 USD/month unless you cancel it with OpenAI. Removing it here does not cancel it.",
+    );
+    // A plain variable or an anon key is never "stale": rotating it protects nothing.
+    expect(items.filter((i) => i.kind === "stale_secret")).toHaveLength(1);
+  });
+
+  it("asks whether one provider is paid for twice", async () => {
+    await api.createSubscriptionManual({
+      email: "weekend@example.org",
+      provider: "vercel",
+      plan: "Team",
+      status: "active",
+      amountCents: 4000,
+      currency: "USD",
+      interval: "monthly",
+      renewsAt: null,
+    });
+    const twice = (await api.needsAttention()).filter((i) => i.kind === "paying_twice");
+    expect(twice.map((i) => i.title)).toEqual(["You pay for Vercel 2 times"]);
+    expect(twice[0]!.detail).toContain("Team on weekend@example.org");
   });
 
   it("creates, links and deletes like the vault does", async () => {

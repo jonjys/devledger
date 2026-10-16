@@ -179,6 +179,7 @@ export function seed(): DemoDb {
     name: string,
     environment: Environment,
     value: string,
+    changed: string = at,
   ) => {
     const s: SecretRecord = {
       id: newId(),
@@ -191,8 +192,8 @@ export function seed(): DemoDb {
       value_blind_index: `demo-${name}-${environment}`,
       environment,
       notes: null,
-      created_at: at,
-      updated_at: at,
+      created_at: changed,
+      updated_at: changed,
     };
     db.secrets.push(s);
     db.values.set(s.id, value);
@@ -284,8 +285,9 @@ export function seed(): DemoDb {
     "sk-demo-NOT-A-REAL-OPENAI-KEY-55555555555");
   secret({ service_project_id: oldSite }, "generic_api_key", "FORM_WEBHOOK_SECRET", "production",
     "demo-webhook-secret-NOT-REAL-7777777777");
+  // Created long ago and never rotated, so Needs attention suggests it.
   secret({ account_id: github }, "github_token", "GITHUB_TOKEN", "development",
-    "ghp_DEMO_NOT_A_REAL_TOKEN_666666666666666");
+    "ghp_DEMO_NOT_A_REAL_TOKEN_666666666666666", "2024-11-03T09:00:00Z");
 
   // --- what it costs ----------------------------------------------------------------
   const sub = (accountId: string, plan: string, status: Subscription["status"], cents: number | null, trialDays?: number) => {
@@ -304,7 +306,8 @@ export function seed(): DemoDb {
   };
   sub(vercel, "Pro", "active", 2000);
   sub(supabase, "Pro", "active", 2500);
-  sub(sideOpenAi, "Plus", "trialing", 2000, 9);
+  // Five days left, so Needs attention shows a trial about to bill.
+  sub(sideOpenAi, "Plus", "trialing", 2000, 5);
   sub(sideSupabase, "Free", "free", null);
 
   return db;

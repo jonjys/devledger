@@ -177,6 +177,19 @@ pub enum AttentionKind {
     /// makes an incoming paste ambiguous, so DevLedger says which account it
     /// chose rather than filing things silently.
     AmbiguousProviderAccount,
+    /// A credential whose value has not changed in over a year.
+    ///
+    /// Plain variables and keys meant for clients are left out: rotating a
+    /// public URL or an anon key protects nothing.
+    StaleSecret,
+    /// A free trial that ends within a week, or has ended and is still
+    /// recorded as a trial: the point where it quietly becomes a bill.
+    TrialEndingSoon,
+    /// More than one paid plan with the same provider.
+    ///
+    /// Often deliberate (a personal and a work account), so it is phrased as
+    /// a question, but it is the most common way to pay for something twice.
+    PayingTwice,
 }
 
 /// One item DevLedger cannot resolve on its own.

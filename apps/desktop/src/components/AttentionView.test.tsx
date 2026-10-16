@@ -143,3 +143,34 @@ describe("Needs attention", () => {
     expect(mocked.createOrganization).toHaveBeenCalledWith("acc1", "Acme Org");
   });
 });
+
+describe("the date-based checks", () => {
+  const TRIAL: AttentionItem = {
+    kind: "trial_ending_soon",
+    title: "Plus trial on OpenAI ends in 5 days",
+    detail: "It turns into 20.00 USD/month unless you cancel it with OpenAI.",
+    entity: { kind: "subscription", id: "sub-1" },
+  };
+  const STALE: AttentionItem = {
+    kind: "stale_secret",
+    title: "GITHUB_TOKEN has not changed in 23 months",
+    detail: "Create a new one with the provider, press Replace value, then revoke the old one.",
+    entity: { kind: "secret", id: "s-1" },
+  };
+
+  it("puts a trial about to bill near the top and links each item to where it is fixed", async () => {
+    const user = userEvent.setup();
+    mocked.needsAttention.mockResolvedValue([STALE, TRIAL]);
+    mocked.listIdentities.mockResolvedValue([]);
+    const onNavigate = vi.fn();
+    render(<AttentionView onNotify={vi.fn()} refreshKey={0} onNavigate={onNavigate} />);
+
+    const titles = (await screen.findAllByText(/trial on|has not changed/)).map((e) => e.textContent);
+    expect(titles).toEqual([TRIAL.title, STALE.title]);
+
+    await user.click(screen.getByRole("button", { name: "Open subscriptions" }));
+    expect(onNavigate).toHaveBeenCalledWith("subscriptions");
+    await user.click(screen.getByRole("button", { name: "Open secrets" }));
+    expect(onNavigate).toHaveBeenCalledWith("secrets");
+  });
+});

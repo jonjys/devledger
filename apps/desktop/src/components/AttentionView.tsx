@@ -8,10 +8,25 @@ interface Props {
   onNotify: (message: string, bad?: boolean) => void;
   refreshKey: number;
   onChanged?: () => void;
+  /** Open another view, for items fixed there (a trial, a key to rotate). */
+  onNavigate?: (view: "subscriptions" | "secrets") => void;
 }
 
+/** Where an item is fixed, when that is another view. */
+const FIX_IN: Partial<Record<AttentionItem["kind"], { view: "subscriptions" | "secrets"; label: string }>> = {
+  trial_ending_soon: { view: "subscriptions", label: "Open subscriptions" },
+  paying_twice: { view: "subscriptions", label: "Open subscriptions" },
+  stale_secret: { view: "secrets", label: "Open secrets" },
+};
+
+/** First what is filed nowhere, then what is about to cost money, then the rest. */
+const ORDER: Partial<Record<AttentionItem["kind"], number>> = {
+  identity_without_email: 0,
+  trial_ending_soon: 1,
+};
+
 /** Everything DevLedger could not work out on its own — the alerts inbox. */
-export default function AttentionView({ onNotify, refreshKey, onChanged }: Props) {
+export default function AttentionView({ onNotify, refreshKey, onChanged, onNavigate }: Props) {
   const [items, setItems] = useState<AttentionItem[]>([]);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,10 +53,7 @@ export default function AttentionView({ onNotify, refreshKey, onChanged }: Props
     onChanged?.();
   }, [load, onChanged]);
 
-  // Entries with no email first: everything under them is filed nowhere.
-  const sorted = [...items].sort(
-    (a, b) => Number(b.kind === "identity_without_email") - Number(a.kind === "identity_without_email"),
-  );
+  const sorted = [...items].sort((a, b) => (ORDER[a.kind] ?? 9) - (ORDER[b.kind] ?? 9));
 
   return (
     <div className="dash">
@@ -81,6 +93,13 @@ export default function AttentionView({ onNotify, refreshKey, onChanged }: Props
               <div key={`${item.entity.id}-${item.kind}-${i}`} className="finding warning">
                 <div className="t">{item.title}</div>
                 <div className="d">{item.detail}</div>
+                {FIX_IN[item.kind] && onNavigate && (
+                  <div className="attention-actions">
+                    <button type="button" className="outline tiny" onClick={() => onNavigate(FIX_IN[item.kind]!.view)}>
+                      {FIX_IN[item.kind]!.label}
+                    </button>
+                  </div>
+                )}
               </div>
             ),
           )}
