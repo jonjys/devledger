@@ -1,7 +1,7 @@
 {
   "name": "devledger-desktop",
   "private": true,
-  "version": "0.14.0",
+  "version": "0.14.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,6 +15,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@noble/hashes": "2.0.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "@xyflow/react": "^12.12.0",

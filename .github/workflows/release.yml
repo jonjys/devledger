@@ -137,7 +137,7 @@ jobs:
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           mapfile -t apks < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk')
           test "${#apks[@]}" -gt 0
-          gh release upload "$tag" "${apks[@]}" --clobber
+          ./scripts/upload-release-assets.sh "$tag" "${apks[@]}"
 
   ios:
     name: iPhone IPA
@@ -207,4 +207,4 @@ jobs:
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           ipa="$(find apps/desktop/src-tauri/gen/apple -type f -name '*.ipa' -print -quit)"
           test -n "$ipa"
-          gh release upload "$tag" "$ipa" --clobber
+          ./scripts/upload-release-assets.sh "$tag" "$ipa"

@@ -216,8 +216,8 @@
             <h3>In the browser</h3>
             <p>
               The <a href="/app">web app</a> keeps its vault in your browser's own storage, never on a server.
-              Your passphrase becomes an AES-256-GCM key with PBKDF2 (600,000 rounds) and the whole ledger is
-              sealed on every change. Clearing the site's data deletes it, and browser extensions can see what a
+              Your passphrase becomes an AES-256-GCM key with Argon2id (19 MiB, 2 passes) and the whole ledger
+              is sealed on every change. Clearing the site's data deletes it, and browser extensions can see what a
               page shows, so production keys are safer in the desktop app.
             </p>
           </article>
