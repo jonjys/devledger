@@ -16,6 +16,14 @@ DevLedger keeps it in one encrypted file on your own computer.
 
 ![The DevLedger map](apps/desktop/web/public/screenshot-map.png)
 
+**New in 0.14.1: smarter checks.** Needs attention now also flags keys
+nobody has rotated in a year, free trials that start billing within a week,
+and more than one paid plan with the same provider, each with a button to the
+page that fixes it. The web app's vault is now sealed with Argon2id, like the
+desktop app; vaults made before open as usual and are upgraded on unlock.
+Android and iPhone builds no longer go missing from a release when GitHub is
+slow.
+
 **New in 0.14: make it yours.** Overview becomes Home, a page of boxes you
 arrange: numbers, projects, trials, spend, needs attention, key names and notes
 you write yourself. Choose which tabs the menu shows and in what order, start
@@ -48,7 +56,7 @@ from the tagged source, and GitHub lists a SHA-256 next to each one.
 **More info → Run anyway**. To check you have the file GitHub built:
 
 ```powershell
-Get-FileHash .\DevLedger_0.14.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\DevLedger_0.14.1_x64-setup.exe -Algorithm SHA256
 ```
 
 and compare it with the checksum on the release page or the website.

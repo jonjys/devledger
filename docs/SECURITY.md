@@ -178,14 +178,21 @@ the user chooses to send.
 
 - **At rest:** the whole ledger, values included, is one AES-256-GCM blob in
   the site's `localStorage`. The key comes from the passphrase through
-  PBKDF2-SHA256 with 600,000 rounds and a random 16-byte salt. WebCrypto holds
-  it as non-extractable; every save uses a fresh 12-byte IV and fixed
-  associated data. A wrong passphrase fails authentication.
-- **Weaker than the desktop app:** PBKDF2 is cheaper to brute-force than
-  Argon2id, so a long passphrase matters more here. There is no second,
-  per-secret seal. Once unlocked, values live in page memory, where a malicious
-  browser extension or a cross-site scripting bug could read them; the site's
-  CSP allows only its own scripts. It locks after 15 minutes without use.
+  Argon2id (m=19456 KiB, t=2, p=1, OWASP's first recommended setting) and a
+  random 16-byte salt, computed in plain JavaScript (`@noble/hashes`) so the
+  CSP needs no `wasm-unsafe-eval`. The 32 derived bytes are handed to
+  WebCrypto as a non-extractable AES-GCM key and then overwritten; every save
+  uses a fresh 12-byte IV and fixed associated data. A wrong passphrase fails
+  authentication. Vaults made before 0.14.1 (PBKDF2-SHA256, 600,000 rounds)
+  still open and are re-sealed with Argon2id the moment they are unlocked; a
+  backup file that asks for more than 256 MiB or 10 passes is refused rather
+  than allowed to freeze the tab.
+- **Weaker than the desktop app:** the Argon2id cost is about a third of
+  the desktop's (0.6 s on a laptop, a second or two on a phone), so a long
+  passphrase matters more here. There is no second, per-secret seal. Once
+  unlocked, values live in page memory, where a malicious browser extension
+  or a cross-site scripting bug could read them; the site's CSP allows only
+  its own scripts. It locks after 15 minutes without use.
 - **Durability:** clearing the site's data, or a browser that evicts storage,
   deletes the vault. There is no recovery and no sync.
 

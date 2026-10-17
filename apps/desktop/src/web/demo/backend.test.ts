@@ -181,7 +181,9 @@ describe("web app vault", () => {
 
   beforeEach(() => {
     raw = new Map();
-    runOnPersistentVault(new BrowserVault({ get: (k) => raw.get(k) ?? null, set: (k, v) => void raw.set(k, v) }));
+    runOnPersistentVault(
+      new BrowserVault({ get: (k) => raw.get(k) ?? null, set: (k, v) => void raw.set(k, v) }, { m: 8_192, t: 1, p: 1 }),
+    );
   });
   afterEach(() => {
     vi.useRealTimers();
