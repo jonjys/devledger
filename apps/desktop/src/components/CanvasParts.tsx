@@ -279,6 +279,116 @@ function arc(sx: number, sy: number, tx: number, ty: number): string {
   return `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
 }
 
+// --- whose a new service is ---------------------------------------------------------------
+
+/** An account of this service you already have, or a new one under one of your emails, or under a new email. */
+export type PickedOwner = { kind: "account"; key: string } | { kind: "email"; key: string } | { kind: "new"; address: string };
+
+/**
+ * Asked when a service is added: which account it is. A service belongs to the
+ * email it was signed up with, so this is never guessed silently. The likely
+ * answer is chosen already, so Enter is enough.
+ */
+export function ServicePicker({
+  title,
+  service,
+  accounts,
+  emails,
+  initial,
+  onCancel,
+  onSubmit,
+}: {
+  title: string;
+  /** The service's name, e.g. "Supabase". */
+  service: string;
+  /** Accounts of this service you already have, with whose they are. */
+  accounts: { key: string; label: string; owner: string | null }[];
+  emails: { key: string; label: string }[];
+  initial: PickedOwner;
+  onCancel: () => void;
+  onSubmit: (owner: PickedOwner) => Promise<void>;
+}) {
+  const [picked, setPicked] = useState<string>(initial.kind === "new" ? "new" : `${initial.kind}|${initial.key}`);
+  const [address, setAddress] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isNew = picked === "new";
+  const ready = !isNew || /^[^\s@]+@[^\s@]+$/.test(address.trim());
+
+  async function submit() {
+    if (!ready || busy) return;
+    setBusy(true);
+    setError(null);
+    const [kind, key = ""] = picked.split("|");
+    try {
+      await onSubmit(kind === "new" ? { kind: "new", address: address.trim() } : { kind: kind as "account" | "email", key });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  const option = (value: string, main: ReactNode, sub: ReactNode) => (
+    <label key={value} className={`cv-pick${picked === value ? " on" : ""}`}>
+      <input type="radio" name="cv-pick" value={value} checked={picked === value} onChange={() => setPicked(value)} />
+      <span>
+        <strong>{main}</strong>
+        {sub && <small>{sub}</small>}
+      </span>
+    </label>
+  );
+
+  return (
+    <Modal label={title} onClose={onCancel} maxWidth={460}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <header>
+          <h2>{title}</h2>
+          <p>Which account is it? A service belongs to the email you signed up with.</p>
+        </header>
+        <div className="scroll">
+          {error && (
+            <div className="error" role="alert">
+              {error}
+            </div>
+          )}
+          <div className="cv-picks" role="radiogroup" aria-label={`Whose ${service} is it?`}>
+            {accounts.map((a) => option(`account|${a.key}`, `Your ${a.label}`, a.owner ? `Signed up with ${a.owner}` : null))}
+            {emails.map((e) => option(`email|${e.key}`, `A new ${service} account`, `Signed up with ${e.label}`))}
+            {option("new", `A new ${service} account`, emails.length > 0 ? "Signed up with another email" : "Signed up with your email")}
+          </div>
+          {isNew && (
+            <div className="field">
+              <label htmlFor="cv-pick-address">Email address</label>
+              <input
+                id="cv-pick-address"
+                type="email"
+                autoFocus
+                placeholder="you@example.com"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+        <footer>
+          <span className="spacer" />
+          <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={!ready || busy} autoFocus={!isNew}>
+            {busy ? "Adding…" : "Add"}
+          </button>
+        </footer>
+      </form>
+    </Modal>
+  );
+}
+
 // --- the right-click menu -------------------------------------------------------------
 
 export interface MenuItem {

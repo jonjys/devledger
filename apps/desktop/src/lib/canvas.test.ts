@@ -13,6 +13,7 @@ import {
   ownerFor,
   parsePos,
   positions,
+  projectView,
   primaryId,
   resourceToLink,
   resourcesToUnlink,
@@ -397,6 +398,50 @@ describe("a project's page with services under two people", () => {
     expect(y("account:neon")).toBe(y("resource:db"));
     expect(at.get("account:neon")?.x).toBe(440);
     expect(at.get("email:you")?.x).toBe(660);
+  });
+});
+
+describe("what a project's page shows", () => {
+  it("every email of yours, and the organizations inside the services it shows", () => {
+    const { balls, lines } = team();
+    const withOrg = [...balls, mk("org", "acme", "Acme", { parent: "account:neon" })];
+    const view = projectView(withOrg, [...lines, line("holds", "account:neon", "org:acme")], "project:blog");
+    expect(view.has("email:kim")).toBe(true);
+    expect(view.has("email:you")).toBe(true);
+    expect(view.has("org:acme")).toBe(true);
+    // Not what the project has nothing to do with.
+    expect(view.has("account:gh")).toBe(false);
+    expect(view.has("project:shop")).toBe(false);
+  });
+
+  it("is empty for a project that is gone", () => {
+    const { balls, lines } = team();
+    expect(projectView(balls, lines, "project:gone").size).toBe(0);
+  });
+
+  it("puts a person on the other side, and a new organization in its own row under its service", () => {
+    const { balls, lines } = team();
+    const withOrg = [...balls, mk("org", "acme", "Acme", { parent: "account:neon" })];
+    const all = [...lines, line("holds", "account:neon", "org:acme")];
+    const view = projectView(withOrg, all, "project:blog");
+    const at = focusLayout(withOrg.filter((b) => view.has(b.key)), all.filter((l) => view.has(l.source) && view.has(l.target)), "project:blog");
+    // Blog uses Neon (yours) and Kim works on it, so Kim stands on the other side.
+    expect(at.get("email:kim")?.x).toBe(-220);
+    // Blog uses Neon directly: the new organization gets a row under it, off the line from Neon to you.
+    expect(at.get("org:acme")?.x).toBe(at.get("account:neon")?.x);
+    expect(at.get("org:acme")?.y).toBeGreaterThan(at.get("account:neon")?.y ?? Infinity);
+    expect(at.get("email:you")?.y).not.toBe(at.get("org:acme")?.y);
+  });
+
+  it("puts an empty project's emails in a column of their own, ready for lines", () => {
+    const { balls } = team();
+    const at = focusLayout(
+      [mk("project", "new", "New"), ...balls.filter((b) => b.kind === "email")],
+      [],
+      "project:new",
+    );
+    expect(at.get("email:you")).toEqual({ x: 440, y: -65 });
+    expect(at.get("email:kim")).toEqual({ x: 440, y: 65 });
   });
 });
 

@@ -23,12 +23,15 @@ import {
   focusLayout,
   neighbourhood,
   positions,
+  projectView,
   savedPositions,
   slotSpot,
   type Ball,
   type Line,
   type Point,
 } from "../lib/canvas";
+import { providerForName } from "../lib/providers";
+import type { Provider } from "../lib/types";
 
 import {
   AddDialog,
@@ -37,6 +40,7 @@ import {
   Finder,
   LineView,
   SLOT_SIZE,
+  ServicePicker,
   SlotView,
   ballSize,
   type BallNode,
@@ -53,7 +57,7 @@ import { useGlide } from "./canvas/glide";
 import { useHistory } from "./canvas/history";
 import { KIND_ORDER } from "./canvas/labels";
 import { FIT, GLIDE_MS, message, motion, readLocked } from "./canvas/prefs";
-import type { CanvasCore, Dialog, Menu } from "./canvas/types";
+import type { CanvasCore, Dialog, Menu, Picking } from "./canvas/types";
 import { useCanvasActions } from "./canvas/useCanvasActions";
 
 interface Props {
@@ -96,15 +100,17 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const wrapRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<Loaded | null>(null);
   // Locked unless someone chose otherwise: a map that has been drawn should
-  // not change by accident. The one exception is an empty map, which is
-  // being set up -- see the effect below.
+  // not change by accident. The exceptions are an empty map, which is being
+  // set up -- see the effect below -- and a project's page, which lays itself
+  // out and is where a project is built: it always opens ready to edit.
   const [stored] = useState(readLocked);
-  const [locked, setLocked] = useState(stored ?? true);
+  const [locked, setLocked] = useState(projectId ? false : (stored ?? true));
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedLine, setSelectedLine] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [picking, setPicking] = useState<Picking | null>(null);
   const [finder, setFinder] = useState(false);
   const [help, setHelp] = useState(false);
   // Where balls have been dragged this session, on top of what the vault says.
@@ -145,7 +151,10 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     if (stored === null && model.balls.length === 0) setLocked(false);
   }, [data, model, stored]);
   const projectKey = projectId ? ballKey("project", projectId) : null;
-  const shown = useMemo(() => (projectKey ? neighbourhood(model.lines, projectKey) : null), [model, projectKey]);
+  const shown = useMemo(
+    () => (projectKey ? projectView(model.balls, model.lines, projectKey) : null),
+    [model, projectKey],
+  );
   const balls = useMemo(() => (shown ? model.balls.filter((b) => shown.has(b.key)) : model.balls), [model, shown]);
   const lines = useMemo(
     () => (shown ? model.lines.filter((l) => shown.has(l.source) && shown.has(l.target)) : model.lines),
@@ -277,6 +286,13 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     [lines, lit, selectedLine, fresh, moving, needsService, projectKey],
   );
 
+  /** The email ball under a point on the page, for a service dropped onto it. */
+  const emailAt = (p: Point): Ball | null =>
+    balls.find((b) => {
+      const q = drawn.get(b.key);
+      return b.kind === "email" && !b.noEmail && q !== undefined && Math.hypot(q.x - p.x, q.y - p.y) < ballSize(b) / 2 + 24;
+    }) ?? null;
+
   /** The list's search box, for the empty slot to point at. The list replaces a ball's details. */
   const focusSearch = useCallback(() => {
     setSelected(null);
@@ -335,6 +351,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     setSelectedLine,
     setRenaming,
     setDialog,
+    setPicking,
     setMenu,
     setFinder,
     setMoved,
@@ -372,6 +389,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     tidyUp,
     focusOn,
     setPositions,
+    askService,
+    pickerDefault,
+    addPicked,
   } = actions;
   const { paneMenu, resourceDialog, ballMenu, dropOn, lineMenu } = canvasMenus({ ...core, ...actions });
 
@@ -385,7 +405,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       return;
     }
     const typing = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
-    if (typing || dialog || finder) return;
+    if (typing || dialog || picking || finder) return;
     if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
       e.preventDefault();
       void travel(e.key.toLowerCase() === "z" && !e.shiftKey);
@@ -664,25 +684,23 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           canvas={wrapRef}
           onPlace={(item, client) => {
             const at = client ? flow.screenToFlowPosition(client) : null;
+            // A new service: dropped next to an email on the map, or onto one on a
+            // project's page, it is that email's; otherwise the picker asks whose.
+            const service = (provider: Provider, name: string) => {
+              if (at && !focusProject) void addService(provider, name, at);
+              else {
+                const onto = at ? emailAt(at) : null;
+                if (onto) void addService(provider, name, at, onto);
+                else askService(provider, name, at);
+              }
+            };
             if (item.kind === "email") setDialog({ kind: "email", ball: null, at: at ?? spotInView() });
             else if (item.kind === "project") setDialog({ kind: "project", ball: null, at: at ?? spotInView() });
-            else if (item.kind === "other") setDialog({ kind: "service", ball: null, at: at ?? spotInView(), name: item.name });
+            else if (item.kind === "other") service(providerForName(item.name), item.name);
             else if (item.kind === "existing" && focusProject) {
               const a = byKey.get(item.key);
               if (a) void connect(focusProject, a);
-            } else if (item.kind === "service") {
-              // A click on a service you already have means that one; dragging
-              // it onto the map is how a second account is added.
-              const mine = accountBalls.filter((a) => a.provider === item.provider);
-              const only = mine.length === 1 ? mine[0] : undefined;
-              if (!at && only) {
-                if (focusProject) void connect(focusProject, only);
-                else {
-                  focusOn(only.key);
-                  onNotify(`You already have ${only.label}. Drag it onto the map to add a second account.`);
-                }
-              } else void addService(item.provider, item.name, at);
-            }
+            } else if (item.kind === "service") service(item.provider, item.name);
           }}
           onUnlock={toggleLock}
         />
@@ -700,6 +718,24 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             focusOn(entry.key);
           }}
           onClose={() => setFinder(false)}
+        />
+      )}
+
+      {picking && (
+        <ServicePicker
+          title={
+            picking.project
+              ? `Add ${picking.name} to ${byKey.get(`project:${picking.project}`)?.label ?? "the project"}`
+              : `Add ${picking.name}`
+          }
+          service={picking.name}
+          accounts={accountBalls
+            .filter((a) => a.provider === picking.provider)
+            .map((a) => ({ key: a.key, label: a.label, owner: ownerOf(a.id)?.label ?? null }))}
+          emails={emails.map((e) => ({ key: e.key, label: e.label }))}
+          initial={pickerDefault(picking)}
+          onCancel={() => setPicking(null)}
+          onSubmit={(owner) => addPicked(picking, owner)}
         />
       )}
 

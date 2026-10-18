@@ -1304,6 +1304,23 @@ select option { background: var(--panel); color: var(--text); }
 }
 .cv-hint strong { color: #E5E5E5; }
 
+/* whose a new service is */
+.cv-picks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.cv-pick {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: #121212;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.cv-pick:hover { border-color: #3A3A3A; }
+.cv-pick.on { border-color: #FF8C00; background: rgba(255, 140, 0, 0.07); }
+.cv-pick input[type="radio"] {
+  accent-color: #FF8C00; margin: 0; flex: none;
+  width: 16px; height: 16px; min-width: 0; padding: 0; border: 0; background: none; box-shadow: none;
+}
+.cv-pick span { display: flex; flex-direction: column; min-width: 0; }
+.cv-pick strong { font-size: 13.5px; color: var(--text); }
+.cv-pick small { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* the list on the right */
 .cv-shelf, .ledger-canvas .cv-details {
   position: relative; inset: auto; width: auto; height: 100%; min-height: 0;

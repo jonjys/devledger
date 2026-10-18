@@ -13,6 +13,7 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
   const {
     accountBalls,
     addService,
+    askService,
     byKey,
     connect,
     copySecret,
@@ -42,10 +43,13 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
 
   // --- menus --------------------------------------------------------------------------
 
+  // With an email to put it under, a service is added straight away; without,
+  // the picker asks whose it is.
   const serviceItems = (at: Point, owner: Ball | null): MenuItem[] => [
     ...COMMON.map((p) => {
       const info = providerInfo(p);
-      return { label: info?.name ?? p, onSelect: () => void addService(p, info?.name ?? p, at, owner) };
+      const name = info?.name ?? p;
+      return { label: name, onSelect: () => (owner ? void addService(p, name, at, owner) : askService(p, name, at)) };
     }),
     { label: "Other…", onSelect: () => setDialog({ kind: "service", ball: owner, at }) },
   ];
@@ -53,7 +57,7 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
   function paneMenu(at: Point): { title: string; items: MenuItem[] } {
     const items: MenuItem[] = [];
     if (!locked) {
-      if (!projectKey) items.push({ label: "Add email here", onSelect: () => setDialog({ kind: "email", ball: null, at }) });
+      items.push({ label: "Add email here", onSelect: () => setDialog({ kind: "email", ball: null, at }) });
       items.push({ label: "Add service here", items: serviceItems(at, null) });
       if (!projectKey) items.push({ label: "Add project here", onSelect: () => setDialog({ kind: "project", ball: null, at }) });
     }
@@ -225,7 +229,7 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
         open(`A service ${from.label} runs on`, [
           ...COMMON.map((p) => {
             const info = providerInfo(p);
-            return { label: info?.name ?? p, onSelect: () => void addService(p, info?.name ?? p, at, null, from.id) };
+            return { label: info?.name ?? p, onSelect: () => askService(p, info?.name ?? p, at, from.id) };
           }),
           { label: "Other…", onSelect: () => setDialog({ kind: "service", ball: from, at }) },
         ]);

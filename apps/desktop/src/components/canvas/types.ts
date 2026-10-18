@@ -21,8 +21,11 @@ export type Dialog = {
   name?: string;
   title?: string;
   /** A service to add as soon as this email exists: the one that asked for an email first. */
-  then?: { provider: Provider; name: string; at: Point | null };
+  then?: { provider: Provider; name: string; at: Point | null; project: string | null };
 };
+
+/** A service being added whose account has to be picked first: see `ServicePicker`. */
+export type Picking = { provider: Provider; name: string; at: Point | null; project: string | null };
 /** A right-click on a ball, a line or the background, or a line dragged from `drop` into empty space. */
 export type Menu = {
   x: number;
@@ -46,6 +49,7 @@ export interface CanvasCore {
   setSelectedLine: Dispatch<SetStateAction<string | null>>;
   setRenaming: Dispatch<SetStateAction<string | null>>;
   setDialog: Dispatch<SetStateAction<Dialog | null>>;
+  setPicking: Dispatch<SetStateAction<Picking | null>>;
   setMenu: Dispatch<SetStateAction<Menu | null>>;
   setFinder: Dispatch<SetStateAction<boolean>>;
   setMoved: Dispatch<SetStateAction<Map<string, Point>>>;
