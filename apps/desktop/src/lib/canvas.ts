@@ -28,6 +28,7 @@ import type {
   SecretListing,
   ServiceProjectSummary,
 } from "./types";
+import { providerLabel } from "./format";
 
 /** Hidden field holding a ball's position, "x,y". */
 export const POS_FIELD = "_pos";
@@ -307,7 +308,203 @@ export function buildCanvas(data: CanvasData): { balls: Ball[]; lines: Line[] } 
       kind: "works",
     });
   }
-  return { balls, lines };
+  return { balls: stampInstances(balls), lines };
+}
+
+/**
+ * Two accounts of the same service look like the same ball. When that happens,
+ * each one keeps a label of its own: the login when there is one, otherwise
+ * "GitHub 1", "GitHub 2". A single account is left exactly as it was.
+ */
+function stampInstances(balls: Ball[]): Ball[] {
+  const counts = new Map<string, number>();
+  for (const b of balls) {
+    if (b.kind === "account" && b.provider) counts.set(b.provider, (counts.get(b.provider) ?? 0) + 1);
+  }
+  const index = new Map<string, number>();
+  return balls.map((b) => {
+    if (b.kind !== "account" || !b.provider || (counts.get(b.provider) ?? 0) < 2) return b;
+    const n = (index.get(b.provider) ?? 0) + 1;
+    index.set(b.provider, n);
+    const service = providerLabel(b.provider);
+    const login = b.sub && !/\bkeys?$/.test(b.sub) ? b.sub : null;
+    if (login && login.toLowerCase() !== service.toLowerCase()) {
+      return { ...b, label: login, sub: b.sub === login ? service : `${service}${b.sub && b.sub !== login ? ` · ${b.sub}` : ""}` };
+    }
+    if (b.label.trim().toLowerCase() === service.toLowerCase()) return { ...b, label: `${service} ${n}` };
+    return { ...b, sub: b.sub ?? service };
+  });
+}
+
+export interface ServiceHull {
+  key: string;
+  provider: string;
+  /** "GitHub ×3" */
+  label: string;
+  members: string[];
+}
+
+/** One hull per service that has two or more accounts on the map. */
+export function serviceHulls(balls: Ball[]): ServiceHull[] {
+  const groups = new Map<string, Ball[]>();
+  for (const b of balls) {
+    if (b.kind !== "account" || !b.provider) continue;
+    const list = groups.get(b.provider) ?? [];
+    list.push(b);
+    groups.set(b.provider, list);
+  }
+  const out: ServiceHull[] = [];
+  for (const [provider, members] of groups) {
+    if (members.length < 2) continue;
+    out.push({
+      key: `hull:${provider}`,
+      provider,
+      label: `${providerLabel(provider)} ×${members.length}`,
+      members: members.map((m) => m.key),
+    });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** How many organizations and service-projects sit inside each account. */
+export function insideCounts(balls: Ball[]): Map<string, number> {
+  const byKey = new Map(balls.map((b) => [b.key, b]));
+  const counts = new Map<string, number>();
+  for (const b of balls) {
+    if (b.kind !== "org" && b.kind !== "resource") continue;
+    let p = b.parent;
+    const seen = new Set<string>();
+    while (p && !seen.has(p)) {
+      seen.add(p);
+      const parent = byKey.get(p);
+      if (!parent) break;
+      if (parent.kind === "account") {
+        counts.set(parent.key, (counts.get(parent.key) ?? 0) + 1);
+        break;
+      }
+      p = parent.parent;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Accounts start folded: their organizations and service-projects are hidden,
+ * and a project that ran on one of those draws its line to the account instead.
+ * `expanded` is the set of account keys the user has opened.
+ */
+export function foldedView(
+  balls: Ball[],
+  lines: Line[],
+  expanded: ReadonlySet<string>,
+): { balls: Ball[]; lines: Line[] } {
+  const byKey = new Map(balls.map((b) => [b.key, b]));
+  const accountOf = (key: string): string | null => {
+    let p: string | null = key;
+    const seen = new Set<string>();
+    while (p && !seen.has(p)) {
+      seen.add(p);
+      const b = byKey.get(p);
+      if (!b) return null;
+      if (b.kind === "account") return b.key;
+      p = b.parent;
+    }
+    return null;
+  };
+  const hidden = new Set<string>();
+  for (const b of balls) {
+    if (b.kind !== "org" && b.kind !== "resource") continue;
+    const acc = accountOf(b.key);
+    if (acc && !expanded.has(acc)) hidden.add(b.key);
+  }
+  const shownBalls = balls.filter((b) => !hidden.has(b.key));
+  const shown: Line[] = [];
+  const seen = new Set<string>();
+  for (const l of lines) {
+    if (!hidden.has(l.source) && !hidden.has(l.target)) {
+      shown.push(l);
+      continue;
+    }
+    if (l.kind !== "uses" || !hidden.has(l.target) || hidden.has(l.source)) continue;
+    const acc = accountOf(l.target);
+    if (!acc) continue;
+    const id = `uses:${l.source}:${acc}`;
+    if (seen.has(id) || shown.some((s) => s.source === l.source && s.target === acc && s.kind === "uses")) continue;
+    seen.add(id);
+    shown.push({ key: `${id}:folded`, source: l.source, target: acc, kind: "uses" });
+  }
+  return { balls: shownBalls, lines: shown };
+}
+
+export interface SideRelations {
+  /** What this ball owns or holds, one step down. */
+  owns: Ball[];
+  /** Who uses it, other than a project (those are listed on their own). */
+  usedBy: Ball[];
+  /**
+   * Projects that depend on this ball. For a project, the things it depends
+   * on, holders included, so the chain can be read without hovering the map.
+   */
+  projects: Ball[];
+}
+
+/** The three lists the details panel shows for a selected ball. */
+export function sideRelations(key: string, balls: Ball[], lines: Line[]): SideRelations {
+  const byKey = new Map(balls.map((b) => [b.key, b]));
+  const ball = byKey.get(key);
+  const owns = lines
+    .filter((l) => (l.kind === "owns" || l.kind === "holds") && l.source === key)
+    .map((l) => byKey.get(l.target))
+    .filter((b): b is Ball => Boolean(b));
+
+  const held = new Set<string>([key]);
+  const stack = [key];
+  while (stack.length) {
+    const k = stack.pop() as string;
+    for (const l of lines) {
+      if ((l.kind === "owns" || l.kind === "holds") && l.source === k && !held.has(l.target)) {
+        held.add(l.target);
+        stack.push(l.target);
+      }
+    }
+  }
+
+  const usedBy: Ball[] = [];
+  const seen = new Set<string>();
+  const push = (id: string, into: Ball[], bag: Set<string>) => {
+    if (id === key || bag.has(id)) return;
+    const b = byKey.get(id);
+    if (!b) return;
+    bag.add(id);
+    into.push(b);
+  };
+  for (const l of lines) {
+    if (l.kind === "uses" && held.has(l.target)) push(l.source, usedBy, seen);
+    if (l.kind === "works" && l.target === key) push(l.source, usedBy, seen);
+  }
+
+  if (ball?.kind === "project") {
+    const projects: Ball[] = [];
+    const bag = new Set<string>();
+    for (const l of lines) {
+      if (l.kind !== "uses" || l.source !== key) continue;
+      push(l.target, projects, bag);
+      let h = byKey.get(l.target)?.parent ?? null;
+      const guard = new Set<string>();
+      while (h && !guard.has(h)) {
+        guard.add(h);
+        push(h, projects, bag);
+        h = byKey.get(h)?.parent ?? null;
+      }
+    }
+    return { owns, usedBy, projects };
+  }
+
+  return {
+    owns,
+    usedBy: usedBy.filter((b) => b.kind !== "project"),
+    projects: usedBy.filter((b) => b.kind === "project"),
+  };
 }
 
 // --- where balls go ---------------------------------------------------------------

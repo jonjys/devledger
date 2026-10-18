@@ -5,9 +5,11 @@ import {
   besideSpot,
   buildCanvas,
   focusLayout,
+  foldedView,
   freeSpot,
   connectIntent,
   formatPos,
+  insideCounts,
   nearestEmail,
   neighbourhood,
   ownerFor,
@@ -18,6 +20,8 @@ import {
   resourceToLink,
   resourcesToUnlink,
   savedPositions,
+  serviceHulls,
+  sideRelations,
   tidyLayout,
   type Ball,
   type Line,
@@ -508,5 +512,68 @@ describe("tidying the whole map", () => {
     const { balls, lines } = canvas();
     const at = tidyLayout(balls, lines);
     expect(balls.every((b) => at.has(b.key))).toBe(true);
+  });
+});
+
+describe("several accounts of one service", () => {
+  function twoGithubs() {
+    const data = canvasVault();
+    const extra = data.people[1]!;
+    extra.accounts.push({
+      ...extra.accounts[0]!,
+      account: { ...extra.accounts[0]!.account, id: "gh-work", label: "GitHub", username: "work-octo", login_email: null },
+      organizations: [],
+    });
+    return buildCanvas(data);
+  }
+
+  it("gives each instance its own label and a hull that says how many", () => {
+    const { balls } = twoGithubs();
+    const githubs = balls.filter((b) => b.kind === "account" && b.provider === "github");
+    expect(githubs.map((b) => b.label).sort()).toEqual(["GitHub 1", "work-octo"]);
+    expect(serviceHulls(balls).map((h) => h.label)).toEqual(["GitHub ×2"]);
+    expect(serviceHulls(balls)[0]?.members).toHaveLength(2);
+  });
+
+  it("leaves a service that appears once unnamed-as-a-group", () => {
+    const { balls } = canvas();
+    expect(serviceHulls(balls)).toEqual([]);
+    expect(ball(balls, account(IDS.github)).label).toBe("GitHub");
+  });
+});
+
+describe("folded accounts", () => {
+  it("hides what is inside a closed account and points projects at the account", () => {
+    const { balls, lines } = canvas();
+    const closed = foldedView(balls, lines, new Set());
+    expect(closed.balls.some((b) => b.kind === "org" || b.kind === "resource")).toBe(false);
+    expect(closed.lines.some((l) => l.source === project(IDS.project) && l.target === account(IDS.supabase))).toBe(true);
+    expect(insideCounts(balls).get(account(IDS.supabase))).toBe(2);
+  });
+
+  it("opens one account without opening the others", () => {
+    const { balls, lines } = canvas();
+    const open = foldedView(balls, lines, new Set([account(IDS.supabase)]));
+    expect(open.balls.some((b) => b.key === org(IDS.org))).toBe(true);
+    expect(open.balls.some((b) => b.key === res(IDS.resource))).toBe(true);
+    expect(open.lines.some((l) => l.target === res(IDS.resource) && l.kind === "uses")).toBe(true);
+  });
+});
+
+describe("the details lists", () => {
+  it("says what a project depends on, up to the email", () => {
+    const { balls, lines } = canvas();
+    const rel = sideRelations(project(IDS.project), balls, lines);
+    expect(rel.projects.map((b) => b.label)).toEqual(
+      expect.arrayContaining(["shop-db", "acme's Org", "Supabase", "primary@example.com", "Stripe"]),
+    );
+    expect(rel.owns).toEqual([]);
+  });
+
+  it("says what an email owns and which projects depend on it", () => {
+    const { balls, lines } = canvas();
+    const rel = sideRelations(email(IDS.me), balls, lines);
+    expect(rel.owns.map((b) => b.label).sort()).toEqual(["GitHub", "Stripe", "Supabase"]);
+    expect(rel.projects.map((b) => b.label)).toContain("shop");
   });
 });

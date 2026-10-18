@@ -1204,12 +1204,14 @@ select option { background: var(--panel); color: var(--text); }
 .cv-ball.dim { opacity: 0.22; }
 @keyframes cv-pop { from { opacity: 0; transform: scale(0.55); } }
 .cv-orb {
+  position: relative;
   width: 100%; height: 100%; border-radius: 50%; display: grid; place-items: center;
   background: #141414; border: 2px solid #2E2E2E; color: #E5E5E5;
   transition: box-shadow 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 .cv-ball:hover .cv-orb { transform: scale(1.04); }
 .cv-ball.selected .cv-orb { box-shadow: 0 0 0 3px rgba(255, 140, 0, 0.9), 0 0 26px rgba(255, 140, 0, 0.55); }
+.cv-ball.preview .cv-orb { box-shadow: 0 0 0 2px rgba(255, 179, 71, 0.55); }
 /* picked for moving together: a white ring, so it reads apart from "shown in details" */
 .ledger-canvas.multi .react-flow__node.selected .cv-orb { outline: 2px dashed #F5F5F5; outline-offset: 4px; }
 .ledger-canvas .react-flow__selection { background: rgba(255, 140, 0, 0.08); border: 1px dashed #FF8C00; }
@@ -1224,6 +1226,27 @@ select option { background: var(--panel); color: var(--text); }
 .cv-email.primary.selected .cv-orb { box-shadow: 0 0 0 3px #FFD39A, 0 0 42px rgba(255, 140, 0, 0.9); }
 .cv-email.pulse .cv-orb { border-color: #EF4444; color: #F87171; background: #1A0D0D; animation: st-pulse 1.8s ease-in-out infinite; border-radius: 50%; }
 .cv-account .cv-orb { background: radial-gradient(circle at 35% 30%, #1E1E1E, #101010); border-color: #3A3A3A; }
+.cv-account .cv-count {
+  position: absolute; right: -4px; bottom: -2px; min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 999px; background: #FF8C00; color: #1A0E00; font-size: 10px; font-weight: 800;
+  display: grid; place-items: center; line-height: 1;
+}
+.cv-fold {
+  position: absolute; left: -6px; top: -6px; width: 18px; height: 18px; padding: 0;
+  border-radius: 50%; border: 1px solid #3A3A3A; background: #151515; color: #E5E5E5;
+  font-size: 14px; line-height: 1; z-index: 2;
+}
+.cv-fold:hover { border-color: #FF8C00; color: #FF8C00; }
+.cv-hull {
+  width: 100%; height: 100%; box-sizing: border-box; pointer-events: none;
+  border: 1px dashed rgba(255, 140, 0, 0.45); border-radius: 22px;
+  background: rgba(255, 140, 0, 0.035);
+}
+.cv-hull span {
+  position: absolute; top: 8px; left: 14px; font-size: 11px; font-weight: 750;
+  letter-spacing: 0.08em; text-transform: uppercase; color: #FFB347; font-weight: 700;
+}
+.ledger-canvas .react-flow__node-hull { pointer-events: none; z-index: 0 !important; }
 .cv-account.attention .cv-orb { border-color: #F59E0B; }
 /* inside a service: an organization, and the projects the service runs */
 .cv-org .cv-orb { background: radial-gradient(circle at 35% 30%, #1F1A2E, #110E1A); border-color: #6D5BD0; color: #C4B5FD; }

@@ -21,11 +21,14 @@ import {
   besideSpot,
   buildCanvas,
   focusLayout,
+  foldedView,
+  insideCounts,
   neighbourhood,
-  positions,
   projectView,
-  savedPositions,
+  serviceHulls,
+  sideRelations,
   slotSpot,
+  tidyLayout,
   type Ball,
   type Line,
   type Point,
@@ -38,6 +41,7 @@ import {
   BallView,
   ContextMenu,
   Finder,
+  HullView,
   LineView,
   SLOT_SIZE,
   ServicePicker,
@@ -45,6 +49,7 @@ import {
   ballSize,
   type BallNode,
   type FindEntry,
+  type HullNode,
   type LineData,
   type SlotNode,
 } from "./CanvasParts";
@@ -55,7 +60,6 @@ import { canvasMenus } from "./canvas/canvasMenus";
 import { load, type Loaded } from "./canvas/data";
 import { useGlide } from "./canvas/glide";
 import { useHistory } from "./canvas/history";
-import { KIND_ORDER } from "./canvas/labels";
 import { FIT, GLIDE_MS, message, motion, readLocked } from "./canvas/prefs";
 import type { CanvasCore, Dialog, Menu, Picking } from "./canvas/types";
 import { useCanvasActions } from "./canvas/useCanvasActions";
@@ -70,8 +74,8 @@ interface Props {
   onOpenProject?: (projectId: string) => void;
 }
 
-const nodeTypes = { ball: BallView, slot: SlotView };
-type CanvasNode = BallNode | SlotNode;
+const nodeTypes = { ball: BallView, slot: SlotView, hull: HullView };
+type CanvasNode = BallNode | SlotNode | HullNode;
 
 /** The empty slot on the page of a project that runs on nothing yet. */
 const SLOT = "slot:first-service";
@@ -80,12 +84,13 @@ const edgeTypes = { line: LineView };
 /**
  * The Ledger as a map you draw.
  *
- * Emails, the services you use and your projects are balls you place where you
- * like; lines between them are what the vault records -- which email owns a
- * service, which services a project runs on. Drag from a ball's port to
- * another ball to connect them, drag services in from the list on the right,
- * right-click anything, double-click to rename. Lock the map and nothing can be
- * moved, connected or deleted until it is unlocked again.
+ * Emails, the services you use and your projects are balls. The map lays
+ * itself out: each service beside the email that owns it, projects level with
+ * what they run on, lines turning at right angles. Accounts start folded, with
+ * a count of what is inside; open one to see it. Lines are what the vault
+ * records. Drag from a ball's port to connect, drag services in from the list,
+ * right-click anything, double-click to rename. Lock the map and nothing can
+ * be moved, connected or deleted until it is unlocked again.
  */
 export default function LedgerCanvas(props: Props) {
   return (
@@ -113,6 +118,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const [picking, setPicking] = useState<Picking | null>(null);
   const [finder, setFinder] = useState(false);
   const [help, setHelp] = useState(false);
+  /** Account keys the user has opened. Everything else starts folded. */
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  /** A ball the pointer has rested on. A hint only; it does not dim the map. */
+  const [hover, setHover] = useState<string | null>(null);
+  const hoverTimer = useRef(0);
   // Where balls have been dragged this session, on top of what the vault says.
   const [moved, setMoved] = useState<Map<string, Point>>(new Map());
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
@@ -161,25 +171,32 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     [model, shown],
   );
   const byKey = useMemo(() => new Map(model.balls.map((b) => [b.key, b])), [model]);
+  const counts = useMemo(() => insideCounts(model.balls), [model]);
+  // The main map folds accounts until they are opened. A project's page does
+  // not: it is already the few balls that project needs.
+  const view = useMemo(
+    () => (projectKey ? { balls, lines } : foldedView(balls, lines, expanded)),
+    [projectKey, balls, lines, expanded],
+  );
 
   const place = useMemo(() => {
+    // Auto-layout is the layout. A drag this session sits on top of it until
+    // Tidy up, or the next reload, puts the ball back. There is no mode toggle.
     const base =
       projectKey && data
-        ? focusLayout(balls, lines, projectKey, { upright })
-        : data
-          ? positions(model.balls, savedPositions(data, model.balls))
-          : new Map<string, Point>();
+        ? focusLayout(view.balls, view.lines, projectKey, { upright })
+        : tidyLayout(view.balls, view.lines);
     for (const [k, p] of moved) base.set(k, p);
     return base;
-  }, [data, model, balls, lines, projectKey, moved, upright]);
+  }, [data, view, projectKey, moved, upright]);
 
   // Balls glide to a new place; on a project's page a new one comes out of the project.
   const spawn = useMemo(() => (projectKey ? (place.get(projectKey) ?? null) : null), [place, projectKey]);
   const [drawn, settle] = useGlide(place, spawn);
   const needsService =
     projectKey !== null &&
-    balls.some((b) => b.key === projectKey) &&
-    !lines.some((l) => l.kind === "uses" && l.source === projectKey);
+    view.balls.some((b) => b.key === projectKey) &&
+    !view.lines.some((l) => l.kind === "uses" && l.source === projectKey);
 
   const lit = useMemo(() => (selected ? neighbourhood(model.lines, selected) : null), [model, selected]);
 
@@ -187,13 +204,52 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   // rename never works on the data as it was when the ball was drawn.
   const renameRef = useRef<(key: string, value: string | null) => Promise<void>>(async () => undefined);
   const onRename = useCallback((key: string, value: string | null) => void renameRef.current(key, value), []);
+  const toggleFold = useCallback((key: string, open: boolean) => {
+    setExpanded((prev) => {
+      if (prev.has(key) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  // Something added inside an account opens that account, so the new ball is
+  // not created and then immediately hidden.
+  const knownInside = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const inside = new Set(model.balls.filter((b) => b.kind === "org" || b.kind === "resource").map((b) => b.key));
+    const before = knownInside.current;
+    knownInside.current = inside;
+    if (!before) return;
+    const added = [...inside].filter((k) => !before.has(k));
+    if (added.length === 0) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const k of added) {
+        let parent = model.balls.find((b) => b.key === k)?.parent ?? null;
+        const seen = new Set<string>();
+        while (parent && !seen.has(parent)) {
+          seen.add(parent);
+          const ball = model.balls.find((b) => b.key === parent);
+          if (!ball) break;
+          if (ball.kind === "account") next.add(ball.key);
+          parent = ball.parent;
+        }
+      }
+      return next;
+    });
+  }, [model]);
+
+  const hulls = useMemo(() => (projectKey ? [] : serviceHulls(view.balls)), [projectKey, view]);
 
   useEffect(() => {
     setNodes((prev) => {
       // A box- or shift-selection belongs to xyflow; keep it across redraws.
       const picked = new Set(locked ? [] : prev.filter((n) => n.selected).map((n) => n.id));
-      const shown: CanvasNode[] = balls.map((b) => {
+      const shown: CanvasNode[] = view.balls.map((b) => {
         const size = ballSize(b);
+        const inside = counts.get(b.key) ?? 0;
         return {
           id: b.key,
           type: "ball" as const,
@@ -209,12 +265,42 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             ball: b,
             selected: selected === b.key,
             dim: lit !== null && !lit.has(b.key),
+            preview: hover === b.key,
             renaming: renaming === b.key,
             locked,
+            fold: !projectKey && b.kind === "account" && inside > 0 ? { open: expanded.has(b.key), inside } : null,
+            onToggleFold: toggleFold,
             onRename,
           },
         };
       });
+      if (!projectKey) {
+        for (const hull of hulls) {
+          const pts = hull.members
+            .map((k) => drawn.get(k))
+            .filter((p): p is Point => p !== undefined);
+          if (pts.length < 2) continue;
+          const minX = Math.min(...pts.map((p) => p.x)) - 86;
+          const maxX = Math.max(...pts.map((p) => p.x)) + 86;
+          const minY = Math.min(...pts.map((p) => p.y)) - 70;
+          const maxY = Math.max(...pts.map((p) => p.y)) + 108;
+          const width = maxX - minX;
+          const height = maxY - minY;
+          shown.push({
+            id: hull.key,
+            type: "hull",
+            position: { x: minX + width / 2, y: minY + height / 2 },
+            width,
+            height,
+            style: { width, height },
+            zIndex: -1,
+            draggable: false,
+            selectable: false,
+            connectable: false,
+            data: { label: hull.label },
+          });
+        }
+      }
       if (needsService && projectKey) {
         shown.push({
           id: SLOT,
@@ -229,7 +315,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       }
       return shown;
     });
-  }, [balls, drawn, selected, lit, renaming, locked, onRename, needsService, projectKey, upright]);
+  }, [view, drawn, selected, lit, hover, renaming, locked, onRename, toggleFold, needsService, projectKey, upright, hulls, counts, expanded]);
 
   // Lines that just appeared because the user drew them get the spinning-silk
   // entrance. A reload or a switch of view brings many lines at once; those
@@ -237,7 +323,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const seenLines = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   useEffect(() => {
-    const keys = new Set(lines.map((l) => l.key));
+    const keys = new Set(view.lines.map((l) => l.key));
     const before = seenLines.current;
     seenLines.current = keys;
     if (!before) return;
@@ -246,12 +332,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     setFresh(new Set(added));
     const t = window.setTimeout(() => setFresh(new Set()), 1400);
     return () => window.clearTimeout(t);
-  }, [lines]);
+  }, [view.lines]);
   const moving = useMemo(() => motion(1) > 0, []);
 
   const edges: Edge<LineData>[] = useMemo(
     () => [
-      ...lines.map((l) => ({
+      ...view.lines.map((l) => ({
         id: l.key,
         source: l.source,
         target: l.target,
@@ -283,12 +369,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           ]
         : []),
     ],
-    [lines, lit, selectedLine, fresh, moving, needsService, projectKey],
+    [view.lines, lit, selectedLine, fresh, moving, needsService, projectKey],
   );
 
   /** The email ball under a point on the page, for a service dropped onto it. */
   const emailAt = (p: Point): Ball | null =>
-    balls.find((b) => {
+    view.balls.find((b) => {
       const q = drawn.get(b.key);
       return b.kind === "email" && !b.noEmail && q !== undefined && Math.hypot(q.x - p.x, q.y - p.y) < ballSize(b) / 2 + 24;
     }) ?? null;
@@ -304,12 +390,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   // big map does not, because the user just put the new ball where they wanted.
   // Only once the balls have been measured: fitting earlier works from sizes
   // the canvas does not have yet and zooms far out.
-  const shape = projectKey ? `${projectKey}|${balls.length}|${upright}` : `map|${balls.length > 0}`;
+  const shape = projectKey ? `${projectKey}|${view.balls.length}|${upright}` : `map|${view.balls.length > 0}|${expanded.size}`;
   const measured = useNodesInitialized();
   const fitted = useRef<string | null>(null);
   const fitTimer = useRef(0);
   useEffect(() => {
-    if (balls.length === 0 || !measured || fitted.current === shape) return;
+    if (view.balls.length === 0 || !measured || fitted.current === shape) return;
     // After a change, once the balls have glided to where they are going;
     // the first time, a frame later, once the canvas has taken in its own size.
     // Not cancelled when `measured` flips as new balls are measured: the fit
@@ -318,7 +404,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     fitted.current = shape;
     window.clearTimeout(fitTimer.current);
     fitTimer.current = window.setTimeout(() => void flow.fitView({ ...FIT, duration: motion(300) }), wait);
-  }, [shape, measured, balls.length, flow]);
+  }, [shape, measured, view.balls.length, flow]);
   useEffect(() => () => window.clearTimeout(fitTimer.current), []);
 
   // A project's page is laid out for it, so it is refitted when its box changes
@@ -393,6 +479,25 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     pickerDefault,
     addPicked,
   } = actions;
+  const show = useCallback(
+    (key: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        let parent = byKey.get(key)?.parent ?? null;
+        const seen = new Set<string>();
+        while (parent && !seen.has(parent)) {
+          seen.add(parent);
+          const ball = byKey.get(parent);
+          if (!ball) break;
+          if (ball.kind === "account") next.add(ball.key);
+          parent = ball.parent;
+        }
+        return next;
+      });
+      focusOn(key);
+    },
+    [byKey, focusOn],
+  );
   const { paneMenu, resourceDialog, ballMenu, dropOn, lineMenu } = canvasMenus({ ...core, ...actions });
 
   // --- keyboard ----------------------------------------------------------------------
@@ -436,6 +541,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   if (!data) return <div className="empty">Loading…</div>;
 
   const selectedBall = selected ? byKey.get(selected) ?? null : null;
+  const relations = selectedBall ? sideRelations(selectedBall.key, model.balls, model.lines) : null;
   const undoStep = history.current.past.at(-1);
   const redoStep = history.current.future.at(-1);
   const builtMenu = menu
@@ -448,7 +554,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         : paneMenu(menu.at)
     : null;
   const focusProject = projectKey ? byKey.get(projectKey) ?? null : null;
-  const findEntries: FindEntry[] = balls.map((b) => ({ key: b.key, kind: b.kind, label: b.label, sub: b.sub }));
+  const findEntries: FindEntry[] = model.balls.map((b) => ({ key: b.key, kind: b.kind, label: b.label, sub: b.sub }));
   const empty = balls.length === 0;
 
   return (
@@ -559,13 +665,28 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           }}
           isValidConnection={(c) => c.source !== c.target}
           connectionRadius={70}
-          onNodeClick={(_, node) => {
+          onNodeClick={(event, node) => {
+            if (node.type === "hull") return;
+            if (event.target instanceof Element && event.target.closest(".cv-fold")) return;
             if (node.type === "slot") {
               focusSearch();
               return;
             }
             setSelectedLine(null);
+            const ball = byKey.get(node.id);
+            if (ball?.kind === "account" && !projectKey && (counts.get(ball.key) ?? 0) > 0 && !expanded.has(ball.key)) {
+              setExpanded((prev) => new Set(prev).add(ball.key));
+            }
             setSelected((s) => (s === node.id ? null : node.id));
+          }}
+          onNodeMouseEnter={(_, node) => {
+            if (node.type !== "ball") return;
+            window.clearTimeout(hoverTimer.current);
+            hoverTimer.current = window.setTimeout(() => setHover(node.id), 320);
+          }}
+          onNodeMouseLeave={() => {
+            window.clearTimeout(hoverTimer.current);
+            setHover(null);
           }}
           onNodeDoubleClick={(_, node) => !locked && node.type === "ball" && setRenaming(node.id)}
           onNodeContextMenu={(e, node) => {
@@ -638,15 +759,11 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           account={selectedBall.kind === "account" ? (data.accounts.get(selectedBall.id) ?? null) : null}
           secrets={secretsOf(selectedBall)}
           fields={namedFields(selectedBall)}
-          connected={[...neighbourhood(model.lines, selectedBall.key)]
-            // The projects inside it are shown as cards instead.
-            .filter((k) => k !== selectedBall.key && !(k.startsWith("resource:") && byKey.get(k)?.parent === selectedBall.key))
-            .map((k) => byKey.get(k))
-            .filter((b): b is Ball => Boolean(b))
-            // Services first, then projects, then emails; by name within each.
-            .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.label.localeCompare(b.label))}
+          owns={relations?.owns ?? []}
+          usedBy={relations?.usedBy ?? []}
+          dependsOn={relations?.projects ?? []}
           onClose={() => setSelected(null)}
-          onPick={focusOn}
+          onPick={show}
           onCopySecret={(s) => void copySecret(s)}
           onCopyText={(label, text) => void copyText(label, text)}
           onAdd={(kind) => {
@@ -680,7 +797,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
               ? []
               : model.balls.filter((b) => !model.lines.some((l) => l.source === b.key || l.target === b.key))
           }
-          onFind={focusOn}
+          onFind={show}
           canvas={wrapRef}
           onPlace={(item, client) => {
             const at = client ? flow.screenToFlowPosition(client) : null;
@@ -715,7 +832,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           entries={findEntries}
           onPick={(entry) => {
             setFinder(false);
-            focusOn(entry.key);
+            show(entry.key);
           }}
           onClose={() => setFinder(false)}
         />

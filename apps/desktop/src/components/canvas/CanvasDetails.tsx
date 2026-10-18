@@ -16,7 +16,9 @@ export function Details({
   account,
   secrets,
   fields,
-  connected,
+  owns,
+  usedBy,
+  dependsOn,
   inside,
   resourceOf,
   onClose,
@@ -34,7 +36,12 @@ export function Details({
   account: Account | null;
   secrets: SecretListing[];
   fields: CustomField[];
-  connected: Ball[];
+  /** What this ball owns. Direct children. */
+  owns: Ball[];
+  /** Who uses it, apart from projects. */
+  usedBy: Ball[];
+  /** Projects that depend on it, or what a project itself depends on. */
+  dependsOn: Ball[];
   /** The projects in a service or organization. */
   inside: Ball[];
   resourceOf: (id: string) => ServiceProjectSummary | undefined;
@@ -68,6 +75,29 @@ export function Details({
         <dd>{value}</dd>
       </>
     ) : null;
+
+  const chips = (list: Ball[], empty: string) => (
+    <>
+      {list.length === 0 && <p className="muted-p">{empty}</p>}
+      <div className="cv-connected">
+        {list.map((b) => (
+          <button key={b.key} type="button" className="cv-chip" onClick={() => onPick(b.key)}>
+            <span className="cv-chip-icon">
+              {b.provider ? (
+                <ProviderIcon provider={b.provider} name={b.label} size={16} />
+              ) : (
+                <span className={`cv-chip-glyph ${b.kind}`}>{b.kind === "email" ? "@" : "P"}</span>
+              )}
+            </span>
+            <span className="cv-chip-text">
+              <span>{b.label}</span>
+              <small>{kindLabel(b)}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
 
   return (
     <aside className="st-info cv-details" aria-label="Details">
@@ -138,30 +168,17 @@ export function Details({
         </>
       )}
 
-      <h4>Connected to</h4>
-      {connected.length === 0 && (
-        <p className="muted-p">
-          Nothing yet. Drag from the dot on this ball to{" "}
-          {ball.kind === "project" ? "a service it runs on" : ball.kind === "account" ? "its email" : "another ball"}.
-        </p>
+      <h4>Owns</h4>
+      {chips(owns, ball.kind === "project" ? "A project owns nothing. It runs on services." : "Nothing yet.")}
+
+      <h4>Used by</h4>
+      {chips(usedBy, "Nothing uses this yet.")}
+
+      <h4>{ball.kind === "project" ? "Depends on" : "Projects that depend on it"}</h4>
+      {chips(
+        dependsOn,
+        ball.kind === "project" ? "Draw a line to a service it runs on." : "No project depends on this yet.",
       )}
-      <div className="cv-connected">
-        {connected.map((b) => (
-          <button key={b.key} type="button" className="cv-chip" onClick={() => onPick(b.key)}>
-            <span className="cv-chip-icon">
-              {b.provider ? (
-                <ProviderIcon provider={b.provider} name={b.label} size={16} />
-              ) : (
-                <span className={`cv-chip-glyph ${b.kind}`}>{b.kind === "email" ? "@" : "P"}</span>
-              )}
-            </span>
-            <span className="cv-chip-text">
-              <span>{b.label}</span>
-              <small>{kindLabel(b)}</small>
-            </span>
-          </button>
-        ))}
-      </div>
 
       <h4>{ball.kind === "project" ? "Variables and fields" : holdsSecrets ? "Keys and fields" : "Fields"}</h4>
       {secrets.length === 0 && fields.length === 0 && <p className="muted-p">Nothing stored yet.</p>}

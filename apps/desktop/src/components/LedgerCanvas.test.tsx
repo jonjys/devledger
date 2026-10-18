@@ -62,6 +62,16 @@ function serve(data: CanvasData = canvasVault()) {
   return data;
 }
 
+/** Open a folded account so the balls inside it can be reached. */
+async function expand(label: string) {
+  await screen.findByTestId(`account:${IDS.github}`);
+  const button = [...document.querySelectorAll("button.cv-fold")].find((el) =>
+    (el.getAttribute("aria-label") ?? "").includes(label),
+  );
+  if (!button) throw new Error(`no fold button for ${label}`);
+  fireEvent.click(button);
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
@@ -543,6 +553,7 @@ describe("inside a service", () => {
   it("draws an organization and the projects in it", async () => {
     serve();
     await renderMap();
+    await expand("Supabase");
     expect(await screen.findByTestId(`org:${IDS.org}`)).toHaveTextContent("acme's Org");
     expect(screen.getByTestId(`resource:${IDS.resource}`)).toHaveTextContent("shop-db");
   });
@@ -587,6 +598,7 @@ describe("inside a service", () => {
     mocked.createServiceProjectManual.mockResolvedValue(made);
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     fireEvent.contextMenu(await screen.findByTestId(`org:${IDS.org}`));
     await user.click(screen.getByRole("menuitem", { name: "Add project in acme's Org…" }));
     const dialog = screen.getByRole("dialog", { name: "Add a Supabase project" });
@@ -611,6 +623,7 @@ describe("inside a service", () => {
   it("shows an organization's projects as cards, with what uses each", async () => {
     serve();
     await renderMap();
+    await expand("Supabase");
     fireEvent.click(await screen.findByTestId(`org:${IDS.org}`));
     const details = screen.getByRole("complementary", { name: "Details" });
     expect(within(details).getByText("Supabase organization")).toBeInTheDocument();
@@ -622,6 +635,7 @@ describe("inside a service", () => {
     serve();
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     fireEvent.contextMenu(await screen.findByTestId(`resource:${IDS.resource}`));
     await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
     await user.click(screen.getByRole("menuitem", { name: "blog" }));
@@ -633,6 +647,7 @@ describe("inside a service", () => {
     serve();
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     fireEvent.contextMenu(await screen.findByTestId(`resource:${IDS.resource}`));
     await user.hover(screen.getByRole("menuitem", { name: /Move to organization/ }));
     await user.click(screen.getByRole("menuitem", { name: "Out of acme's Org" }));
@@ -644,6 +659,7 @@ describe("inside a service", () => {
     serve();
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     fireEvent.doubleClick(await screen.findByTestId(`org:${IDS.org}`));
     const input = await screen.findByLabelText("Rename acme's Org");
     await user.clear(input);
@@ -655,6 +671,7 @@ describe("inside a service", () => {
     serve();
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     fireEvent.contextMenu(await screen.findByTestId(`org:${IDS.org}`));
     await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("stay, directly under Supabase"));
@@ -667,6 +684,7 @@ describe("fields", () => {
     serve();
     const user = userEvent.setup();
     await renderMap();
+    await expand("Supabase");
     const cases: [string, string, EntityRef][] = [
       [`email:${IDS.me}`, "Email", { kind: "identity", id: IDS.me }],
       [`account:${IDS.github}`, "Service", { kind: "account", id: IDS.github }],
@@ -696,6 +714,7 @@ describe("a project moving onto a project inside a service", () => {
     serve(data);
     const user = userEvent.setup();
     await renderMap();
+    await expand("Stripe");
     fireEvent.contextMenu(await screen.findByTestId("resource:r-pay"));
     await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
     await user.click(screen.getByRole("menuitem", { name: "shop" }));
@@ -711,6 +730,7 @@ describe("a project moving onto a project inside a service", () => {
     serve(data);
     const user = userEvent.setup();
     await renderMap();
+    await expand("Stripe");
     fireEvent.contextMenu(await screen.findByTestId("resource:r-pay"));
     await user.hover(screen.getByRole("menuitem", { name: /Use in project/ }));
     await user.click(screen.getByRole("menuitem", { name: "shop" }));

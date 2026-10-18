@@ -2,7 +2,7 @@
 // right-click menu, the Cmd+K finder and the add dialog. LedgerCanvas.tsx
 // wires them to data.
 
-import { BaseEdge, Handle, Position, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { BaseEdge, getSmoothStepPath, Handle, Position, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Ball, BallKind, LineKind } from "../lib/canvas";
@@ -39,10 +39,15 @@ export function hue(name: string): number {
 export interface BallData extends Record<string, unknown> {
   ball: Ball;
   selected: boolean;
-  /** Not connected to what is selected: drawn faint. */
+  /** Not connected to what is selected: drawn faint. Click only, never hover. */
   dim: boolean;
+  /** A delayed, soft hint while the pointer rests. Does not dim the rest. */
+  preview: boolean;
   renaming: boolean;
   locked: boolean;
+  /** Set on an account that has something inside it. */
+  fold: { open: boolean; inside: number } | null;
+  onToggleFold: (key: string, open: boolean) => void;
   onRename: (key: string, value: string | null) => void;
 }
 
@@ -121,16 +126,18 @@ function Glyph({ ball }: { ball: Ball }) {
 
 /** One ball. Memoised: panning re-renders the viewport, not these. */
 export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
-  const { ball, selected, dim, renaming, locked, onRename } = data;
+  const { ball, selected, dim, preview, renaming, locked, fold, onToggleFold, onRename } = data;
   const size = ballSize(ball);
   const cls = [
     "cv-ball",
     `cv-${ball.kind}`,
     ball.primary ? "primary" : "",
     selected ? "selected" : "",
+    preview && !selected ? "preview" : "",
     dim ? "dim" : "",
     ball.noEmail ? "pulse" : "",
     ball.attention ? "attention" : "",
+    fold && !fold.open ? "folded" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -143,11 +150,29 @@ export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
       <Handle type="source" id="c" position={Position.Top} style={CENTRE} isConnectable={false} />
       <div className="cv-orb">
         <Glyph ball={ball} />
+        {fold && !fold.open && <span className="cv-count">{fold.inside}</span>}
       </div>
       <div className="cv-label">
         {renaming ? <RenameInput ball={ball} onRename={onRename} /> : <strong>{ball.label}</strong>}
         {ball.sub && !renaming && <span>{ball.sub}</span>}
+        {fold && !fold.open && !renaming && <span>{fold.inside} inside</span>}
       </div>
+      {fold && (
+        <button
+          type="button"
+          className="cv-fold nodrag nopan"
+          aria-expanded={fold.open}
+          aria-label={`${fold.open ? "Collapse" : "Expand"} ${ball.label}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClickCapture={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFold(ball.key, !fold.open);
+          }}
+        >
+          {fold.open ? "–" : "+"}
+        </button>
+      )}
       {!locked && (
         <Handle
           type="source"
@@ -205,21 +230,25 @@ export interface LineData extends Record<string, unknown> {
 }
 
 /**
- * A line from ball to ball, with its threads.
+ * A right-angle line from ball to ball.
  *
- * At rest a faint thread drifts along every line. Tap a ball and its whole chain
- * lights up, with sparks running the way things flow: from you to what you own,
- * and from a service into the project that uses it. A line that was just drawn
- * spins out from its first ball like silk.
+ * Straight diagonals cross the map and hide which ball a line belongs to.
+ * Elbows follow the columns: out of a ball, across, then into the next one.
+ * At rest a faint thread drifts along every line. Tap a ball and its whole
+ * chain lights up. Hover does not: a pointer moving across the map must not
+ * dim it. A line that was just drawn spins out from its first ball like silk.
  */
 export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
   const d = data as LineData | undefined;
-  // Who works on a project is drawn as an arc: it often spans the whole map,
-  // and a straight line would run through the balls in between.
-  const path =
-    d?.kind === "works"
-      ? arc(sourceX, sourceY, targetX, targetY)
-      : `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+  const [path] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition: Position.Right,
+    targetX,
+    targetY,
+    targetPosition: Position.Left,
+    borderRadius: 12,
+  });
   const cls = [
     "cv-line",
     d?.kind ?? "",
@@ -266,18 +295,20 @@ export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeP
   );
 }
 
-/** A gentle curve from one point to another, always bowing upwards. */
-function arc(sx: number, sy: number, tx: number, ty: number): string {
-  const dx = tx - sx;
-  const dy = ty - sy;
-  const length = Math.hypot(dx, dy) || 1;
-  const bow = Math.min(140, length * 0.2);
-  // The perpendicular that points up the screen.
-  const flip = -dx / length > 0 ? -1 : 1;
-  const cx = (sx + tx) / 2 + (dy / length) * bow * flip;
-  const cy = (sy + ty) / 2 + (-dx / length) * bow * flip;
-  return `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
+export interface HullData extends Record<string, unknown> {
+  label: string;
 }
+
+export type HullNode = Node<HullData, "hull">;
+
+/** A quiet box around every account of one service: "GitHub ×3". */
+export const HullView = memo(function HullView({ data }: NodeProps<HullNode>) {
+  return (
+    <div className="cv-hull">
+      <span>{data.label}</span>
+    </div>
+  );
+});
 
 // --- whose a new service is ---------------------------------------------------------------
 

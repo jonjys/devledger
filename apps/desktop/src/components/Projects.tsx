@@ -199,8 +199,8 @@ function ProjectList({ projects, onOpen, onNotify, onChanged, onAdd }: Props) {
           )}
         </section>
 
-        <aside className="vp-side" aria-label="Recent Previews">
-          <h3>Recent Previews</h3>
+        <aside className="vp-side" aria-label="Recently touched">
+          <h3>Recently touched</h3>
           {recent.length === 0 ? (
             <p className="muted-p">Projects you open show up here.</p>
           ) : (

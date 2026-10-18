@@ -130,7 +130,7 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
         items.push(useIn(ball, freeSpot({ x: near.x + 260, y: near.y }, place.values())));
         const owner = ownerOf(ball.id);
         items.push({
-          label: "Move to email",
+          label: "Move to identity",
           items: emails.filter((e) => e.key !== owner?.key).map((e) => ({ label: e.label, onSelect: () => void connect(ball, e) })),
         });
         items.push(rename_, del);
@@ -250,7 +250,7 @@ export function canvasMenus(ctx: CanvasCore & CanvasActions) {
             ? [{ label: "Press Edit map to change this", disabled: true }]
             : [
                 {
-                  label: "Move to email",
+                  label: "Move to identity",
                   items: emails.filter((e) => e.key !== line.source).map((e) => ({ label: e.label, onSelect: () => void connect(ball, e) })),
                 },
               ],

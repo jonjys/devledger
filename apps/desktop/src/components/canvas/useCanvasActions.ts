@@ -18,6 +18,7 @@ import {
   nearestEmail,
   ownerFor,
   parseKey,
+  parsePos,
   posField,
   primaryField,
   resourceToLink,
@@ -846,7 +847,11 @@ export function useCanvasActions(ctx: CanvasCore) {
   async function tidyUp() {
     if (locked || projectKey) return;
     const after = tidyLayout(model.balls, model.lines);
-    const before = new Map([...after.keys()].map((k) => [k, place.get(k) ?? { x: 0, y: 0 }]));
+    // The map is already auto-laid-out, so what is on screen is not the
+    // hand-placed spot. Undo goes back to that saved spot when there is one.
+    const before = new Map(
+      [...after.keys()].map((k) => [k, (data ? parsePos(posField(data, k)?.value) : null) ?? place.get(k) ?? { x: 0, y: 0 }]),
+    );
     // Each way, the whole map is brought into view once the balls have glided into place.
     const moveTo = async (to: Map<string, Point>) => {
       await setPositions(to);
