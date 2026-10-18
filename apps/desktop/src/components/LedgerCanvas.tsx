@@ -24,6 +24,7 @@ import {
   neighbourhood,
   positions,
   savedPositions,
+  slotSpot,
   type Ball,
   type Line,
   type Point,
@@ -35,19 +36,23 @@ import {
   ContextMenu,
   Finder,
   LineView,
+  SLOT_SIZE,
+  SlotView,
   ballSize,
   type BallNode,
   type FindEntry,
   type LineData,
+  type SlotNode,
 } from "./CanvasParts";
 import { Details } from "./canvas/CanvasDetails";
 import { Guide, HowItWorks } from "./canvas/CanvasHelp";
 import { Shelf } from "./canvas/CanvasShelf";
 import { canvasMenus } from "./canvas/canvasMenus";
 import { load, type Loaded } from "./canvas/data";
+import { useGlide } from "./canvas/glide";
 import { useHistory } from "./canvas/history";
 import { KIND_ORDER } from "./canvas/labels";
-import { FIT, message, motion, readLocked } from "./canvas/prefs";
+import { FIT, GLIDE_MS, message, motion, readLocked } from "./canvas/prefs";
 import type { CanvasCore, Dialog, Menu } from "./canvas/types";
 import { useCanvasActions } from "./canvas/useCanvasActions";
 
@@ -61,7 +66,11 @@ interface Props {
   onOpenProject?: (projectId: string) => void;
 }
 
-const nodeTypes = { ball: BallView };
+const nodeTypes = { ball: BallView, slot: SlotView };
+type CanvasNode = BallNode | SlotNode;
+
+/** The empty slot on the page of a project that runs on nothing yet. */
+const SLOT = "slot:first-service";
 const edgeTypes = { line: LineView };
 
 /**
@@ -100,7 +109,10 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const [help, setHelp] = useState(false);
   // Where balls have been dragged this session, on top of what the vault says.
   const [moved, setMoved] = useState<Map<string, Point>>(new Map());
-  const [nodes, setNodes] = useState<BallNode[]>([]);
+  const [nodes, setNodes] = useState<CanvasNode[]>([]);
+  // A project's page stands upright on a narrow screen, so a phone shows it
+  // larger. A first guess from the window, so a phone does not see it turn.
+  const [upright, setUpright] = useState(() => window.innerWidth < 640);
 
   const reload = useCallback(async () => {
     try {
@@ -144,13 +156,21 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const place = useMemo(() => {
     const base =
       projectKey && data
-        ? focusLayout(balls, lines, projectKey)
+        ? focusLayout(balls, lines, projectKey, { upright })
         : data
           ? positions(model.balls, savedPositions(data, model.balls))
           : new Map<string, Point>();
     for (const [k, p] of moved) base.set(k, p);
     return base;
-  }, [data, model, balls, lines, projectKey, moved]);
+  }, [data, model, balls, lines, projectKey, moved, upright]);
+
+  // Balls glide to a new place; on a project's page a new one comes out of the project.
+  const spawn = useMemo(() => (projectKey ? (place.get(projectKey) ?? null) : null), [place, projectKey]);
+  const [drawn, settle] = useGlide(place, spawn);
+  const needsService =
+    projectKey !== null &&
+    balls.some((b) => b.key === projectKey) &&
+    !lines.some((l) => l.kind === "uses" && l.source === projectKey);
 
   const lit = useMemo(() => (selected ? neighbourhood(model.lines, selected) : null), [model, selected]);
 
@@ -163,12 +183,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     setNodes((prev) => {
       // A box- or shift-selection belongs to xyflow; keep it across redraws.
       const picked = new Set(locked ? [] : prev.filter((n) => n.selected).map((n) => n.id));
-      return balls.map((b) => {
+      const shown: CanvasNode[] = balls.map((b) => {
         const size = ballSize(b);
         return {
           id: b.key,
           type: "ball" as const,
-          position: place.get(b.key) ?? { x: 0, y: 0 },
+          position: drawn.get(b.key) ?? { x: 0, y: 0 },
           // A size to draw with until the ball has been measured: xyflow hides
           // a node it has no size for.
           initialWidth: size,
@@ -186,8 +206,21 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           },
         };
       });
+      if (needsService && projectKey) {
+        shown.push({
+          id: SLOT,
+          type: "slot" as const,
+          position: slotSpot(drawn.get(projectKey) ?? { x: 0, y: 0 }, upright),
+          initialWidth: SLOT_SIZE,
+          initialHeight: SLOT_SIZE,
+          draggable: false,
+          selectable: false,
+          data: { label: "Add a service", sub: "Pick one from the list" },
+        });
+      }
+      return shown;
     });
-  }, [balls, place, selected, lit, renaming, locked, onRename]);
+  }, [balls, drawn, selected, lit, renaming, locked, onRename, needsService, projectKey, upright]);
 
   // Lines that just appeared because the user drew them get the spinning-silk
   // entrance. A reload or a switch of view brings many lines at once; those
@@ -208,8 +241,8 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   const moving = useMemo(() => motion(1) > 0, []);
 
   const edges: Edge<LineData>[] = useMemo(
-    () =>
-      lines.map((l) => ({
+    () => [
+      ...lines.map((l) => ({
         id: l.key,
         source: l.source,
         target: l.target,
@@ -226,24 +259,51 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           moving,
         },
       })),
-    [lines, lit, selectedLine, fresh, moving],
+      ...(needsService && projectKey
+        ? [
+            {
+              id: SLOT,
+              source: projectKey,
+              target: SLOT,
+              sourceHandle: "c",
+              targetHandle: "in",
+              type: "line",
+              selectable: false,
+              data: { kind: "uses" as const, slot: true, lit: false, dim: false, selected: false },
+            },
+          ]
+        : []),
+    ],
+    [lines, lit, selectedLine, fresh, moving, needsService, projectKey],
   );
+
+  /** The list's search box, for the empty slot to point at. The list replaces a ball's details. */
+  const focusSearch = useCallback(() => {
+    setSelected(null);
+    window.requestAnimationFrame(() => wrapRef.current?.querySelector<HTMLInputElement>(".cv-shelf-search")?.focus());
+  }, []);
 
   // Bring the whole map into view when it first has something on it. A
   // project's page lays itself out, so it refits as services are added; the
   // big map does not, because the user just put the new ball where they wanted.
   // Only once the balls have been measured: fitting earlier works from sizes
   // the canvas does not have yet and zooms far out.
-  const shape = projectKey ? `${projectKey}|${balls.length}` : `map|${balls.length > 0}`;
+  const shape = projectKey ? `${projectKey}|${balls.length}|${upright}` : `map|${balls.length > 0}`;
   const measured = useNodesInitialized();
   const fitted = useRef<string | null>(null);
+  const fitTimer = useRef(0);
   useEffect(() => {
     if (balls.length === 0 || !measured || fitted.current === shape) return;
+    // After a change, once the balls have glided to where they are going;
+    // the first time, a frame later, once the canvas has taken in its own size.
+    // Not cancelled when `measured` flips as new balls are measured: the fit
+    // for this shape is only ever asked for once.
+    const wait = fitted.current === null ? 16 : motion(GLIDE_MS) + 30;
     fitted.current = shape;
-    // A frame later, once the canvas has also taken in its own size.
-    const frame = window.requestAnimationFrame(() => void flow.fitView({ ...FIT, duration: motion(300) }));
-    return () => window.cancelAnimationFrame(frame);
+    window.clearTimeout(fitTimer.current);
+    fitTimer.current = window.setTimeout(() => void flow.fitView({ ...FIT, duration: motion(300) }), wait);
   }, [shape, measured, balls.length, flow]);
+  useEffect(() => () => window.clearTimeout(fitTimer.current), []);
 
   // A project's page is laid out for it, so it is refitted when its box changes
   // size -- which it does while the page around it is still settling.
@@ -255,6 +315,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       const size = entry ? `${Math.round(entry.contentRect.width)}x${Math.round(entry.contentRect.height)}` : "";
       if (size === last) return;
       last = size;
+      if (entry) setUpright(entry.contentRect.width < 600);
       window.requestAnimationFrame(() => void flow.fitView(FIT));
     });
     observer.observe(el);
@@ -308,6 +369,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     copySecret,
     copyText,
     toggleLock,
+    tidyUp,
     focusOn,
     setPositions,
   } = actions;
@@ -418,6 +480,16 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             >
               ↷
             </button>
+            {!projectKey && balls.length > 1 && (
+              <button
+                type="button"
+                className="st-find"
+                onClick={() => void tidyUp()}
+                title="Line everything up: each service beside its email, projects level with what they run on. Undo puts it back."
+              >
+                Tidy up
+              </button>
+            )}
           </>
         )}
         <button type="button" className="st-find" onClick={() => setFinder(true)}>
@@ -429,17 +501,19 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       </div>
 
       <div className="cv-flow">
-        <ReactFlow<BallNode, Edge<LineData>>
+        <ReactFlow<CanvasNode, Edge<LineData>>
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          onNodesChange={(changes: NodeChange<BallNode>[]) => setNodes((n) => applyNodeChanges(changes, n))}
+          onNodesChange={(changes: NodeChange<CanvasNode>[]) => setNodes((n) => applyNodeChanges(changes, n))}
           onNodeDragStop={(_, node, dragged) => {
             // Several selected balls move together, and are put back together.
             const group = dragged.length > 0 ? dragged : [node];
             const before = new Map(group.map((n) => [n.id, place.get(n.id) ?? n.position]));
             const after = new Map(group.map((n) => [n.id, n.position]));
+            // They are already where they were dropped; nothing should glide back.
+            settle(after);
             void setPositions(after);
             if (projectKey) return;
             record({
@@ -466,12 +540,17 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           isValidConnection={(c) => c.source !== c.target}
           connectionRadius={70}
           onNodeClick={(_, node) => {
+            if (node.type === "slot") {
+              focusSearch();
+              return;
+            }
             setSelectedLine(null);
             setSelected((s) => (s === node.id ? null : node.id));
           }}
-          onNodeDoubleClick={(_, node) => !locked && setRenaming(node.id)}
+          onNodeDoubleClick={(_, node) => !locked && node.type === "ball" && setRenaming(node.id)}
           onNodeContextMenu={(e, node) => {
             e.preventDefault();
+            if (node.type !== "ball") return;
             setSelected(node.id);
             setMenu({ x: e.clientX, y: e.clientY, at: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }), ball: node.id, line: null });
           }}
@@ -514,11 +593,6 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
 
         {empty && !projectKey && <Guide onEmail={() => setDialog({ kind: "email", ball: null, at: { x: 0, y: 0 } })} />}
         {empty && projectKey && <div className="cv-hint">This project is not on the map.</div>}
-        {!empty && focusProject && lines.length === 0 && (
-          <div className="cv-hint">
-            Pick the services <strong>{focusProject.label}</strong> runs on from the list on the right, or drag them in.
-          </div>
-        )}
         {!empty && !projectKey && projectBalls.length === 0 && emails.length > 0 && !help && (
           <div className="cv-hint">
             Next: add a project from the list on the right, then draw a line from it to each service it runs on.
@@ -568,7 +642,9 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         />
       ) : (
         <Shelf
-          locked={locked}
+          // A project's page adds from the list even while the map is locked:
+          // the lock is there so balls do not move by accident.
+          locked={locked && !focusProject}
           focus={focusProject}
           existing={
             focusProject

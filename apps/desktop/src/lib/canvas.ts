@@ -528,55 +528,222 @@ export function neighbourhood(lines: Line[], key: string): Set<string> {
   return out;
 }
 
+// --- laying out a whole tree ------------------------------------------------------
+
+/** What holds each ball: the email owning a service, the service holding a project in it. */
+function holderMap(lines: Line[]): Map<string, string> {
+  return new Map(lines.filter((l) => l.kind === "owns" || l.kind === "holds").map((l) => [l.target, l.source]));
+}
+
+/** A stable order for siblings: the main email first, then by kind and name. */
+function rank(b: Ball | undefined, key: string): string {
+  return `${b?.primary ? 0 : 1}${b ? RANK[b.kind] : 9}${(b?.label ?? "").toLowerCase()}\u0000${key}`;
+}
+
+const byRank = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function comparePaths(a: string[], b: string[]): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const c = byRank(a[i] as string, b[i] as string);
+    if (c !== 0) return c;
+  }
+  return a.length - b.length;
+}
+
+const mean = (ys: number[]) => ys.reduce((s, y) => s + y, 0) / ys.length;
+
+/**
+ * Heights for one column: each item as close to where it wants to be as it can
+ * get, in the same order, never closer than `gap` to the next, and the column
+ * as a whole centred where its items wanted it.
+ */
+function spread(items: { key: string; want: number }[], gap: number): Map<string, number> {
+  const sorted = [...items].sort((a, b) => a.want - b.want);
+  const ys: number[] = [];
+  for (const it of sorted) ys.push(ys.length === 0 ? it.want : Math.max(it.want, (ys.at(-1) as number) + gap));
+  const shift = sorted.length > 0 ? mean(sorted.map((i) => i.want)) - mean(ys) : 0;
+  return new Map(sorted.map((it, i) => [it.key, Math.round((ys[i] as number) + shift)]));
+}
+
+/** How far apart the columns on a project's page are. */
+const FOCUS_COLUMN = 220;
+/** Standing upright, for a narrow screen: how far apart the levels and the balls on one level are. */
+const UPRIGHT_LEVEL = 170;
+const UPRIGHT_GAP = 150;
+
 /**
  * A project's page draws it on its own: the project on the left, what it runs
  * on beside it, and then whatever holds those -- organizations, services,
- * emails -- a column each. Positions here are for that page only and are never
- * saved.
+ * emails -- a column each. People who work on it without owning any of it
+ * stand on its other side. Positions here are for that page only and are
+ * never saved.
+ *
+ * What it runs on is sorted by what holds it, so things in the same service
+ * and under the same email sit together, and every holder sits level with the
+ * middle of what it holds: no two lines cross and none runs through a ball.
+ *
+ * `upright` stands the same layout on its end for a narrow screen: the project
+ * at the top and each column a row below it, so a phone shows it larger.
  */
-export function focusLayout(balls: Ball[], lines: Line[], projectKey: string): Map<string, Point> {
+export function focusLayout(
+  balls: Ball[],
+  lines: Line[],
+  projectKey: string,
+  opts: { upright?: boolean } = {},
+): Map<string, Point> {
   const out = new Map<string, Point>([[projectKey, { x: 0, y: 0 }]]);
   const byKey = new Map(balls.map((b) => [b.key, b]));
-  const holder = new Map(lines.filter((l) => l.kind === "owns" || l.kind === "holds").map((l) => [l.target, l.source]));
-  const columns: string[][] = [];
-  const add = (k: string, column: number) => {
-    if (columns.some((c) => c.includes(k))) return;
-    (columns[column] ??= []).push(k);
+  const holder = holderMap(lines);
+  const order = (k: string) => rank(byKey.get(k), k);
+  // What holds a ball on this page, from the email down.
+  const above = (k: string) => {
+    const chain: string[] = [];
+    for (let h = holder.get(k); h && byKey.has(h) && !chain.includes(h); h = holder.get(h)) chain.unshift(h);
+    return chain;
   };
-  // What the project runs on, then a column per kind further up the chain.
-  const order: BallKind[] = ["resource", "org", "account", "email"];
-  const targets = lines.filter((l) => l.kind === "uses" && l.source === projectKey).map((l) => l.target);
-  for (const t of targets) add(t, 0);
-  const chain = new Set<string>();
-  for (const t of targets) for (let h = holder.get(t); h; h = holder.get(h)) chain.add(h);
-  // The people who work on it sit with the emails.
-  for (const l of lines) if (l.kind === "works" && l.target === projectKey) chain.add(l.source);
-  const kinds = order.filter((k) => [...chain].some((c) => byKey.get(c)?.kind === k && !targets.includes(c)));
-  for (const c of chain) {
-    const kind = byKey.get(c)?.kind;
-    if (kind) add(c, 1 + kinds.indexOf(kind));
+
+  const targets = [
+    ...new Set(lines.filter((l) => l.kind === "uses" && l.source === projectKey && byKey.has(l.target)).map((l) => l.target)),
+  ];
+  const paths = new Map(targets.map((t) => [t, [...above(t), t].map(order)]));
+  targets.sort((a, b) => comparePaths(paths.get(a) ?? [], paths.get(b) ?? []));
+  targets.forEach((t, i) => out.set(t, { x: FOCUS_COLUMN, y: (i - (targets.length - 1) / 2) * ROW }));
+
+  // Each holder, level with the middle of what it holds, a column per kind.
+  const below = new Map<string, number[]>();
+  for (const t of targets) {
+    const y = out.get(t)?.y ?? 0;
+    for (const a of above(t)) if (!out.has(a)) below.set(a, [...(below.get(a) ?? []), y]);
   }
-  // What the project runs on is spread evenly; everything further up sits
-  // level with what it holds, so no line has to run through a ball it does
-  // not belong to.
-  const first = columns[0] ?? [];
-  first.forEach((k, j) => out.set(k, { x: 220, y: (j - (first.length - 1) / 2) * ROW }));
-  columns.slice(1).forEach((keys, i) => {
-    const want = (keys ?? []).map((k) => {
-      const held = [...out.entries()].filter(([c]) => holder.get(c) === k).map(([, p]) => p.y);
-      return { k, y: held.length > 0 ? held.reduce((a, b) => a + b, 0) / held.length : 0 };
-    });
-    want.sort((a, b) => a.y - b.y);
-    let last = -Infinity;
-    for (const w of want) {
-      const y = Math.max(w.y, last + 100);
-      out.set(w.k, { x: 220 * (i + 2), y });
-      last = y;
-    }
+  const kinds = (["org", "account", "email"] as BallKind[]).filter((k) =>
+    [...below.keys()].some((a) => byKey.get(a)?.kind === k),
+  );
+  kinds.forEach((kind, i) => {
+    const column = [...below].filter(([a]) => byKey.get(a)?.kind === kind).map(([key, ys]) => ({ key, want: mean(ys) }));
+    for (const [key, y] of spread(column, 100)) out.set(key, { x: FOCUS_COLUMN * (i + 2), y });
   });
+
+  const people = [
+    ...new Set(lines.filter((l) => l.kind === "works" && l.target === projectKey).map((l) => l.source)),
+  ]
+    .filter((k) => byKey.has(k) && !out.has(k))
+    .sort((a, b) => byRank(order(a), order(b)));
+  people.forEach((k, i) => out.set(k, { x: -FOCUS_COLUMN, y: (i - (people.length - 1) / 2) * ROW }));
+
   let spare = 0;
   for (const b of balls) if (!out.has(b.key)) out.set(b.key, { x: 0, y: ROW * ++spare });
+  if (!opts.upright) return out;
+  return new Map(
+    [...out].map(([k, p]) => [
+      k,
+      { x: Math.round((p.y / ROW) * UPRIGHT_GAP), y: Math.round((p.x / FOCUS_COLUMN) * UPRIGHT_LEVEL) },
+    ]),
+  );
+}
+
+/** Where the empty slot for a project's first service goes, beside or below the project. */
+export function slotSpot(project: Point, upright: boolean): Point {
+  return upright ? { x: project.x, y: project.y + UPRIGHT_LEVEL } : { x: project.x + FOCUS_COLUMN, y: project.y };
+}
+
+/**
+ * The whole map, tidied: emails on the left, each service beside the email
+ * that owns it, what is inside a service beside that, and each project level
+ * with what it runs on. Every ball at the end of a chain gets a row of its own
+ * and every holder sits level with the middle of what it holds, so no two
+ * lines of the same tree cross. A service a project uses directly takes the
+ * top row of its block, so that project's line does not run through what is
+ * inside it.
+ */
+export function tidyLayout(balls: Ball[], lines: Line[]): Map<string, Point> {
+  const out = new Map<string, Point>();
+  const byKey = new Map(balls.map((b) => [b.key, b]));
+  const holder = holderMap(lines);
+  const order = (k: string) => rank(byKey.get(k), k);
+  const children = new Map<string, string[]>();
+  for (const [child, parent] of holder) {
+    if (byKey.has(child) && byKey.has(parent)) children.set(parent, [...(children.get(parent) ?? []), child]);
+  }
+  for (const list of children.values()) list.sort((a, b) => byRank(order(a), order(b)));
+  const usedDirectly = new Set(lines.filter((l) => l.kind === "uses").map((l) => l.target));
+
+  let next = 0;
+  const visit = (k: string): number => {
+    const kind = byKey.get(k)?.kind ?? "email";
+    out.set(k, { x: COLUMN[kind], y: 0 });
+    const kids = (children.get(k) ?? []).filter((c) => !out.has(c));
+    let y: number;
+    if (kids.length === 0 || usedDirectly.has(k)) {
+      y = next;
+      next += ROW;
+      kids.forEach(visit);
+    } else {
+      const ys = kids.map(visit);
+      y = ((ys[0] as number) + (ys.at(-1) as number)) / 2;
+    }
+    out.set(k, { x: COLUMN[kind], y });
+    return y;
+  };
+  const roots = balls
+    .filter((b) => b.kind !== "project" && !byKey.has(holder.get(b.key) ?? ""))
+    .map((b) => b.key)
+    .sort((a, b) => byRank(order(a), order(b)));
+  for (const r of roots) {
+    if (out.has(r)) continue;
+    visit(r);
+    // A little air between one email's things and the next.
+    next += ROW / 2;
+  }
+
+  const projects = balls.filter((b) => b.kind === "project");
+  const heights = (keys: string[]) => keys.map((k) => out.get(k)?.y).filter((y): y is number => y !== undefined);
+  const wants = projects.map((p) => {
+    const used = heights(lines.filter((l) => l.kind === "uses" && l.source === p.key).map((l) => l.target));
+    const people = heights(lines.filter((l) => l.kind === "works" && l.target === p.key).map((l) => l.source));
+    return { key: p.key, want: used.length > 0 ? mean(used) : people.length > 0 ? mean(people) : null };
+  });
+  const placed = spread(
+    wants.filter((w): w is { key: string; want: number } => w.want !== null),
+    ROW,
+  );
+  let bottom = Math.max(next, ...[...placed.values()].map((y) => y + ROW));
+  for (const w of wants) {
+    const y = placed.get(w.key) ?? bottom;
+    if (!placed.has(w.key)) bottom += ROW;
+    out.set(w.key, { x: COLUMN.project, y });
+  }
   return out;
+}
+
+/**
+ * The email a new service on a project's page belongs to: the one that already
+ * owns most of what the project runs on, else someone who works on it, else
+ * the main email, else the first. Null only when there is no email at all.
+ */
+export function ownerFor(projectKey: string, emails: Ball[], lines: Line[]): Ball | null {
+  if (emails.length === 0) return null;
+  const holder = holderMap(lines);
+  const root = (k: string) => {
+    const seen = new Set<string>();
+    let r = k;
+    for (let h = holder.get(r); h && !seen.has(h); h = holder.get(h)) {
+      seen.add(h);
+      r = h;
+    }
+    return r;
+  };
+  const owns = new Map<string, number>();
+  for (const l of lines) {
+    if (l.kind !== "uses" || l.source !== projectKey) continue;
+    const r = root(l.target);
+    owns.set(r, (owns.get(r) ?? 0) + 1);
+  }
+  const best = (list: Ball[]) =>
+    [...list].sort((a, b) => (owns.get(b.key) ?? 0) - (owns.get(a.key) ?? 0) || Number(b.primary) - Number(a.primary))[0];
+  const owner = best(emails.filter((e) => owns.has(e.key)));
+  if (owner) return owner;
+  const workers = emails.filter((e) => lines.some((l) => l.kind === "works" && l.source === e.key && l.target === projectKey));
+  return best(workers) ?? emails.find((e) => e.primary) ?? emails[0] ?? null;
 }
 
 /**

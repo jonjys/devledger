@@ -16,11 +16,13 @@ import {
   isHiddenField,
   isImplicit,
   nearestEmail,
+  ownerFor,
   parseKey,
   posField,
   primaryField,
   resourceToLink,
   resourcesToUnlink,
+  tidyLayout,
   type Ball,
   type Line,
   type Point,
@@ -40,7 +42,7 @@ import { type AddValues } from "../CanvasParts";
 import { entityOf } from "./data";
 import { type Step } from "./history";
 import { serviceLabel, serviceName } from "./labels";
-import { message, motion, writeLocked } from "./prefs";
+import { FIT, GLIDE_MS, message, motion, writeLocked } from "./prefs";
 import type { Act, CanvasCore, Dialog } from "./types";
 
 export function useCanvasActions(ctx: CanvasCore) {
@@ -418,12 +420,22 @@ export function useCanvasActions(ctx: CanvasCore) {
     owner: Ball | null = null,
     forProject: string | null = projectId,
   ): Promise<string | null> {
-    if (locked) return null;
+    // On a project's page the list adds on a click whether or not the map is
+    // locked: the lock keeps balls from moving by accident, and nothing here is.
+    if (locked && !projectKey) return null;
     const spot = at ?? spotInView();
-    const to = owner ?? nearestEmail(emails, place, spot);
+    // A project's page shows only what the project already touches, so the
+    // owner is worked out from the vault rather than from what is nearby.
+    const to = owner ?? (projectKey ? ownerFor(projectKey, emails, model.lines) : nearestEmail(emails, place, spot));
     if (!to) {
-      onNotify("Add your email first: every service belongs to an email.");
-      setDialog({ kind: "email", ball: null, at: freeSpot({ x: spot.x - 300, y: spot.y }, place.values()) });
+      const label = serviceLabel(typed, provider);
+      onNotify(`Every service belongs to an email. Add yours and ${label} is added right after.`);
+      setDialog({
+        kind: "email",
+        ball: null,
+        at: freeSpot({ x: spot.x - 300, y: spot.y }, place.values()),
+        then: { provider, name: typed, at },
+      });
       return null;
     }
     try {
@@ -557,6 +569,22 @@ export function useCanvasActions(ctx: CanvasCore) {
       record(added(what.label, what.kind, what.id, () => add(d, values)));
     }
     await changed();
+    // The service that asked for an email first, now that there is one.
+    if (d.kind === "email" && d.then && made) {
+      const owner: Ball = {
+        key: ballKey("email", made.id),
+        kind: "email",
+        id: made.id,
+        label: made.label,
+        sub: null,
+        provider: null,
+        primary: false,
+        noEmail: false,
+        attention: false,
+        parent: null,
+      };
+      await addService(d.then.provider, d.then.name, d.then.at, owner);
+    }
     return made?.id ?? null;
   }
 
@@ -731,6 +759,21 @@ export function useCanvasActions(ctx: CanvasCore) {
     );
   }
 
+  /** Line the whole map up, as one step that undo takes back. */
+  async function tidyUp() {
+    if (locked || projectKey) return;
+    const after = tidyLayout(model.balls, model.lines);
+    const before = new Map([...after.keys()].map((k) => [k, place.get(k) ?? { x: 0, y: 0 }]));
+    // Each way, the whole map is brought into view once the balls have glided into place.
+    const moveTo = async (to: Map<string, Point>) => {
+      await setPositions(to);
+      window.setTimeout(() => void flow.fitView({ ...FIT, duration: motion(400) }), motion(GLIDE_MS) + 30);
+    };
+    await moveTo(after);
+    record({ label: "tidying up", undo: () => moveTo(before), redo: () => moveTo(after), reload: false });
+    onNotify("Tidied up · undo puts everything back where it was");
+  }
+
   function focusOn(key: string) {
     setSelected(key);
     const p = place.get(key);
@@ -759,6 +802,7 @@ export function useCanvasActions(ctx: CanvasCore) {
     copySecret,
     copyText,
     toggleLock,
+    tidyUp,
     focusOn,
   };
 }

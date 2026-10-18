@@ -10,13 +10,16 @@ import {
   formatPos,
   nearestEmail,
   neighbourhood,
+  ownerFor,
   parsePos,
   positions,
   primaryId,
   resourceToLink,
   resourcesToUnlink,
   savedPositions,
+  tidyLayout,
   type Ball,
+  type Line,
 } from "./canvas";
 
 function canvas(opts: { pinned?: boolean } = {}) {
@@ -278,11 +281,11 @@ describe("a person working on a project", () => {
     expect([...neighbourhood(lines, email(IDS.work))].sort()).toEqual([email(IDS.work), project(IDS.project)].sort());
   });
 
-  it("puts the person with the emails on the project's page", () => {
+  it("puts a person who owns none of it on the project's other side, not across its services", () => {
     const { balls, lines } = withWork();
     const at = focusLayout(balls, lines, project(IDS.project));
-    expect(at.get(email(IDS.work))?.x).toBe(at.get(email(IDS.me))?.x);
-    expect(at.get(email(IDS.work))?.y).not.toBe(at.get(email(IDS.me))?.y);
+    expect(at.get(email(IDS.work))).toEqual({ x: -220, y: 0 });
+    expect(at.get(email(IDS.me))?.x).toBe(880);
   });
 });
 
@@ -322,11 +325,12 @@ describe("a project's own page", () => {
     const { balls, lines } = canvas();
     const at = focusLayout(balls, lines, project(IDS.project));
     expect(at.get(project(IDS.project))).toEqual({ x: 0, y: 0 });
-    expect(at.get(res(IDS.resource))).toEqual({ x: 220, y: -65 });
-    expect(at.get(account(IDS.stripe))).toEqual({ x: 220, y: 65 });
+    // Sorted by what holds them: Stripe, then the project inside Supabase.
+    expect(at.get(account(IDS.stripe))).toEqual({ x: 220, y: -65 });
+    expect(at.get(res(IDS.resource))).toEqual({ x: 220, y: 65 });
     // Each holder sits level with what it holds; the email between its two services.
-    expect(at.get(org(IDS.org))).toEqual({ x: 440, y: -65 });
-    expect(at.get(account(IDS.supabase))).toEqual({ x: 660, y: -65 });
+    expect(at.get(org(IDS.org))).toEqual({ x: 440, y: 65 });
+    expect(at.get(account(IDS.supabase))).toEqual({ x: 660, y: 65 });
     expect(at.get(email(IDS.me))).toEqual({ x: 880, y: 0 });
   });
 });
@@ -342,5 +346,122 @@ describe("placing something new", () => {
     expect(besideSpot({ x: 0, y: 0 }, [])).toEqual({ x: 220, y: 0 });
     expect(besideSpot({ x: 0, y: 0 }, [{ x: 220, y: 0 }])).toEqual({ x: 220, y: 100 });
     expect(besideSpot({ x: 0, y: 0 }, [{ x: 220, y: 0 }, { x: 220, y: 100 }])).toEqual({ x: 220, y: -100 });
+  });
+});
+
+// A small hand-made map: you (primary) and a colleague, each with services.
+function mk(kind: Ball["kind"], id: string, label: string, extra: Partial<Ball> = {}): Ball {
+  return { key: `${kind}:${id}`, kind, id, label, sub: null, provider: null, primary: false, noEmail: false, attention: false, parent: null, ...extra };
+}
+const line = (kind: Line["kind"], source: string, target: string): Line => ({ key: `${kind}:${source}:${target}`, source, target, kind });
+
+function team() {
+  const balls = [
+    mk("email", "you", "you@example.com", { primary: true }),
+    mk("email", "kim", "kim@example.com"),
+    mk("account", "vercel", "Vercel"),
+    mk("account", "gh", "GitHub"),
+    mk("account", "neon", "Neon"),
+    mk("resource", "db", "shop-db"),
+    mk("resource", "db2", "shop-db-staging"),
+    mk("project", "shop", "Shop"),
+    mk("project", "blog", "Blog"),
+    mk("project", "idea", "Idea"),
+  ];
+  const lines = [
+    line("owns", "email:you", "account:vercel"),
+    line("owns", "email:kim", "account:gh"),
+    line("owns", "email:you", "account:neon"),
+    line("holds", "account:neon", "resource:db"),
+    line("holds", "account:neon", "resource:db2"),
+    // Drawn in an order that would cross if it were kept.
+    line("uses", "project:shop", "account:gh"),
+    line("uses", "project:shop", "account:vercel"),
+    line("uses", "project:shop", "resource:db"),
+    line("uses", "project:blog", "account:neon"),
+    line("works", "email:kim", "project:blog"),
+  ];
+  return { balls, lines };
+}
+
+describe("a project's page with services under two people", () => {
+  it("keeps what one email owns together, so no two lines cross", () => {
+    const { balls, lines } = team();
+    const at = focusLayout(balls, lines, "project:shop");
+    const y = (k: string) => at.get(k)?.y ?? NaN;
+    // Your things first (the main email), sorted by the service they are in: Neon, Vercel; then Kim's.
+    expect(y("resource:db")).toBeLessThan(y("account:vercel"));
+    expect(y("account:vercel")).toBeLessThan(y("account:gh"));
+    expect(y("email:you")).toBeLessThan(y("email:kim"));
+    // Neon sits level with the one project inside it that Shop uses.
+    expect(y("account:neon")).toBe(y("resource:db"));
+    expect(at.get("account:neon")?.x).toBe(440);
+    expect(at.get("email:you")?.x).toBe(660);
+  });
+});
+
+describe("a project's page on a narrow screen", () => {
+  it("stands upright: the project on top, what it runs on in a row below, whose those are below that", () => {
+    const { balls, lines } = team();
+    const flat = focusLayout(balls, lines, "project:shop");
+    const up = focusLayout(balls, lines, "project:shop", { upright: true });
+    expect(up.get("project:shop")).toEqual({ x: 0, y: 0 });
+    const row = ["resource:db", "account:vercel", "account:gh"].map((k) => up.get(k));
+    expect(new Set(row.map((q) => q?.y))).toEqual(new Set([170]));
+    // The same order as side by side, now left to right.
+    const xs = row.map((q) => q?.x ?? NaN);
+    expect([...xs].sort((a, b) => a - b)).toEqual(xs);
+    expect(up.get("email:you")?.y).toBeGreaterThan(170);
+    expect(up.size).toBe(flat.size);
+  });
+});
+
+describe("whose a new service is", () => {
+  it("goes to whoever already owns most of what the project runs on", () => {
+    const { balls, lines } = team();
+    const emails = balls.filter((b) => b.kind === "email");
+    expect(ownerFor("project:shop", emails, lines)?.id).toBe("you");
+    expect(ownerFor("project:blog", emails, lines)?.id).toBe("you");
+  });
+
+  it("falls back to someone who works on it, then the main email, and is null with no email at all", () => {
+    const { balls, lines } = team();
+    const emails = balls.filter((b) => b.kind === "email");
+    const working = [...lines, line("works", "email:kim", "project:idea")];
+    expect(ownerFor("project:idea", emails, working)?.id).toBe("kim");
+    expect(ownerFor("project:idea", emails, lines)?.id).toBe("you");
+    expect(ownerFor("project:idea", [], lines)).toBeNull();
+  });
+});
+
+describe("tidying the whole map", () => {
+  it("puts each kind in its column, each holder level with what it holds, projects level with what they use", () => {
+    const { balls, lines } = team();
+    const at = tidyLayout(balls, lines);
+    const p = (k: string) => at.get(k) ?? { x: NaN, y: NaN };
+    expect(p("email:you").x).toBe(0);
+    expect(p("account:vercel").x).toBe(300);
+    expect(p("resource:db").x).toBe(740);
+    expect(p("project:shop").x).toBe(1000);
+    // Your services sit beside you, Kim's beside Kim, yours first.
+    expect(p("email:you").y).toBeLessThan(p("email:kim").y);
+    expect(p("account:gh").y).toBe(p("email:kim").y);
+    // Blog uses Neon directly, so Neon takes the top of its block and what is inside goes below.
+    expect(p("account:neon").y).toBeLessThan(p("resource:db").y);
+    expect(p("resource:db").y).toBeLessThan(p("resource:db2").y);
+    // A project with nothing goes to the bottom of its column.
+    expect(p("project:idea").y).toBeGreaterThan(Math.max(p("project:shop").y, p("project:blog").y));
+  });
+
+  it("never puts two balls on one spot", () => {
+    const { balls, lines } = team();
+    const spots = [...tidyLayout(balls, lines).values()].map((q) => `${q.x},${q.y}`);
+    expect(new Set(spots).size).toBe(balls.length);
+  });
+
+  it("lays out the sample vault without losing a ball", () => {
+    const { balls, lines } = canvas();
+    const at = tidyLayout(balls, lines);
+    expect(balls.every((b) => at.has(b.key))).toBe(true);
   });
 });
