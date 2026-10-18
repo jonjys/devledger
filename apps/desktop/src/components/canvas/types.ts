@@ -4,6 +4,7 @@ import type { ReactFlowInstance } from "@xyflow/react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 
 import { type Ball, type Intent, type Line, type Point } from "../../lib/canvas";
+import type { Provider } from "../../lib/types";
 import { type AddKind, type MenuItem } from "../CanvasParts";
 
 import { type Loaded } from "./data";
@@ -13,7 +14,15 @@ import type { useCanvasActions } from "./useCanvasActions";
 /** A line drawn between two balls that means something. */
 export type Act = Exclude<Intent, { kind: "none" } | { kind: "refuse" }>;
 
-export type Dialog = { kind: AddKind; ball: Ball | null; at: Point | null; name?: string; title?: string };
+export type Dialog = {
+  kind: AddKind;
+  ball: Ball | null;
+  at: Point | null;
+  name?: string;
+  title?: string;
+  /** A service to add as soon as this email exists: the one that asked for an email first. */
+  then?: { provider: Provider; name: string; at: Point | null };
+};
 /** A right-click on a ball, a line or the background, or a line dragged from `drop` into empty space. */
 export type Menu = {
   x: number;

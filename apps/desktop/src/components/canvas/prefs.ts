@@ -1,9 +1,16 @@
 // Small things the canvas keeps outside React: how the map is fitted, the
 // remembered layout lock, the motion preference and how an error reads.
 
-// The margin is per side, as a share of the view. Fitting a map of one ball
-// would otherwise zoom it to fill the screen.
-export const FIT = { padding: 0.15, maxZoom: 1.1 };
+// The margin is per side, in pixels: room at the top for the toolbar that sits
+// over the map, and at the bottom for the names that hang under the balls,
+// which are not part of a ball's box. The zoom cap keeps a map of one ball
+// from filling the screen.
+export const FIT = {
+  padding: { top: "72px", bottom: "64px", x: "48px" } as { top: `${number}px`; bottom: `${number}px`; x: `${number}px` },
+  maxZoom: 1.1,
+};
+/** How long balls take to glide to a new place when the layout changes. */
+export const GLIDE_MS = 460;
 export const LOCK_KEY = "devledger.mapLocked";
 
 /** Animated moves, unless the system asks for less motion (or cannot say). */
