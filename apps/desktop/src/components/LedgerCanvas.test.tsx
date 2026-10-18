@@ -88,6 +88,10 @@ async function renderMap(props: Partial<Parameters<typeof LedgerCanvas>[0]> = {}
 
 const shelf = () => screen.getByRole("complementary", { name: "Add to the map" });
 
+/** The "whose is it?" box that opens when a service is added. */
+const picker = () => screen.getByRole("radiogroup", { name: /Whose .* is it\?/ });
+const pressAdd = () => fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
 /** Press and release on a list item without moving: a click, as far as the list is concerned. */
 function click(el: HTMLElement) {
   fireEvent.pointerDown(el, { button: 0, clientX: 10, clientY: 10 });
@@ -112,17 +116,21 @@ describe("an empty map", () => {
     expect(mocked.addCustomField).toHaveBeenCalledWith({ kind: "identity", id: "new-me" }, "_pos", "0,0");
   });
 
-  it("asks for an email before a service, since every service belongs to one", async () => {
-    serve({ ...canvasVault(), people: [], projects: [], resources: [], secrets: [], fields: new Map() });
+  it("asks for the email a service was signed up with when there is none yet", async () => {
+    const base = canvasVault();
+    serve({ ...base, people: [], projects: [], resources: [], secrets: [], fields: new Map() });
+    mocked.createIdentityManual.mockResolvedValue({ id: "new-me", label: "me@example.com", email: "me@example.com", email_blind_index: null, created_at: AT });
+    mocked.createAccountManual.mockResolvedValue({ ...base.people[1]!.accounts[0]!.account, id: "acc-gh", identity_id: "new-me" });
     const user = userEvent.setup();
-    const { onNotify } = await renderMap();
+    await renderMap();
     await screen.findByRole("region", { name: "Getting started" });
 
     click(within(shelf()).getByRole("button", { name: /GitHub/ }));
     expect(mocked.createAccountManual).not.toHaveBeenCalled();
-    expect(onNotify).toHaveBeenCalledWith(expect.stringMatching(/Every service belongs to an email/));
-    expect(await screen.findByLabelText("Email address")).toBeInTheDocument();
-    await user.keyboard("{Escape}");
+    await user.type(await screen.findByLabelText("Email address"), "me@example.com");
+    pressAdd();
+    await waitFor(() => expect(mocked.createIdentityManual).toHaveBeenCalledWith("me@example.com", "me@example.com"));
+    await waitFor(() => expect(mocked.createAccountManual).toHaveBeenCalledWith("new-me", "github", expect.any(String)));
   });
 });
 
@@ -143,6 +151,9 @@ describe("the map", () => {
     await screen.findByTestId(`email:${IDS.me}`);
 
     click(within(shelf()).getByRole("button", { name: /Vercel/ }));
+    // It asks whose it is, with your email chosen already.
+    expect(within(picker()).getByRole("radio", { name: /A new Vercel account.*primary@example.com/ })).toBeChecked();
+    pressAdd();
 
     await waitFor(() => expect(mocked.createAccountManual).toHaveBeenCalledWith(IDS.me, "vercel", "Vercel"));
     expect(onNotify).toHaveBeenCalledWith(expect.stringMatching(/Added Vercel under primary@example.com/));
@@ -151,15 +162,15 @@ describe("the map", () => {
     expect(shelf()).toBeInTheDocument();
   });
 
-  it("goes to a service you already have instead of making a second one", async () => {
+  it("offers the service you already have, and goes to it instead of making a second one", async () => {
     serve();
-    const { onNotify } = await renderMap();
+    await renderMap();
     await screen.findByTestId(`account:${IDS.github}`);
-    const chip = within(shelf()).getByRole("button", { name: /GitHub.*On your map/ });
-    click(chip);
+    click(within(shelf()).getByRole("button", { name: /GitHub.*On your map/ }));
+    fireEvent.click(within(picker()).getByRole("radio", { name: /Your GitHub.*primary@example.com/ }));
+    pressAdd();
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "Details" })).toHaveTextContent("GitHub"));
     expect(mocked.createAccountManual).not.toHaveBeenCalled();
-    expect(onNotify).toHaveBeenCalledWith(expect.stringMatching(/already have GitHub/));
-    expect(screen.getByRole("complementary", { name: "Details" })).toHaveTextContent("GitHub");
   });
 
   it("offers any typed name as a service of its own", async () => {
@@ -342,6 +353,7 @@ describe("a project's own page", () => {
     await renderMap({ projectId: IDS.project });
     await screen.findByTestId(`project:${IDS.project}`);
     click(within(shelf()).getByRole("button", { name: /Vercel/ }));
+    pressAdd();
     await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-vercel", IDS.project));
     expect(mocked.createServiceProjectManual).toHaveBeenCalledWith("acc-vercel", null, "vercel", "shop", null, "unknown");
   });
@@ -364,6 +376,9 @@ describe("a project's own page", () => {
     await renderMap({ projectId: IDS.project });
     await screen.findByTestId(`project:${IDS.project}`);
     click(within(shelf()).getByRole("button", { name: /GitHub.*On your map/ }));
+    // The GitHub you have is chosen already.
+    expect(within(picker()).getByRole("radio", { name: /Your GitHub/ })).toBeChecked();
+    pressAdd();
     await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-github", IDS.project));
     expect(mocked.createAccountManual).not.toHaveBeenCalled();
   });
@@ -377,7 +392,7 @@ describe("a project's own page", () => {
     await waitFor(() => expect(within(shelf()).getByLabelText("Search services")).toHaveFocus());
   });
 
-  it("adds from the list while the map is locked, under your main email though it is not on the page", async () => {
+  it("asks whose a new service is, with your main email chosen, and can put it under another", async () => {
     window.localStorage.setItem("devledger.mapLocked", "1");
     const data = serve();
     mocked.createAccountManual.mockResolvedValue({
@@ -399,18 +414,22 @@ describe("a project's own page", () => {
       notes: null,
       created_at: AT,
     });
-    const { onNotify } = await renderMap({ projectId: IDS.blog });
+    await renderMap({ projectId: IDS.blog });
     await screen.findByTestId(`project:${IDS.blog}`);
-    expect(screen.queryByTestId(`email:${IDS.me}`)).toBeNull();
+    // Every email of yours is on the page, so a line can be drawn from it.
+    expect(screen.getByTestId(`email:${IDS.me}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`email:${IDS.work}`)).toBeInTheDocument();
     const vercel = within(shelf()).getByRole("button", { name: /Vercel/ });
     expect(vercel).toBeEnabled();
     click(vercel);
+    expect(within(picker()).getByRole("radio", { name: /A new Vercel account.*primary@example.com/ })).toBeChecked();
+    fireEvent.click(within(picker()).getByRole("radio", { name: /A new Vercel account.*work@example.com/ }));
+    pressAdd();
     await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-vercel", IDS.blog));
-    expect(mocked.createAccountManual).toHaveBeenCalledWith(IDS.me, "vercel", expect.any(String));
-    expect(onNotify).not.toHaveBeenCalledWith(expect.stringMatching(/belongs to an email/));
+    expect(mocked.createAccountManual).toHaveBeenCalledWith(IDS.work, "vercel", expect.any(String));
   });
 
-  it("with no email at all, asks for one and then adds the service it was asked for", async () => {
+  it("with no email at all, asks for the one it was signed up with and adds it under that", async () => {
     const base = canvasVault();
     serve({ ...base, people: [], resources: [], secrets: [], fields: new Map() });
     mocked.createIdentityManual.mockResolvedValue({
@@ -439,14 +458,63 @@ describe("a project's own page", () => {
       created_at: AT,
     });
     const user = userEvent.setup();
-    const { onNotify } = await renderMap({ projectId: IDS.blog });
+    await renderMap({ projectId: IDS.blog });
     await screen.findByTestId(`project:${IDS.blog}`);
     click(within(shelf()).getByRole("button", { name: /GitHub/ }));
-    expect(onNotify).toHaveBeenCalledWith(expect.stringMatching(/Add yours and GitHub is added right after/));
     await user.type(await screen.findByLabelText("Email address"), "me@example.com");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    pressAdd();
     await waitFor(() => expect(mocked.createAccountManual).toHaveBeenCalledWith("new-me", "github", expect.any(String)));
     await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-gh", IDS.blog));
+  });
+
+  it("opens ready to edit even while the map is locked, and does not change what the map remembers", async () => {
+    window.localStorage.setItem("devledger.mapLocked", "1");
+    serve();
+    const user = userEvent.setup();
+    await renderMap({ projectId: IDS.project });
+    await screen.findByTestId(`project:${IDS.project}`);
+    await user.click(screen.getByRole("button", { name: /Done editing/ }));
+    await user.click(screen.getAllByRole("button", { name: /Edit map/ })[0] as HTMLElement);
+    expect(window.localStorage.getItem("devledger.mapLocked")).toBe("1");
+  });
+
+  it("shows an organization inside a service on the page, even one the project does not use yet", async () => {
+    const data = canvasVault();
+    const supabase = data.people[1]!.accounts.find((a) => a.account.id === IDS.supabase)!;
+    supabase.organizations.push({
+      organization: { id: "org-new", account_id: IDS.supabase, provider_org_id: null, name: "Side org", created_at: AT },
+      service_projects: [],
+    });
+    serve(data);
+    await renderMap({ projectId: IDS.project });
+    expect(await screen.findByTestId("org:org-new")).toBeInTheDocument();
+  });
+
+  it("links a project added inside a service on a project's page to that project", async () => {
+    serve();
+    mocked.createServiceProjectManual.mockResolvedValue({
+      id: "res-new",
+      account_id: IDS.stripe,
+      organization_id: null,
+      provider: "stripe",
+      provider_ref: null,
+      name: "shop-live",
+      region: null,
+      environment: "unknown",
+      url: null,
+      notes: null,
+      created_at: AT,
+    });
+    const user = userEvent.setup();
+    await renderMap({ projectId: IDS.project });
+    fireEvent.contextMenu(await screen.findByTestId(`account:${IDS.stripe}`));
+    await user.hover(screen.getByRole("menuitem", { name: /^Add/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Project in Stripe/ }));
+    await user.type(screen.getByLabelText("Project name"), "shop-live");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocked.linkServiceProject).toHaveBeenCalledWith("res-new", IDS.project));
+    // The plain line to Stripe stood for nothing stored, so it gives way to this one.
+    expect(mocked.deleteServiceProject).toHaveBeenCalledWith(IDS.stripeShop);
   });
 
   it("never moves the saved map from a project's page", async () => {

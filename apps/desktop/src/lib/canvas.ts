@@ -572,6 +572,20 @@ const UPRIGHT_LEVEL = 170;
 const UPRIGHT_GAP = 150;
 
 /**
+ * What a project's page shows: the project, what it runs on and whatever
+ * holds that, who works on it, every email of yours -- so a service can be
+ * given to one by drawing a line from it -- and the organizations inside the
+ * services shown, so one just added appears beside its service.
+ */
+export function projectView(balls: Ball[], lines: Line[], projectKey: string): Set<string> {
+  if (!balls.some((b) => b.key === projectKey)) return new Set();
+  const out = neighbourhood(lines, projectKey);
+  for (const b of balls) if (b.kind === "email" && !b.noEmail) out.add(b.key);
+  for (const b of balls) if (b.kind === "org" && b.parent && out.has(b.parent)) out.add(b.key);
+  return out;
+}
+
+/**
  * A project's page draws it on its own: the project on the left, what it runs
  * on beside it, and then whatever holds those -- organizations, services,
  * emails -- a column each. People who work on it without owning any of it
@@ -602,9 +616,17 @@ export function focusLayout(
     return chain;
   };
 
-  const targets = [
+  const used = [
     ...new Set(lines.filter((l) => l.kind === "uses" && l.source === projectKey && byKey.has(l.target)).map((l) => l.target)),
   ];
+  // An organization in a service the project uses directly, holding nothing it
+  // uses -- just added, perhaps -- gets a row of its own under that service, so
+  // the line from the service to its email does not run through it.
+  const chains = new Set(used.flatMap(above));
+  const loose = balls
+    .filter((b) => b.kind === "org" && b.parent && used.includes(b.parent) && !chains.has(b.key) && !used.includes(b.key))
+    .map((b) => b.key);
+  const targets = [...used, ...loose];
   const paths = new Map(targets.map((t) => [t, [...above(t), t].map(order)]));
   targets.sort((a, b) => comparePaths(paths.get(a) ?? [], paths.get(b) ?? []));
   targets.forEach((t, i) => out.set(t, { x: FOCUS_COLUMN, y: (i - (targets.length - 1) / 2) * ROW }));
@@ -615,20 +637,39 @@ export function focusLayout(
     const y = out.get(t)?.y ?? 0;
     for (const a of above(t)) if (!out.has(a)) below.set(a, [...(below.get(a) ?? []), y]);
   }
+  const heightOf = (k: string) => out.get(k)?.y ?? (below.has(k) ? mean(below.get(k) as number[]) : undefined);
+  // Any other organization in a service on this page: level with its service,
+  // in the organizations' column.
+  for (const b of balls) {
+    const y = b.kind === "org" && b.parent && !out.has(b.key) && !below.has(b.key) ? heightOf(b.parent) : undefined;
+    if (y !== undefined) below.set(b.key, [y]);
+  }
+
+  const people = [
+    ...new Set(lines.filter((l) => l.kind === "works" && l.target === projectKey).map((l) => l.source)),
+  ]
+    .filter((k) => byKey.has(k) && !out.has(k) && !below.has(k))
+    .sort((a, b) => byRank(order(a), order(b)));
+  people.forEach((k, i) => out.set(k, { x: -FOCUS_COLUMN, y: (i - (people.length - 1) / 2) * ROW }));
+
+  // Your other emails, below the ones in use, so a service can be given to
+  // one by drawing a line from it.
+  const idle = balls
+    .filter((b) => b.kind === "email" && !out.has(b.key) && !below.has(b.key))
+    .map((b) => b.key)
+    .sort((a, b) => byRank(order(a), order(b)));
+  const inUse = [...below].filter(([k]) => byKey.get(k)?.kind === "email").map(([, ys]) => mean(ys));
+  const first = inUse.length > 0 ? Math.max(...inUse) + ROW : -((idle.length - 1) / 2) * ROW;
+  idle.forEach((k, i) => below.set(k, [first + i * ROW]));
+
   const kinds = (["org", "account", "email"] as BallKind[]).filter((k) =>
     [...below.keys()].some((a) => byKey.get(a)?.kind === k),
   );
   kinds.forEach((kind, i) => {
     const column = [...below].filter(([a]) => byKey.get(a)?.kind === kind).map(([key, ys]) => ({ key, want: mean(ys) }));
-    for (const [key, y] of spread(column, 100)) out.set(key, { x: FOCUS_COLUMN * (i + 2), y });
+    // Emails are the largest balls, with the longest names under them.
+    for (const [key, y] of spread(column, kind === "email" ? ROW : 100)) out.set(key, { x: FOCUS_COLUMN * (i + 2), y });
   });
-
-  const people = [
-    ...new Set(lines.filter((l) => l.kind === "works" && l.target === projectKey).map((l) => l.source)),
-  ]
-    .filter((k) => byKey.has(k) && !out.has(k))
-    .sort((a, b) => byRank(order(a), order(b)));
-  people.forEach((k, i) => out.set(k, { x: -FOCUS_COLUMN, y: (i - (people.length - 1) / 2) * ROW }));
 
   let spare = 0;
   for (const b of balls) if (!out.has(b.key)) out.set(b.key, { x: 0, y: ROW * ++spare });

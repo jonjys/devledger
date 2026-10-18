@@ -117,12 +117,10 @@ export function Shelf({
         )}
       </div>
 
-      {!focus && (
-        <div className="cv-shelf-row">
-          {chip({ kind: "email" }, "Email", <span className="cv-chip-glyph email">@</span>)}
-          {chip({ kind: "project" }, "Project", <span className="cv-chip-glyph project">P</span>)}
-        </div>
-      )}
+      <div className="cv-shelf-row">
+        {chip({ kind: "email" }, focus ? "Another email" : "Email", <span className="cv-chip-glyph email">@</span>)}
+        {!focus && chip({ kind: "project" }, "Project", <span className="cv-chip-glyph project">P</span>)}
+      </div>
 
       {loose.length > 0 && (
         <>

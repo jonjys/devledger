@@ -37,13 +37,13 @@ import type {
   SecretOwner,
   ServiceProject,
 } from "../../lib/types";
-import { type AddValues } from "../CanvasParts";
+import { type AddValues, type PickedOwner } from "../CanvasParts";
 
 import { entityOf } from "./data";
 import { type Step } from "./history";
 import { serviceLabel, serviceName } from "./labels";
 import { FIT, GLIDE_MS, message, motion, writeLocked } from "./prefs";
-import type { Act, CanvasCore, Dialog } from "./types";
+import type { Act, CanvasCore, Dialog, Picking } from "./types";
 
 export function useCanvasActions(ctx: CanvasCore) {
   const {
@@ -62,6 +62,7 @@ export function useCanvasActions(ctx: CanvasCore) {
     selected,
     setData,
     setDialog,
+    setPicking,
     setLocked,
     setMoved,
     setRenaming,
@@ -358,11 +359,20 @@ export function useCanvasActions(ctx: CanvasCore) {
   }
 
   /** A step that takes back something just added, while nothing is stored on it. */
-  function added(label: string, kind: Ball["kind"], id: string, again: () => Promise<string | null>): Step {
+  function added(
+    label: string,
+    kind: Ball["kind"],
+    id: string,
+    again: () => Promise<string | null>,
+    alsoUndo?: () => Promise<void>,
+  ): Step {
     let current = id;
     return {
       label: `adding ${label}`,
-      undo: () => removeIfEmpty(kind, current, label),
+      undo: async () => {
+        await removeIfEmpty(kind, current, label);
+        await alsoUndo?.();
+      },
       redo: async () => {
         const next = await again();
         if (next) current = next;
@@ -434,7 +444,7 @@ export function useCanvasActions(ctx: CanvasCore) {
         kind: "email",
         ball: null,
         at: freeSpot({ x: spot.x - 300, y: spot.y }, place.values()),
-        then: { provider, name: typed, at },
+        then: { provider, name: typed, at, project: forProject },
       });
       return null;
     }
@@ -454,10 +464,66 @@ export function useCanvasActions(ctx: CanvasCore) {
     }
   }
 
+  /** Add a service whose account is not known yet: ask whose it is first. */
+  function askService(provider: Provider, typed: string, at: Point | null, forProject: string | null = projectId) {
+    if (locked && !projectKey) return;
+    setPicking({ provider, name: typed, at, project: forProject });
+  }
+
+  /**
+   * The likely answer to "whose is it?": for a project, an account of this
+   * service you already have -- the one under the email that owns the rest of
+   * the project, if any -- else a new one under that email; on the map, a new
+   * one under your main email.
+   */
+  function pickerDefault(p: Picking): PickedOwner {
+    const key = p.project ? ballKey("project", p.project) : null;
+    const owner = key ? ownerFor(key, emails, model.lines) : (emails.find((e) => e.primary) ?? emails[0] ?? null);
+    const mine = accountBalls.filter((a) => a.provider === p.provider);
+    if (key && mine.length > 0) {
+      const same = mine.find((a) => ownerOf(a.id)?.key === owner?.key) ?? (mine[0] as Ball);
+      return { kind: "account", key: same.key };
+    }
+    return owner ? { kind: "email", key: owner.key } : { kind: "new", address: "" };
+  }
+
+  /** Carry out the answer to "whose is it?". The picker closes once it is done. */
+  async function addPicked(p: Picking, owner: PickedOwner) {
+    if (owner.kind === "account") {
+      const account = byKey.get(owner.key);
+      const project = p.project ? byKey.get(ballKey("project", p.project)) : undefined;
+      if (!account) throw new Error("That service is no longer in your vault.");
+      if (project) await connect(project, account);
+      else focusOn(account.key);
+    } else if (owner.kind === "email") {
+      const email = byKey.get(owner.key);
+      if (!email) throw new Error("That email is no longer in your vault.");
+      await addService(p.provider, p.name, p.at, email, p.project);
+    } else {
+      const known = emails.find((e) => e.label.toLowerCase() === owner.address.toLowerCase());
+      if (known) {
+        await addService(p.provider, p.name, p.at, known, p.project);
+      } else {
+        const spot = p.at ?? spotInView();
+        await add(
+          {
+            kind: "email",
+            ball: null,
+            at: freeSpot({ x: spot.x - 300, y: spot.y }, place.values()),
+            then: { provider: p.provider, name: p.name, at: p.at, project: p.project },
+          },
+          { name: owner.address, value: "", label: "" },
+        );
+      }
+    }
+    setPicking(null);
+  }
+
   /** Add what a dialog asked for. Returns the new thing's id, where it is a ball. */
   async function add(d: Dialog, values: AddValues): Promise<string | null> {
     const cur = dataRef.current;
     let made: { kind: Ball["kind"]; id: string; label: string } | null = null;
+    let alsoUndo: (() => Promise<void>) | undefined;
     switch (d.kind) {
       case "email": {
         const identity = await api.createIdentityManual(values.label || values.name, values.name);
@@ -488,15 +554,13 @@ export function useCanvasActions(ctx: CanvasCore) {
         made = { kind: "project", id: project.id, label: project.name };
         break;
       }
-      case "service":
+      case "service": {
         setDialog(null);
-        return addService(
-          providerForName(values.name),
-          values.name,
-          d.at,
-          d.ball?.kind === "email" ? d.ball : null,
-          d.ball?.kind === "project" ? d.ball.id : projectId,
-        );
+        const forProject = d.ball?.kind === "project" ? d.ball.id : projectId;
+        if (d.ball?.kind === "email") return addService(providerForName(values.name), values.name, d.at, d.ball, forProject);
+        askService(providerForName(values.name), values.name, d.at, forProject);
+        return null;
+      }
       case "org": {
         const account = d.ball ? cur?.accounts.get(d.ball.id) : undefined;
         if (!account) return null;
@@ -539,8 +603,26 @@ export function useCanvasActions(ctx: CanvasCore) {
           });
         }
         await placeNew({ kind: "service_project", id: resource.id }, d.at);
-        onNotify(`Added ${resource.name} in ${org?.name ?? account.label} · draw a line from your project to it`);
         made = { kind: "resource", id: resource.id, label: resource.name };
+        const project = projectId ? cur?.projects.find((p) => p.id === projectId) : undefined;
+        if (project && cur) {
+          // Added on a project's page: it is for that project. The line straight
+          // to the service said less, and goes if nothing is stored on it.
+          await api.linkServiceProject(resource.id, project.id);
+          const dropped: ServiceProject[] = [];
+          for (const r of resourcesToUnlink(cur, account.id, project.id)) {
+            if (!r.remove) continue;
+            const sp = cur.resourceById.get(r.id)?.service_project;
+            await api.deleteServiceProject(r.id);
+            if (sp) dropped.push(sp);
+          }
+          alsoUndo = async () => {
+            for (const sp of dropped) await relink(sp, project.id);
+          };
+          onNotify(`Added ${resource.name} in ${org?.name ?? account.label} · ${project.name} runs on it`);
+        } else {
+          onNotify(`Added ${resource.name} in ${org?.name ?? account.label} · draw a line from your project to it`);
+        }
         break;
       }
       case "api":
@@ -566,7 +648,7 @@ export function useCanvasActions(ctx: CanvasCore) {
     setDialog(null);
     if (made) {
       const what = made;
-      record(added(what.label, what.kind, what.id, () => add(d, values)));
+      record(added(what.label, what.kind, what.id, () => add(d, values), alsoUndo));
     }
     await changed();
     // The service that asked for an email first, now that there is one.
@@ -583,7 +665,7 @@ export function useCanvasActions(ctx: CanvasCore) {
         attention: false,
         parent: null,
       };
-      await addService(d.then.provider, d.then.name, d.then.at, owner);
+      await addService(d.then.provider, d.then.name, d.then.at, owner, d.then.project);
     }
     return made?.id ?? null;
   }
@@ -750,7 +832,8 @@ export function useCanvasActions(ctx: CanvasCore) {
   function toggleLock() {
     const next = !locked;
     setLocked(next);
-    writeLocked(next);
+    // A project's page starts open each time; only the map remembers its lock.
+    if (!projectKey) writeLocked(next);
     setRenaming(null);
     onNotify(
       next
@@ -804,5 +887,8 @@ export function useCanvasActions(ctx: CanvasCore) {
     toggleLock,
     tidyUp,
     focusOn,
+    askService,
+    pickerDefault,
+    addPicked,
   };
 }
