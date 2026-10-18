@@ -1246,7 +1246,7 @@ select option { background: var(--panel); color: var(--text); }
   position: absolute; top: 8px; left: 14px; font-size: 11px; font-weight: 750;
   letter-spacing: 0.08em; text-transform: uppercase; color: #FFB347; font-weight: 700;
 }
-.ledger-canvas .react-flow__node-hull { pointer-events: none; z-index: 0 !important; }
+.ledger-canvas .react-flow__node-hull { pointer-events: none !important; z-index: 0 !important; }
 .cv-account.attention .cv-orb { border-color: #F59E0B; }
 /* inside a service: an organization, and the projects the service runs */
 .cv-org .cv-orb { background: radial-gradient(circle at 35% 30%, #1F1A2E, #110E1A); border-color: #6D5BD0; color: #C4B5FD; }

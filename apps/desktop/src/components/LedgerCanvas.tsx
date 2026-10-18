@@ -215,9 +215,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   }, []);
 
   // Something added inside an account opens that account, so the new ball is
-  // not created and then immediately hidden.
+  // not created and then immediately hidden. The map mounts empty while the
+  // vault loads; that empty picture is not a baseline, or every account would
+  // open the moment the data arrives.
   const knownInside = useRef<Set<string> | null>(null);
   useEffect(() => {
+    if (!data) return;
     const inside = new Set(model.balls.filter((b) => b.kind === "org" || b.kind === "resource").map((b) => b.key));
     const before = knownInside.current;
     knownInside.current = inside;
@@ -239,7 +242,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       }
       return next;
     });
-  }, [model]);
+  }, [data, model]);
 
   const hulls = useMemo(() => (projectKey ? [] : serviceHulls(view.balls)), [projectKey, view]);
 
@@ -292,7 +295,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             position: { x: minX + width / 2, y: minY + height / 2 },
             width,
             height,
-            style: { width, height },
+            style: { width, height, pointerEvents: "none" },
             zIndex: -1,
             draggable: false,
             selectable: false,

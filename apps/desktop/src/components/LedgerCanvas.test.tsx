@@ -151,6 +151,10 @@ describe("the map", () => {
     for (const key of [`email:${IDS.me}`, `email:${IDS.work}`, `account:${IDS.github}`, `project:${IDS.project}`, `project:${IDS.blog}`]) {
       expect(await screen.findByTestId(key)).toBeInTheDocument();
     }
+    // Accounts start folded. What is inside stays off the map until opened.
+    expect(screen.queryByTestId(`org:${IDS.org}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(`resource:${IDS.resource}`)).not.toBeInTheDocument();
+    expect(document.querySelector('button.cv-fold[aria-label="Expand Supabase"]')).toBeTruthy();
   });
 
   it("adds a clicked service under the email, and says how to move it", async () => {

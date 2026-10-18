@@ -164,7 +164,6 @@ export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
           aria-expanded={fold.open}
           aria-label={`${fold.open ? "Collapse" : "Expand"} ${ball.label}`}
           onPointerDown={(e) => e.stopPropagation()}
-          onClickCapture={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onToggleFold(ball.key, !fold.open);

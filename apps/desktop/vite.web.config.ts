@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { dirname, normalize, resolve } from "node:path";
+import { defineConfig, type IndexHtmlTransformContext } from "vite";
 import react from "@vitejs/plugin-react";
 
 // The website: a landing page at `/`, the real app at `/demo` on an in-memory
@@ -8,10 +9,31 @@ import react from "@vitejs/plugin-react";
 // shims, so the same components run with no Rust behind them.
 const here = (path: string) => decodeURIComponent(new URL(path, import.meta.url).pathname);
 
+// The HTML pages live under web/ and import modules from ../src, which is
+// outside the Vite root. The production build resolves that. In dev the
+// browser would request /src/... and miss. Point those tags at /@fs so the
+// dev server serves the real file. Build is left alone.
+function devOutsideScripts() {
+  return {
+    name: "dev-outside-scripts",
+    transformIndexHtml: {
+      order: "pre" as const,
+      handler(html: string, ctx: IndexHtmlTransformContext) {
+        if (!ctx.server || !ctx.filename) return html;
+        const dir = dirname(ctx.filename);
+        return html.replace(/(\s(?:src|href)=")(\.\.[^"]+)(")/g, (full, open, rel, close) => {
+          if (!/\.(tsx?|css)$/.test(rel)) return full;
+          return `${open}/@fs${normalize(resolve(dir, rel))}${close}`;
+        });
+      },
+    },
+  };
+}
+
 export default defineConfig({
   root: here("web"),
   publicDir: here("web/public"),
-  plugins: [react()],
+  plugins: [devOutsideScripts(), react()],
   // Lets the shared UI drop what only the desktop app can do (Smart Paste).
   define: { "import.meta.env.VITE_DEVLEDGER_WEB": JSON.stringify("1") },
   resolve: {
