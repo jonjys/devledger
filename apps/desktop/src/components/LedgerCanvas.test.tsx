@@ -684,29 +684,27 @@ describe("inside a service", () => {
 });
 
 describe("fields", () => {
-  it("can be added to every kind of ball", async () => {
+  const cases: [string, string, EntityRef][] = [
+    [`email:${IDS.me}`, "Email", { kind: "identity", id: IDS.me }],
+    [`account:${IDS.github}`, "Service", { kind: "account", id: IDS.github }],
+    [`org:${IDS.org}`, "Organization", { kind: "organization", id: IDS.org }],
+    [`resource:${IDS.resource}`, "Resource", { kind: "service_project", id: IDS.resource }],
+    [`project:${IDS.blog}`, "Project", { kind: "project", id: IDS.blog }],
+  ];
+
+  it.each(cases)("can be added to %s", async (key, name, entity) => {
     serve();
     const user = userEvent.setup();
     await renderMap();
     await expand("Supabase");
-    const cases: [string, string, EntityRef][] = [
-      [`email:${IDS.me}`, "Email", { kind: "identity", id: IDS.me }],
-      [`account:${IDS.github}`, "Service", { kind: "account", id: IDS.github }],
-      [`org:${IDS.org}`, "Organization", { kind: "organization", id: IDS.org }],
-      [`resource:${IDS.resource}`, "Resource", { kind: "service_project", id: IDS.resource }],
-      [`project:${IDS.blog}`, "Project", { kind: "project", id: IDS.blog }],
-    ];
-    for (const [key, name, entity] of cases) {
-      fireEvent.click(await screen.findByTestId(key));
-      const details = screen.getByRole("complementary", { name: "Details" });
-      await user.click(within(details).getByRole("button", { name: "+ Field" }));
-      const dialog = screen.getByRole("dialog", { name: "Add field" });
-      await user.type(within(dialog).getByLabelText("Field name"), `${name} note`);
-      await user.type(within(dialog).getByLabelText("Value"), "x");
-      await user.click(within(dialog).getByRole("button", { name: "Save" }));
-      await waitFor(() => expect(mocked.addCustomField).toHaveBeenCalledWith(entity, `${name} note`, "x"));
-      fireEvent.click(await screen.findByTestId(key));
-    }
+    fireEvent.click(await screen.findByTestId(key));
+    const details = screen.getByRole("complementary", { name: "Details" });
+    await user.click(within(details).getByRole("button", { name: "+ Field" }));
+    const dialog = screen.getByRole("dialog", { name: "Add field" });
+    await user.type(within(dialog).getByLabelText("Field name"), `${name} note`);
+    await user.type(within(dialog).getByLabelText("Value"), "x");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocked.addCustomField).toHaveBeenCalledWith(entity, `${name} note`, "x"));
   });
 });
 

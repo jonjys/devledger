@@ -22,8 +22,38 @@ permissions:
   contents: write
 
 jobs:
+  # Existing tags rebuild their original source; new tags use the selected
+  # dispatch commit. Every platform consumes the same resolved SHA.
+  prepare:
+    name: Resolve release source
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve the tag to one immutable commit
+        id: source
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          SELECTED_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          else
+            commit="$(git rev-parse "$SELECTED_COMMIT^{commit}")"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
   release:
     name: Build & publish (${{ matrix.platform }})
+    needs: [prepare]
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +63,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
 
       - name: Install Tauri system dependencies (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -62,6 +94,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseCommitish: ${{ needs.prepare.outputs.commit }}
           releaseName: "DevLedger ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           releaseBody: |
             Download the installer for your platform from the assets below.
@@ -77,10 +110,12 @@ jobs:
 
   android:
     name: Android APK
-    needs: [release]
+    needs: [prepare, release]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
 
       - uses: actions/setup-java@v4
         with:
@@ -141,10 +176,12 @@ jobs:
 
   ios:
     name: iPhone IPA
-    needs: [release]
+    needs: [prepare, release]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -123,6 +123,95 @@ describe("demo backend", () => {
     expect(copied).toHaveLength(1);
   });
 
+  describe("environment export", () => {
+    async function addVariable(projectId: string, name: string, value: string, environment: "production" | "development" = "production") {
+      return api.storeSecret(
+        { owner: { project_id: projectId, service_project_id: null, account_id: null }, kind: "env_var", name, environment, notes: null },
+        value,
+      );
+    }
+
+    it("sorts and quotes values exactly as the desktop exporter does", async () => {
+      const copied = vi.fn(async (_text: string) => {});
+      setClipboard(copied);
+      const project = await api.createProject("Export formatting", null);
+      for (const [name, value] of [
+        ["z_VALUE", "plain"],
+        ["PATH_LABEL", String.raw`C:\demo\files "A"`],
+        ["HASH_LABEL", "Storefront#1"],
+        ["APP_LABEL", "Synthetic Storefront"],
+        ["BACKSLASH", String.raw`C:\demo\files`],
+        ["_TOKEN", "synthetic"],
+      ]) {
+        await addVariable(project.id, name!, value!);
+      }
+
+      expect(await api.copyEnv(project.id, "production")).toBe(6);
+      expect(copied).toHaveBeenCalledExactlyOnceWith([
+        'APP_LABEL="Synthetic Storefront"',
+        String.raw`BACKSLASH=C:\demo\files`,
+        'HASH_LABEL="Storefront#1"',
+        String.raw`PATH_LABEL="C:\\demo\\files \"A\""`,
+        "_TOKEN=synthetic",
+        "z_VALUE=plain",
+        "",
+      ].join("\n"));
+    });
+
+    it.each(["1TOKEN", "API-TOKEN", "A=B", "TOKEN\nOTHER"])("refuses invalid variable name %j without changing the clipboard", async (name) => {
+      const copied = vi.fn(async (_text: string) => {});
+      setClipboard(copied);
+      const project = await api.createProject("Invalid name", null);
+      await addVariable(project.id, name, "synthetic");
+      await expect(api.copyEnv(project.id, null)).rejects.toMatchObject({ code: "invalid" });
+      expect(copied).not.toHaveBeenCalled();
+    });
+
+    it.each(["first\nINJECTED=value", "first\rINJECTED=value", "first\r\nINJECTED=value"])("refuses line breaks in value %j without changing the clipboard", async (value) => {
+      const copied = vi.fn(async (_text: string) => {});
+      setClipboard(copied);
+      const project = await api.createProject("Line break", null);
+      await addVariable(project.id, "A_SAFE", "synthetic");
+      await addVariable(project.id, "Z_UNSAFE", value);
+      await expect(api.copyEnv(project.id, null)).rejects.toMatchObject({ code: "invalid" });
+      expect(copied).not.toHaveBeenCalled();
+    });
+
+    it("deduplicates linked resources and refuses conflicting environments until one is chosen", async () => {
+      const copied = vi.fn(async (_text: string) => {});
+      setClipboard(copied);
+      const project = await api.createProject("Scoped export", null);
+      const [person] = await api.listIdentities();
+      const account = await api.createAccountManual(person!.id, "supabase", "Export account");
+      const resource = await api.createServiceProjectManual(account.id, null, "supabase", "Export database", null, "production");
+      await api.linkServiceProject(resource.id, project.id);
+      await api.storeSecret(
+        { owner: { project_id: null, service_project_id: resource.id, account_id: null }, kind: "env_var", name: "DATABASE_URL", environment: "production", notes: null },
+        "postgres://synthetic@example.com/production",
+      );
+      await addVariable(project.id, "DATABASE_URL", "postgres://synthetic@example.com/production");
+      expect(await api.copyEnv(project.id, null)).toBe(1);
+      expect(copied).toHaveBeenLastCalledWith("DATABASE_URL=postgres://synthetic@example.com/production\n");
+
+      await addVariable(project.id, "DATABASE_URL", "postgres://synthetic@localhost/development", "development");
+      copied.mockClear();
+      await expect(api.copyEnv(project.id, null)).rejects.toMatchObject({ code: "invalid" });
+      expect(copied).not.toHaveBeenCalled();
+      expect(await api.copyEnv(project.id, "production")).toBe(1);
+      expect(copied).toHaveBeenLastCalledWith("DATABASE_URL=postgres://synthetic@example.com/production\n");
+      expect(await api.copyEnv(project.id, "development")).toBe(1);
+      expect(copied).toHaveBeenLastCalledWith("DATABASE_URL=postgres://synthetic@localhost/development\n");
+    });
+
+    it("copies an empty string for a project without variables", async () => {
+      const copied = vi.fn(async (_text: string) => {});
+      setClipboard(copied);
+      const project = await api.createProject("Empty export", null);
+      expect(await api.copyEnv(project.id, null)).toBe(0);
+      expect(copied).toHaveBeenCalledExactlyOnceWith("");
+    });
+  });
+
   it("sends the UI back to the gate when locked", async () => {
     await api.vaultLock();
     await expect(api.listProjects()).rejects.toMatchObject({ code: "vault_locked" });

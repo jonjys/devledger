@@ -10,6 +10,7 @@ import {
   secretKindColumn,
 } from "../lib/format";
 import { useMode } from "../lib/mode";
+import { WEB } from "../lib/platform";
 import type {
   EnvConflict,
   Environment,
@@ -103,7 +104,7 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
   async function copyOne(secretId: string, name: string) {
     try {
       await api.copySecret(secretId);
-      onNotify(`Copied ${name} · clipboard clears in 30 seconds`);
+      onNotify(`Copied ${name}${WEB ? "" : " · clipboard clears in 30 seconds"}`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }
@@ -115,7 +116,7 @@ export default function ProjectVault({ summary, onNotify, onChanged }: Props) {
         projectId,
         exportEnvironment === "all" ? null : exportEnvironment,
       );
-      onNotify(`Copied ${plural(count, "variable")} as .env · clipboard clears in 30 seconds`);
+      onNotify(`Copied ${plural(count, "variable")} as .env${WEB ? "" : " · clipboard clears in 30 seconds"}`);
     } catch (e: unknown) {
       onNotify(e instanceof Error ? e.message : String(e), true);
     }

@@ -1,4 +1,5 @@
 import { dirname, normalize, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type IndexHtmlTransformContext } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -7,7 +8,7 @@ import react from "@vitejs/plugin-react";
 // browser. The desktop build (`vite.config.ts`) is untouched;
 // this config swaps the three Tauri modules the frontend imports for browser
 // shims, so the same components run with no Rust behind them.
-const here = (path: string) => decodeURIComponent(new URL(path, import.meta.url).pathname);
+const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 // The HTML pages live under web/ and import modules from ../src, which is
 // outside the Vite root. The production build resolves that. In dev the
@@ -23,7 +24,7 @@ function devOutsideScripts() {
         const dir = dirname(ctx.filename);
         return html.replace(/(\s(?:src|href)=")(\.\.[^"]+)(")/g, (full, open, rel, close) => {
           if (!/\.(tsx?|css)$/.test(rel)) return full;
-          return `${open}/@fs${normalize(resolve(dir, rel))}${close}`;
+          return `${open}/@fs/${normalize(resolve(dir, rel)).replaceAll("\\", "/")}${close}`;
         });
       },
     },

@@ -544,7 +544,7 @@ describe("several accounts of one service", () => {
   });
 
   it("boxes only the accounts that sit in one row", () => {
-    const ball = (id: string, provider: string): Ball =>
+    const ball = (id: string, provider: "github" | "stripe"): Ball =>
       mk("account", id, provider, { provider });
     const balls = [ball("a", "github"), ball("b", "github"), ball("c", "stripe"), ball("d", "github")];
     const at = new Map<string, { x: number; y: number }>([

@@ -56,7 +56,9 @@ describe("costs", () => {
   });
 
   it("counts the month gone so far", () => {
-    const mid = new Date(2026, 9, 16, 12, 0, 0); // halfway through a 31-day October
+    // January has no daylight-saving transition in the test environments;
+    // October's extra hour makes its calendar midpoint differ from elapsed time.
+    const mid = new Date(2026, 0, 16, 12, 0, 0);
     const p = monthProgress(mid);
     expect(p.days).toBe(31);
     expect(p.day).toBe(16);

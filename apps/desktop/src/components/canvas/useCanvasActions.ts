@@ -29,6 +29,7 @@ import {
   type Point,
 } from "../../lib/canvas";
 import { providerForName } from "../../lib/providers";
+import { WEB } from "../../lib/platform";
 import type {
   Account,
   CustomField,
@@ -815,7 +816,7 @@ export function useCanvasActions(ctx: CanvasCore) {
     try {
       // Rust writes the value to the clipboard; it never enters JavaScript.
       await api.copySecret(listing.entry.secret.id);
-      onNotify(`Copied ${listing.entry.secret.name} · clipboard clears in 30 seconds`);
+      onNotify(`Copied ${listing.entry.secret.name}${WEB ? "" : " · clipboard clears in 30 seconds"}`);
     } catch (e: unknown) {
       onNotify(message(e), true);
     }
