@@ -24,9 +24,10 @@ function Assert-MsiExecutableMatchesBuild {
     $builtText = [Text.Encoding]::Latin1.GetString($builtBytes)
     $installedText = [Text.Encoding]::Latin1.GetString($installedBytes)
     $offset = $builtText.IndexOf($builtMarker, [StringComparison]::Ordinal)
-    if ($offset -lt 0 -or
-        $builtText.IndexOf($builtMarker, $offset + 1, [StringComparison]::Ordinal) -ge 0) {
-        throw 'Expected one default Tauri bundle marker in the raw build.'
+    # Match the bundler's first-marker search; any other literal stays part
+    # of the full-file hash comparison rather than becoming an exception.
+    if ($offset -lt 0) {
+        throw 'Expected the default Tauri bundle marker in the raw build.'
     }
     if ($installedText.Substring($offset, $installedMarker.Length) -cne $installedMarker) {
         throw 'Expected the Tauri MSI bundle marker at the original build marker offset.'
