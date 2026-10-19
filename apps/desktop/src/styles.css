@@ -1243,10 +1243,12 @@ select option { background: var(--panel); color: var(--text); }
   background: rgba(255, 140, 0, 0.035);
 }
 .cv-hull span {
-  position: absolute; top: 8px; left: 14px; font-size: 11px; font-weight: 750;
-  letter-spacing: 0.08em; text-transform: uppercase; color: #FFB347; font-weight: 700;
+  position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #FFB347; background: #0E0E0E; border: 1px solid rgba(255, 140, 0, 0.35);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap;
 }
-.ledger-canvas .react-flow__node-hull { pointer-events: none !important; z-index: 0 !important; }
+.ledger-canvas .react-flow__node-hull { pointer-events: none !important; z-index: -1 !important; }
 .cv-account.attention .cv-orb { border-color: #F59E0B; }
 /* inside a service: an organization, and the projects the service runs */
 .cv-org .cv-orb { background: radial-gradient(circle at 35% 30%, #1F1A2E, #110E1A); border-color: #6D5BD0; color: #C4B5FD; }
@@ -1269,13 +1271,15 @@ select option { background: var(--panel); color: var(--text); }
 @keyframes cv-slot-breathe { 50% { border-color: #5A4A36; color: #9CA3AF; } }
 
 .cv-label {
-  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; text-align: center; white-space: nowrap;
-  max-width: 300px; pointer-events: none;
-  background: rgba(10, 10, 10, 0.88); border-radius: 6px; padding: 2px 8px;
+  max-width: 180px; pointer-events: none;
+  background: rgba(10, 10, 10, 0.92); border-radius: 6px; padding: 1px 6px;
 }
-.cv-label strong { font-size: 12.5px; color: #F5F5F5; overflow: hidden; text-overflow: ellipsis; max-width: 284px; }
-.cv-label span { font-size: 11px; color: #9CA3AF; overflow: hidden; text-overflow: ellipsis; max-width: 284px; }
+.cv-label strong { font-size: 12px; color: #F5F5F5; overflow: hidden; text-overflow: ellipsis; max-width: 168px; }
+.cv-label span { font-size: 10.5px; color: #9CA3AF; overflow: hidden; text-overflow: ellipsis; max-width: 168px; }
+.cv-email .cv-label { max-width: 230px; }
+.cv-email .cv-label strong, .cv-email .cv-label span { max-width: 218px; }
 .cv-email.primary .cv-label strong { font-size: 14px; }
 .cv-label .cv-rename { pointer-events: auto; }
 .cv-rename {

@@ -145,7 +145,7 @@ export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
     ball.kind === "project" ? ({ "--hue": hue(ball.label), width: size, height: size } as React.CSSProperties) : { width: size, height: size };
 
   return (
-    <div className={cls} style={style} data-testid={ball.key} title={ball.sub ?? undefined}>
+    <div className={cls} style={style} data-testid={ball.key} title={[ball.label, ball.sub].filter(Boolean).join(" · ")}>
       <Handle type="target" id="in" position={Position.Top} style={CENTRE} isConnectableStart={false} />
       <Handle type="source" id="c" position={Position.Top} style={CENTRE} isConnectable={false} />
       <div className="cv-orb">
@@ -155,7 +155,6 @@ export const BallView = memo(function BallView({ data }: NodeProps<BallNode>) {
       <div className="cv-label">
         {renaming ? <RenameInput ball={ball} onRename={onRename} /> : <strong>{ball.label}</strong>}
         {ball.sub && !renaming && <span>{ball.sub}</span>}
-        {fold && !fold.open && !renaming && <span>{fold.inside} inside</span>}
       </div>
       {fold && (
         <button
@@ -239,14 +238,30 @@ export interface LineData extends Record<string, unknown> {
  */
 export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
   const d = data as LineData | undefined;
+  // Leave toward the other ball. A fixed right-to-left exit sends a line out
+  // the far side of a project and back around the map, which is the grid.
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const across = Math.abs(dx) >= 36;
+  // Each line takes its own lane in the gutter. One shared spine makes
+  // unrelated lines look joined into a box.
+  let lane = 0;
+  if (Math.abs(dx) > 180) {
+    let n = 0;
+    for (let i = 0; i < id.length; i += 1) n = (n + id.charCodeAt(i) * (i + 1)) % 5;
+    lane = (n - 2) * 16;
+  }
   const [path] = getSmoothStepPath({
     sourceX,
     sourceY,
-    sourcePosition: Position.Right,
+    sourcePosition: across ? (dx >= 0 ? Position.Right : Position.Left) : dy >= 0 ? Position.Bottom : Position.Top,
     targetX,
     targetY,
-    targetPosition: Position.Left,
-    borderRadius: 12,
+    targetPosition: across ? (dx >= 0 ? Position.Left : Position.Right) : dy >= 0 ? Position.Top : Position.Bottom,
+    borderRadius: 8,
+    offset: 16,
+    centerX: across ? (sourceX + targetX) / 2 + lane : undefined,
+    centerY: across ? undefined : (sourceY + targetY) / 2,
   });
   const cls = [
     "cv-line",

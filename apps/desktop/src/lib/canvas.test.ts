@@ -23,6 +23,8 @@ import {
   serviceHulls,
   sideRelations,
   tidyLayout,
+  tightHulls,
+  MAP_ROW,
   type Ball,
   type Line,
 } from "./canvas";
@@ -539,6 +541,22 @@ describe("several accounts of one service", () => {
     const { balls } = canvas();
     expect(serviceHulls(balls)).toEqual([]);
     expect(ball(balls, account(IDS.github)).label).toBe("GitHub");
+  });
+
+  it("boxes only the accounts that sit in one row", () => {
+    const ball = (id: string, provider: string): Ball =>
+      mk("account", id, provider, { provider });
+    const balls = [ball("a", "github"), ball("b", "github"), ball("c", "stripe"), ball("d", "github")];
+    const at = new Map<string, { x: number; y: number }>([
+      ["account:a", { x: 300, y: 0 }],
+      ["account:b", { x: 300, y: MAP_ROW }],
+      ["account:c", { x: 300, y: MAP_ROW * 2 }],
+      ["account:d", { x: 300, y: MAP_ROW * 4 }],
+    ]);
+    const hulls = tightHulls(balls, at);
+    expect(hulls).toHaveLength(1);
+    expect(hulls[0]?.label).toBe("GitHub ×2");
+    expect(hulls[0]?.members).toEqual(["account:a", "account:b"]);
   });
 });
 

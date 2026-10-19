@@ -25,10 +25,10 @@ import {
   insideCounts,
   neighbourhood,
   projectView,
-  serviceHulls,
   sideRelations,
   slotSpot,
   tidyLayout,
+  tightHulls,
   type Ball,
   type Line,
   type Point,
@@ -244,7 +244,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     });
   }, [data, model]);
 
-  const hulls = useMemo(() => (projectKey ? [] : serviceHulls(view.balls)), [projectKey, view]);
+  const hulls = useMemo(() => (projectKey ? [] : tightHulls(view.balls, place)), [projectKey, view, place]);
 
   useEffect(() => {
     setNodes((prev) => {
@@ -279,14 +279,19 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
       });
       if (!projectKey) {
         for (const hull of hulls) {
-          const pts = hull.members
-            .map((k) => drawn.get(k))
-            .filter((p): p is Point => p !== undefined);
-          if (pts.length < 2) continue;
-          const minX = Math.min(...pts.map((p) => p.x)) - 86;
-          const maxX = Math.max(...pts.map((p) => p.x)) + 86;
-          const minY = Math.min(...pts.map((p) => p.y)) - 70;
-          const maxY = Math.max(...pts.map((p) => p.y)) + 108;
+          const boxes = hull.members.flatMap((k) => {
+            const p = drawn.get(k);
+            const ball = byKey.get(k);
+            return p && ball ? [{ ...p, s: ballSize(ball) }] : [];
+          });
+          if (boxes.length < 2) continue;
+          // Positions are the centre of each ball. Pad the orbs, plus a caption
+          // above and the name below, and no further — a looser box covers the
+          // neighbour.
+          const minX = Math.min(...boxes.map((b) => b.x - b.s / 2)) - 26;
+          const maxX = Math.max(...boxes.map((b) => b.x + b.s / 2)) + 26;
+          const minY = Math.min(...boxes.map((b) => b.y - b.s / 2)) - 34;
+          const maxY = Math.max(...boxes.map((b) => b.y + b.s / 2)) + 48;
           const width = maxX - minX;
           const height = maxY - minY;
           shown.push({

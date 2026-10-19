@@ -329,10 +329,13 @@ function stampInstances(balls: Ball[]): Ball[] {
     const service = providerLabel(b.provider);
     const login = b.sub && !/\bkeys?$/.test(b.sub) ? b.sub : null;
     if (login && login.toLowerCase() !== service.toLowerCase()) {
-      return { ...b, label: login, sub: b.sub === login ? service : `${service}${b.sub && b.sub !== login ? ` · ${b.sub}` : ""}` };
+      return { ...b, label: login, sub: service };
     }
     if (b.label.trim().toLowerCase() === service.toLowerCase()) return { ...b, label: `${service} ${n}` };
-    return { ...b, sub: b.sub ?? service };
+    // A custom name (the login, a team) still needs the service on it, or two
+    // Supabase accounts read as two unrelated balls.
+    const sub = b.sub && b.sub.toLowerCase() !== service.toLowerCase() ? `${service} · ${b.sub}` : service;
+    return { ...b, sub };
   });
 }
 
@@ -364,6 +367,47 @@ export function serviceHulls(balls: Ball[]): ServiceHull[] {
     });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
+ * The hulls worth drawing. `serviceHulls` groups every account of one service,
+ * even when other services sit between them; a box around that swallows the
+ * balls in the middle. Here a box is only the accounts that actually sit in a
+ * row, with nothing but the row-gap between them.
+ */
+export function tightHulls(balls: Ball[], at: Map<string, Point>, gap = MAP_ROW * 1.45): ServiceHull[] {
+  const groups = new Map<string, Ball[]>();
+  for (const b of balls) {
+    if (b.kind !== "account" || !b.provider || !at.has(b.key)) continue;
+    const list = groups.get(b.provider) ?? [];
+    list.push(b);
+    groups.set(b.provider, list);
+  }
+  const out: ServiceHull[] = [];
+  for (const [provider, members] of groups) {
+    const sorted = [...members].sort((a, b) => (at.get(a.key)?.y ?? 0) - (at.get(b.key)?.y ?? 0) || a.key.localeCompare(b.key));
+    let cluster: Ball[] = [];
+    const close = () => {
+      if (cluster.length >= 2) {
+        out.push({
+          key: `hull:${provider}:${cluster[0]!.key}`,
+          provider,
+          label: `${providerLabel(provider)} ×${cluster.length}`,
+          members: cluster.map((m) => m.key),
+        });
+      }
+      cluster = [];
+    };
+    for (const m of sorted) {
+      const prev = cluster.at(-1);
+      const y0 = prev ? (at.get(prev.key)?.y ?? 0) : 0;
+      const y1 = at.get(m.key)?.y ?? 0;
+      if (prev && y1 - y0 > gap) close();
+      cluster.push(m);
+    }
+    close();
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
 /** How many organizations and service-projects sit inside each account. */
@@ -511,6 +555,11 @@ export function sideRelations(key: string, balls: Ball[], lines: Line[]): SideRe
 
 const COLUMN: Record<BallKind, number> = { email: 0, account: 300, org: 520, resource: 740, project: 1000 };
 const ROW = 130;
+/**
+ * The main map's row. Taller than a project's page: a ball's name hangs below
+ * it, and a group caption needs a gap of its own, or the next ball covers both.
+ */
+export const MAP_ROW = 172;
 /** How far to the right of its holder an organization or resource is put. */
 const BESIDE = 220;
 
@@ -902,7 +951,16 @@ export function tidyLayout(balls: Ball[], lines: Line[]): Map<string, Point> {
   for (const [child, parent] of holder) {
     if (byKey.has(child) && byKey.has(parent)) children.set(parent, [...(children.get(parent) ?? []), child]);
   }
-  for (const list of children.values()) list.sort((a, b) => byRank(order(a), order(b)));
+  for (const list of children.values()) {
+    list.sort((a, b) => {
+      // Same service, then name, so two GitHub accounts share a tight box
+      // instead of having Stripe parked between them.
+      const pa = byKey.get(a)?.provider ?? "";
+      const pb = byKey.get(b)?.provider ?? "";
+      if (pa !== pb) return pa < pb ? -1 : 1;
+      return byRank(order(a), order(b));
+    });
+  }
   const usedDirectly = new Set(lines.filter((l) => l.kind === "uses").map((l) => l.target));
 
   let next = 0;
@@ -913,7 +971,7 @@ export function tidyLayout(balls: Ball[], lines: Line[]): Map<string, Point> {
     let y: number;
     if (kids.length === 0 || usedDirectly.has(k)) {
       y = next;
-      next += ROW;
+      next += MAP_ROW;
       kids.forEach(visit);
     } else {
       const ys = kids.map(visit);
@@ -929,8 +987,8 @@ export function tidyLayout(balls: Ball[], lines: Line[]): Map<string, Point> {
   for (const r of roots) {
     if (out.has(r)) continue;
     visit(r);
-    // A little air between one email's things and the next.
-    next += ROW / 2;
+    // Air between one email's block and the next, so the two read as lanes.
+    next += MAP_ROW * 0.72;
   }
 
   const projects = balls.filter((b) => b.kind === "project");
@@ -942,9 +1000,9 @@ export function tidyLayout(balls: Ball[], lines: Line[]): Map<string, Point> {
   });
   const placed = spread(
     wants.filter((w): w is { key: string; want: number } => w.want !== null),
-    ROW,
+    MAP_ROW,
   );
-  let bottom = Math.max(next, ...[...placed.values()].map((y) => y + ROW));
+  let bottom = Math.max(next, ...[...placed.values()].map((y) => y + MAP_ROW));
   for (const w of wants) {
     const y = placed.get(w.key) ?? bottom;
     if (!placed.has(w.key)) bottom += ROW;
