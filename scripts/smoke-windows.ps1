@@ -6,6 +6,39 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Assert-MsiExecutableMatchesBuild {
+    param([string]$BuiltPath, [string]$InstalledPath)
+
+    $builtBytes = [IO.File]::ReadAllBytes($BuiltPath)
+    $installedBytes = [IO.File]::ReadAllBytes($InstalledPath)
+    if ($builtBytes.Length -ne $installedBytes.Length) {
+        throw 'The installed executable size differs from this build.'
+    }
+
+    # Tauri patches this marker for each installer, then restores UNK in the
+    # raw build. Normalize only that one documented change, in memory; every
+    # other byte must still hash identically to the executable we compiled.
+    # https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle.rs
+    $builtMarker = '__TAURI_BUNDLE_TYPE_VAR_UNK'
+    $installedMarker = '__TAURI_BUNDLE_TYPE_VAR_MSI'
+    $builtText = [Text.Encoding]::Latin1.GetString($builtBytes)
+    $installedText = [Text.Encoding]::Latin1.GetString($installedBytes)
+    $offset = $builtText.IndexOf($builtMarker, [StringComparison]::Ordinal)
+    if ($offset -lt 0 -or
+        $builtText.IndexOf($builtMarker, $offset + 1, [StringComparison]::Ordinal) -ge 0) {
+        throw 'Expected one default Tauri bundle marker in the raw build.'
+    }
+    if ($installedText.Substring($offset, $installedMarker.Length) -cne $installedMarker) {
+        throw 'Expected the Tauri MSI bundle marker at the original build marker offset.'
+    }
+    [Array]::Copy([Text.Encoding]::ASCII.GetBytes($builtMarker), 0, $installedBytes, $offset, $builtMarker.Length)
+    $builtHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($builtBytes))
+    $installedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($installedBytes))
+    if ($builtHash -ne $installedHash) {
+        throw 'The installed executable differs from this build beyond the Tauri MSI marker.'
+    }
+}
+
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or
     $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Windows installer verification runs only on GitHub-hosted Windows runners.'
@@ -69,12 +102,8 @@ $installedExecutable = Join-Path $installDirectory 'devledger-desktop.exe'
 if (-not (Test-Path -LiteralPath $installedExecutable -PathType Leaf)) {
     throw "The MSI did not install the application into INSTALLDIR. See $installLog"
 }
-$builtHash = (Get-FileHash -LiteralPath $builtExecutable -Algorithm SHA256).Hash
-$installedHash = (Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash
-if ($builtHash -ne $installedHash) {
-    throw 'The installed executable does not match the release executable packaged by this build.'
-}
-Write-Output 'MSI installation passed; installed executable matches this build.'
+Assert-MsiExecutableMatchesBuild -BuiltPath $builtExecutable -InstalledPath $installedExecutable
+Write-Output 'MSI installation passed; executable matches this build with only its Tauri MSI marker changed.'
 
 # Hosted runners can execute their agent without an interactive Windows
 # desktop. In that case installation is verified, and GUI startup is reported
