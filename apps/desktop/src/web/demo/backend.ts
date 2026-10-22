@@ -778,13 +778,25 @@ const commands: Record<string, (a: Args) => unknown> = {
     log("secret.copy", "secret", secretId, "Copied secret");
   },
   copy_env: async ({ projectId, environment }) => {
-    if (envConflicts(projectId, environment).length) {
-      invalid("some variables are defined more than once with different values");
-    }
-    const lines = [...envFor(projectId, environment)].map(
-      ([name, defs]) => `${name}=${db.values.get(defs[0]!.id) ?? ""}`,
-    );
-    await clipboard(`${lines.join("\n")}\n`);
+    const variables = [...envFor(projectId, environment)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const lines = variables.map(([name, defs]) => {
+      if (!/^[A-Za-z_]/.test(name) || /[^A-Za-z0-9_]/.test(name)) {
+        invalid(`${name} is not a valid environment variable name`);
+      }
+      const values = defs.map((definition) => db.values.get(definition.id) ?? "");
+      if (values.some((value) => /[\r\n]/.test(value))) {
+        invalid(`${name} contains a line break and cannot be exported safely`);
+      }
+      const value = values[0]!;
+      if (values.some((other) => other !== value)) {
+        invalid(`${name} has conflicting values; choose one environment or correct the relationship`);
+      }
+      const rendered = /[\p{White_Space}#"]/u.test(value)
+        ? `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+        : value;
+      return `${name}=${rendered}`;
+    });
+    await clipboard(lines.length ? `${lines.join("\n")}\n` : "");
     return lines.length;
   },
   store_secret: ({ entry, value }) => storeSecret(entry, value),

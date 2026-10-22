@@ -23,6 +23,7 @@ import {
   serviceHulls,
   sideRelations,
   tidyLayout,
+  withPins,
   tightHulls,
   MAP_ROW,
   type Ball,
@@ -544,7 +545,7 @@ describe("several accounts of one service", () => {
   });
 
   it("boxes only the accounts that sit in one row", () => {
-    const ball = (id: string, provider: string): Ball =>
+    const ball = (id: string, provider: "github" | "stripe"): Ball =>
       mk("account", id, provider, { provider });
     const balls = [ball("a", "github"), ball("b", "github"), ball("c", "stripe"), ball("d", "github")];
     const at = new Map<string, { x: number; y: number }>([
@@ -593,5 +594,29 @@ describe("the details lists", () => {
     const rel = sideRelations(email(IDS.me), balls, lines);
     expect(rel.owns.map((b) => b.label).sort()).toEqual(["GitHub", "Stripe", "Supabase"]);
     expect(rel.projects.map((b) => b.label)).toContain("shop");
+  });
+});
+
+describe("balls you dragged", () => {
+  const laid = new Map([
+    ["a", { x: 0, y: 0 }],
+    ["b", { x: 0, y: 172 }],
+    ["c", { x: 300, y: 0 }],
+  ]);
+
+  it("leaves the layout alone when nothing was moved", () => {
+    expect(withPins(laid, new Map())).toBe(laid);
+  });
+
+  it("keeps a moved ball where it was left, and moves anything it would cover", () => {
+    const at = withPins(laid, new Map([["c", { x: 0, y: 10 }]]));
+    expect(at.get("c")).toEqual({ x: 0, y: 10 });
+    const a = at.get("a")!;
+    expect(Math.hypot(a.x - 0, a.y - 10)).toBeGreaterThanOrEqual(110);
+    expect(at.get("b")).toEqual({ x: 0, y: 172 });
+  });
+
+  it("ignores the pin of a ball that is not on the map", () => {
+    expect(withPins(laid, new Map([["gone", { x: 0, y: 0 }]]))).toBe(laid);
   });
 });

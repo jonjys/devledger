@@ -172,6 +172,8 @@ names instead of silently choosing a value.
 
 See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit.
+For desktop folder backups and browser backup files, see
+[`docs/BACKUP.md`](docs/BACKUP.md).
 
 ## Development
 

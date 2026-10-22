@@ -19,20 +19,18 @@ const ZOOM_KEY = "devledger.listZoom";
 const MODE_KEY = "devledger.ledgerMode";
 
 /**
- * The map unless the user chose otherwise.
- *
- * On a phone the map does nothing useful: it becomes a list, and Needs
- * attention stays in the tab bar. There is no way to open the map there.
+ * What the user chose last, else the map -- or on a phone-sized screen the
+ * list, since the whole map squeezed into 390 pixels is hard to read. The map
+ * stays one tap away there: a tablet, or a phone turned sideways, shows it well.
  */
 function readMode(): Mode {
-  if (window.innerWidth <= 800) return "list";
   try {
     const m = window.localStorage.getItem(MODE_KEY);
     if (m === "map" || m === "list") return m;
   } catch {
-    // Storage blocked: the map is the desk default.
+    // Storage blocked: fall through to the screen-size default.
   }
-  return "map";
+  return window.innerWidth <= 800 ? "list" : "map";
 }
 const ZOOMS = [0.7, 0.8, 0.9, 1, 1.1];
 
@@ -52,7 +50,6 @@ function readZoom(): number {
  * it stays; the map is what opens. The list can be zoomed out to see more.
  */
 export default function LedgerView({ onNotify, onChanged, refreshKey, onOpenProject }: Props) {
-  const [phone] = useState(() => window.innerWidth <= 800);
   const [mode, setModeState] = useState<Mode>(readMode);
 
   function setMode(next: Mode) {
@@ -95,26 +92,24 @@ export default function LedgerView({ onNotify, onChanged, refreshKey, onOpenProj
             </button>
           </>
         )}
-        {!phone && (
-          <button
-            type="button"
-            className={mode === "map" ? "active" : ""}
-            aria-pressed={mode === "map"}
-            onClick={() => setMode("map")}
-          >
-            Map
-          </button>
-        )}
         <button
           type="button"
-          className={mode === "list" || phone ? "active" : ""}
-          aria-pressed={mode === "list" || phone}
+          className={mode === "map" ? "active" : ""}
+          aria-pressed={mode === "map"}
+          onClick={() => setMode("map")}
+        >
+          Map
+        </button>
+        <button
+          type="button"
+          className={mode === "list" ? "active" : ""}
+          aria-pressed={mode === "list"}
           onClick={() => setMode("list")}
         >
           List
         </button>
       </div>
-      {mode === "map" && !phone ? (
+      {mode === "map" ? (
         <Suspense fallback={<div className="empty">Loading…</div>}>
           <LedgerCanvas
             onNotify={onNotify}
