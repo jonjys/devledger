@@ -30,8 +30,14 @@ import type {
 } from "./types";
 import { providerLabel } from "./format";
 
-/** Hidden field holding a ball's position, "x,y". */
+/**
+ * Hidden field that once held every ball's position, "x,y", from when the map
+ * was laid out by hand. The map lays itself out now and no longer reads it.
+ */
 export const POS_FIELD = "_pos";
+
+/** Hidden field holding where a ball was dragged to, "x,y": it stays there. */
+export const PIN_FIELD = "_pin";
 
 /**
  * Hidden field marking the primary identity. Its name is historical: it was
@@ -136,6 +142,10 @@ export function formatPos(p: Point): string {
 
 export function posField(data: CanvasData, key: string): CustomField | null {
   return (data.fields.get(key) ?? []).find((f) => f.label === POS_FIELD) ?? null;
+}
+
+export function pinField(data: CanvasData, key: string): CustomField | null {
+  return (data.fields.get(key) ?? []).find((f) => f.label === PIN_FIELD) ?? null;
 }
 
 // --- the primary ------------------------------------------------------------------
@@ -593,6 +603,34 @@ export function positions(balls: Ball[], saved: Map<string, Point>): Map<string,
     if (spot.x === COLUMN[b.kind]) lowest[b.kind] = Math.max(lowest[b.kind], spot.y);
   }
   return out;
+}
+
+/** Where the balls the user dragged were left. */
+export function pinnedPositions(data: CanvasData, balls: Ball[]): Map<string, Point> {
+  const out = new Map<string, Point>();
+  for (const b of balls) {
+    const p = parsePos(pinField(data, b.key)?.value);
+    if (p) out.set(b.key, p);
+  }
+  return out;
+}
+
+/**
+ * The laid-out map with the dragged balls where they were left. A ball the
+ * layout would put on top of a pinned one moves to the nearest free spot.
+ */
+export function withPins(laid: Map<string, Point>, pins: Map<string, Point>, gap = 110): Map<string, Point> {
+  // Only the pins of balls on this map: a folded-away ball holds no spot.
+  const live = new Map([...pins].filter(([k]) => laid.has(k)));
+  if (live.size === 0) return laid;
+  const out = new Map(live);
+  for (const [k, p] of laid) {
+    if (out.has(k)) continue;
+    const near = [...live.values()].some((q) => Math.hypot(q.x - p.x, q.y - p.y) < gap);
+    out.set(k, near ? freeSpot(p, out.values(), gap) : p);
+  }
+  // Keep the layout's order of keys for anyone iterating it.
+  return new Map([...laid.keys()].map((k) => [k, out.get(k) as Point]));
 }
 
 export function savedPositions(data: CanvasData, balls: Ball[]): Map<string, Point> {

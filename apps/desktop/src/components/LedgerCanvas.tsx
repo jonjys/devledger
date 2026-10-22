@@ -27,8 +27,11 @@ import {
   projectView,
   sideRelations,
   slotSpot,
+  pinField,
+  pinnedPositions,
   tidyLayout,
   tightHulls,
+  withPins,
   type Ball,
   type Line,
   type Point,
@@ -180,12 +183,13 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   );
 
   const place = useMemo(() => {
-    // Auto-layout is the layout. A drag this session sits on top of it until
-    // Tidy up, or the next reload, puts the ball back. There is no mode toggle.
+    // The map lays itself out. A ball the user dragged stays where it was left
+    // (a pin, kept in the vault) until Tidy up lets go of it. A project's page
+    // is always laid out for it, and a drag there lasts only the visit.
     const base =
       projectKey && data
         ? focusLayout(view.balls, view.lines, projectKey, { upright })
-        : tidyLayout(view.balls, view.lines);
+        : withPins(tidyLayout(view.balls, view.lines), data ? pinnedPositions(data, view.balls) : new Map());
     for (const [k, p] of moved) base.set(k, p);
     return base;
   }, [data, view, projectKey, moved, upright]);
@@ -250,6 +254,10 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
     setNodes((prev) => {
       // A box- or shift-selection belongs to xyflow; keep it across redraws.
       const picked = new Set(locked ? [] : prev.filter((n) => n.selected).map((n) => n.id));
+      // So are the sizes xyflow measured. A node handed back without them is
+      // measured again, and until it is no line can be drawn to it: every frame
+      // of a glide would blank the lines.
+      const measuredSize = new Map(prev.map((n) => [n.id, n.measured]));
       const shown: CanvasNode[] = view.balls.map((b) => {
         const size = ballSize(b);
         const inside = counts.get(b.key) ?? 0;
@@ -257,6 +265,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
           id: b.key,
           type: "ball" as const,
           position: drawn.get(b.key) ?? { x: 0, y: 0 },
+          measured: measuredSize.get(b.key),
           // A size to draw with until the ball has been measured: xyflow hides
           // a node it has no size for.
           initialWidth: size,
@@ -313,6 +322,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
         shown.push({
           id: SLOT,
           type: "slot" as const,
+          measured: measuredSize.get(SLOT),
           position: slotSpot(drawn.get(projectKey) ?? { x: 0, y: 0 }, upright),
           initialWidth: SLOT_SIZE,
           initialHeight: SLOT_SIZE,
@@ -549,6 +559,7 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
   if (!data) return <div className="empty">Loading…</div>;
 
   const selectedBall = selected ? byKey.get(selected) ?? null : null;
+  const hasPins = model.balls.some((b) => pinField(data, b.key) !== null);
   const relations = selectedBall ? sideRelations(selectedBall.key, model.balls, model.lines) : null;
   const undoStep = history.current.past.at(-1);
   const redoStep = history.current.future.at(-1);
@@ -614,12 +625,12 @@ function Canvas({ onNotify, onChanged, refreshKey, projectId = null, onOpenProje
             >
               ↷
             </button>
-            {!projectKey && balls.length > 1 && (
+            {!projectKey && hasPins && (
               <button
                 type="button"
                 className="st-find"
                 onClick={() => void tidyUp()}
-                title="Line everything up: each service beside its email, projects level with what they run on. Undo puts it back."
+                title="Let go of the balls you moved, so the whole map lines itself up again. Undo puts them back."
               >
                 Tidy up
               </button>

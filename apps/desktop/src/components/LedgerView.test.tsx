@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LedgerView from "./LedgerView";
@@ -20,11 +20,12 @@ describe("the Ledger's first view", () => {
     expect(await screen.findByTestId("map")).toBeInTheDocument();
   });
 
-  it("opens as the list on a phone, and never offers the map", async () => {
+  it("opens as the list on a phone, with the map one tap away", async () => {
     width(390);
     render(<LedgerView onNotify={vi.fn()} onChanged={vi.fn()} />);
     expect(screen.getByTestId("list")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Map" })).toBeNull();
     expect(screen.queryByTestId("map")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Map" }));
+    expect(await screen.findByTestId("map")).toBeInTheDocument();
   });
 });

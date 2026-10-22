@@ -7,7 +7,7 @@ import { useCallback, useMemo, useRef } from "react";
 
 import * as api from "../../lib/api";
 import {
-  POS_FIELD,
+  PIN_FIELD,
   PRIMARY_FIELD,
   ballKey,
   connectIntent,
@@ -18,12 +18,10 @@ import {
   nearestEmail,
   ownerFor,
   parseKey,
-  parsePos,
-  posField,
+  pinField,
   primaryField,
   resourceToLink,
   resourcesToUnlink,
-  tidyLayout,
   type Ball,
   type Line,
   type Point,
@@ -33,7 +31,6 @@ import { WEB } from "../../lib/platform";
 import type {
   Account,
   CustomField,
-  EntityRef,
   Provider,
   SecretListing,
   SecretOwner,
@@ -89,12 +86,12 @@ export function useCanvasActions(ctx: CanvasCore) {
     const d = dataRef.current;
     const ball = byKeyRef.current.get(key);
     if (!ball || !d || projectKey) return;
-    const existing = posField(d, key);
+    const existing = pinField(d, key);
     try {
       if (existing) {
-        await api.updateCustomField(existing.id, POS_FIELD, formatPos(p));
+        await api.updateCustomField(existing.id, PIN_FIELD, formatPos(p));
       } else {
-        const created = await api.addCustomField(entityOf(ball), POS_FIELD, formatPos(p));
+        const created = await api.addCustomField(entityOf(ball), PIN_FIELD, formatPos(p));
         setData((cur) => {
           if (!cur) return cur;
           const fields = new Map(cur.fields);
@@ -114,16 +111,6 @@ export function useCanvasActions(ctx: CanvasCore) {
       return next;
     });
     for (const [k, p] of to) await savePosition(k, p);
-  }
-
-  /** Put a ball that was just created where it was dropped. */
-  async function placeNew(entity: EntityRef, at: Point | null) {
-    if (!at || projectKey) return;
-    try {
-      await api.addCustomField(entity, POS_FIELD, formatPos(at));
-    } catch {
-      // It was made; it just lands in its column instead of where it was dropped.
-    }
   }
 
   // --- lookups ----------------------------------------------------------------------
@@ -453,7 +440,6 @@ export function useCanvasActions(ctx: CanvasCore) {
     try {
       const label = serviceLabel(typed, provider);
       const account = await api.createAccountManual(to.id, provider, label);
-      await placeNew({ kind: "account", id: account.id }, spot);
       if (forProject) await use(account.id, forProject, account);
       else onNotify(`Added ${label} under ${to.label} · draw a line to another email to move it`);
       record(added(label, "account", account.id, () => addService(provider, typed, spot, to, forProject)));
@@ -529,7 +515,6 @@ export function useCanvasActions(ctx: CanvasCore) {
     switch (d.kind) {
       case "email": {
         const identity = await api.createIdentityManual(values.label || values.name, values.name);
-        await placeNew({ kind: "identity", id: identity.id }, d.at);
         onNotify(`Added ${values.name}`);
         made = { kind: "email", id: identity.id, label: values.name };
         break;
@@ -538,7 +523,6 @@ export function useCanvasActions(ctx: CanvasCore) {
         const existing = cur?.projects.find((p) => p.name.toLowerCase() === values.name.toLowerCase());
         if (existing) throw new Error(`There is already a project called ${existing.name}.`);
         const project = await api.createProject(values.name, null);
-        await placeNew({ kind: "project", id: project.id }, d.at);
         if (d.ball?.kind === "resource") {
           await api.linkServiceProject(d.ball.id, project.id);
         } else if (d.ball?.kind === "account") {
@@ -571,7 +555,6 @@ export function useCanvasActions(ctx: CanvasCore) {
         );
         if (taken) throw new Error(`${account.label} already has an organization called ${taken.name}.`);
         const org = await api.createOrganization(account.id, values.name);
-        await placeNew({ kind: "organization", id: org.id }, d.at);
         onNotify(`Added ${org.name} in ${account.label} · drag from it to add its projects`);
         made = { kind: "org", id: org.id, label: org.name };
         break;
@@ -604,7 +587,6 @@ export function useCanvasActions(ctx: CanvasCore) {
             notes: null,
           });
         }
-        await placeNew({ kind: "service_project", id: resource.id }, d.at);
         made = { kind: "resource", id: resource.id, label: resource.name };
         const project = projectId ? cur?.projects.find((p) => p.id === projectId) : undefined;
         if (project && cur) {
@@ -846,22 +828,49 @@ export function useCanvasActions(ctx: CanvasCore) {
 
   /** Line the whole map up, as one step that undo takes back. */
   async function tidyUp() {
-    if (locked || projectKey) return;
-    const after = tidyLayout(model.balls, model.lines);
-    // The map is already auto-laid-out, so what is on screen is not the
-    // hand-placed spot. Undo goes back to that saved spot when there is one.
-    const before = new Map(
-      [...after.keys()].map((k) => [k, (data ? parsePos(posField(data, k)?.value) : null) ?? place.get(k) ?? { x: 0, y: 0 }]),
-    );
-    // Each way, the whole map is brought into view once the balls have glided into place.
-    const moveTo = async (to: Map<string, Point>) => {
-      await setPositions(to);
-      window.setTimeout(() => void flow.fitView({ ...FIT, duration: motion(400) }), motion(GLIDE_MS) + 30);
+    const d = dataRef.current;
+    if (locked || projectKey || !d) return;
+    // Every ball the user dragged lets go, and the map lays itself out again.
+    const pinned = model.balls.flatMap((b) => {
+      const f = pinField(d, b.key);
+      return f ? [{ ball: b, value: f.value }] : [];
+    });
+    if (pinned.length === 0) return;
+    const unpin = async () => {
+      const cur = dataRef.current;
+      if (!cur) return;
+      for (const { ball } of pinned) {
+        const f = pinField(cur, ball.key);
+        if (f) await api.deleteCustomField(f.id);
+      }
     };
-    await moveTo(after);
-    record({ label: "tidying up", undo: () => moveTo(before), redo: () => moveTo(after), reload: false });
-    onNotify("Tidied up · undo puts everything back where it was");
+    const repin = async () => {
+      for (const { ball, value } of pinned) await api.addCustomField(entityOf(ball), PIN_FIELD, value);
+    };
+    // Each way, the whole map is brought into view once the balls have glided into place.
+    const refit = () =>
+      window.setTimeout(() => void flow.fitView({ ...FIT, duration: motion(400) }), motion(GLIDE_MS) + 30);
+    try {
+      await unpin();
+      record({
+        label: "tidying up",
+        undo: async () => {
+          await repin();
+          refit();
+        },
+        redo: async () => {
+          await unpin();
+          refit();
+        },
+      });
+      onNotify("Tidied up · undo puts the balls you moved back");
+      await changed();
+      refit();
+    } catch (e: unknown) {
+      onNotify(message(e), true);
+    }
   }
+
 
   function focusOn(key: string) {
     setSelected(key);

@@ -2,7 +2,7 @@
 // right-click menu, the Cmd+K finder and the add dialog. LedgerCanvas.tsx
 // wires them to data.
 
-import { BaseEdge, getSmoothStepPath, Handle, Position, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { BaseEdge, Handle, Position, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Ball, BallKind, LineKind } from "../lib/canvas";
@@ -228,41 +228,22 @@ export interface LineData extends Record<string, unknown> {
 }
 
 /**
- * A right-angle line from ball to ball.
+ * A straight line from ball to ball.
  *
- * Straight diagonals cross the map and hide which ball a line belongs to.
- * Elbows follow the columns: out of a ball, across, then into the next one.
- * At rest a faint thread drifts along every line. Tap a ball and its whole
- * chain lights up. Hover does not: a pointer moving across the map must not
- * dim it. A line that was just drawn spins out from its first ball like silk.
+ * The layout keeps lines from crossing, so a straight line is the clearest way
+ * to say which ball it belongs to; right angles share lanes and read as a
+ * circuit board. Who works on a project is drawn as an arc instead: it often
+ * spans the whole map, and a straight line would run through the balls in
+ * between. At rest a faint thread drifts along every line. Tap a ball and its
+ * whole chain lights up. Hover does not: a pointer moving across the map must
+ * not dim it. A line that was just drawn spins out from its first ball like silk.
  */
 export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
   const d = data as LineData | undefined;
-  // Leave toward the other ball. A fixed right-to-left exit sends a line out
-  // the far side of a project and back around the map, which is the grid.
-  const dx = targetX - sourceX;
-  const dy = targetY - sourceY;
-  const across = Math.abs(dx) >= 36;
-  // Each line takes its own lane in the gutter. One shared spine makes
-  // unrelated lines look joined into a box.
-  let lane = 0;
-  if (Math.abs(dx) > 180) {
-    let n = 0;
-    for (let i = 0; i < id.length; i += 1) n = (n + id.charCodeAt(i) * (i + 1)) % 5;
-    lane = (n - 2) * 16;
-  }
-  const [path] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    sourcePosition: across ? (dx >= 0 ? Position.Right : Position.Left) : dy >= 0 ? Position.Bottom : Position.Top,
-    targetX,
-    targetY,
-    targetPosition: across ? (dx >= 0 ? Position.Left : Position.Right) : dy >= 0 ? Position.Top : Position.Bottom,
-    borderRadius: 8,
-    offset: 16,
-    centerX: across ? (sourceX + targetX) / 2 + lane : undefined,
-    centerY: across ? undefined : (sourceY + targetY) / 2,
-  });
+  const path =
+    d?.kind === "works"
+      ? arc(sourceX, sourceY, targetX, targetY)
+      : `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
   const cls = [
     "cv-line",
     d?.kind ?? "",
@@ -307,6 +288,19 @@ export function LineView({ id, sourceX, sourceY, targetX, targetY, data }: EdgeP
       )}
     </>
   );
+}
+
+/** A gentle curve from one point to another, always bowing upwards. */
+function arc(sx: number, sy: number, tx: number, ty: number): string {
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const length = Math.hypot(dx, dy) || 1;
+  const bow = Math.min(140, length * 0.2);
+  // The perpendicular that points up the screen.
+  const flip = -dx / length > 0 ? -1 : 1;
+  const cx = (sx + tx) / 2 + (dy / length) * bow * flip;
+  const cy = (sy + ty) / 2 + (-dx / length) * bow * flip;
+  return `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
 }
 
 export interface HullData extends Record<string, unknown> {

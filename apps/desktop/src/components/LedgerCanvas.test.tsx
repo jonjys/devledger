@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { CanvasData } from "../lib/canvas";
 import type { CustomField, EntityRef, ProjectSummary } from "../lib/types";
-import { AT, IDS, canvasVault, resource } from "../test/canvas-fixtures";
+import { AT, IDS, canvasVault, field, resource } from "../test/canvas-fixtures";
 import LedgerCanvas from "./LedgerCanvas";
 
 vi.mock("../lib/api");
@@ -123,7 +123,8 @@ describe("an empty map", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(mocked.createIdentityManual).toHaveBeenCalledWith("me@example.com", "me@example.com"));
-    expect(mocked.addCustomField).toHaveBeenCalledWith({ kind: "identity", id: "new-me" }, "_pos", "0,0");
+    // The map places it; nothing about where it sits is written to the vault.
+    expect(mocked.addCustomField).not.toHaveBeenCalled();
   });
 
   it("asks for the email a service was signed up with when there is none yet", async () => {
@@ -580,7 +581,7 @@ describe("inside a service", () => {
     await user.type(within(dialog).getByLabelText("Organization name"), "Second Org");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocked.createOrganization).toHaveBeenCalledWith(IDS.supabase, "Second Org"));
-    expect(mocked.addCustomField).toHaveBeenCalledWith({ kind: "organization", id: "org-new" }, "_pos", expect.any(String));
+    expect(mocked.addCustomField).not.toHaveBeenCalled();
   });
 
   it("will not add a second organization of the same name to a service", async () => {
@@ -742,24 +743,37 @@ describe("a project moving onto a project inside a service", () => {
 });
 
 describe("tidying up", () => {
-  it("lines the whole map up in one step that undo takes back", async () => {
-    serve();
+  /** The sample vault, with GitHub dragged somewhere by hand. */
+  function pinned() {
+    const data = canvasVault();
+    data.fields.set(`account:${IDS.github}`, [field("pin-gh", { kind: "account", id: IDS.github }, "_pin", "900,-400")]);
+    return data;
+  }
+
+  it("lets go of the balls you moved, in one step that undo takes back", async () => {
+    serve(pinned());
     const user = userEvent.setup();
     const { onNotify } = await renderMap();
     await screen.findByTestId(`account:${IDS.github}`);
     await user.click(screen.getByRole("button", { name: "Tidy up" }));
-    // GitHub had been moved by hand; it goes back into the services' column.
-    await waitFor(() =>
-      expect(mocked.updateCustomField).toHaveBeenCalledWith(IDS.githubPos, "_pos", expect.stringMatching(/^300,/)),
-    );
+    await waitFor(() => expect(mocked.deleteCustomField).toHaveBeenCalledWith("pin-gh"));
     expect(onNotify).toHaveBeenCalledWith(expect.stringMatching(/Tidied up/));
     await user.click(screen.getByRole("button", { name: "Undo tidying up" }));
-    await waitFor(() => expect(mocked.updateCustomField).toHaveBeenCalledWith(IDS.githubPos, "_pos", "320,-40"));
+    await waitFor(() =>
+      expect(mocked.addCustomField).toHaveBeenCalledWith({ kind: "account", id: IDS.github }, "_pin", "900,-400"),
+    );
   });
 
-  it("is not offered while the map is locked, or on a project's page", async () => {
-    window.localStorage.setItem("devledger.mapLocked", "1");
+  it("is not offered when nothing was moved by hand", async () => {
     serve();
+    await renderMap();
+    await screen.findByTestId(`account:${IDS.github}`);
+    expect(screen.queryByRole("button", { name: "Tidy up" })).toBeNull();
+  });
+
+  it("is not offered while the map is locked", async () => {
+    window.localStorage.setItem("devledger.mapLocked", "1");
+    serve(pinned());
     await renderMap();
     await screen.findByTestId(`account:${IDS.github}`);
     expect(screen.queryByRole("button", { name: "Tidy up" })).toBeNull();
